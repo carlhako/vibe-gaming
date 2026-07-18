@@ -15,6 +15,8 @@ game directory is live the moment write_game_files() returns.
 # Exports:
 #   class GameGenerationError(Exception)
 #   generate_game(description, requested_by, config, db_conn=None, games_dir=None) -> dict
+#     (result includes "game_id"; slug is derived as slugify(title)-<game_id prefix>
+#     via db.make_slug() so duplicate titles never collide)
 #   slugify(title) -> str
 #   check_slug_collision(slug, games_dir) -> str | None
 #   parse_generation_response(text) -> dict
@@ -40,7 +42,7 @@ import smoke_test
 
 # Must match app.py's _SLUG_RE — that's what actually gatekeeps /play/<slug>;
 # this copy gatekeeps what gets written to disk in the first place.
-_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,49}$")
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
 RESERVED_SLUGS = {"backups"}
 
 _CODE_FENCE_RE = re.compile(r"```(?:\w+)?\s*\n(.*?)```", re.DOTALL)
@@ -130,7 +132,7 @@ def check_slug_collision(slug: str, games_dir: Path) -> str | None:
     if not slug or not _SLUG_RE.match(slug):
         return (
             f"invalid slug '{slug}' derived from title (must be lowercase "
-            "alphanumeric-hyphen, 1-50 chars)"
+            "alphanumeric-hyphen, 1-60 chars)"
         )
     if slug in RESERVED_SLUGS:
         return f"'{slug}' is a reserved directory name"
@@ -268,6 +270,7 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
     last_model = model or "default"
     last_effort = effort
     previous_failure = None
+    game_id = None
     slug = None
     title = None
     description_out = None
@@ -301,12 +304,16 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
             if violations:
                 raise GameGenerationError("safety violation: " + "; ".join(violations))
 
-            candidate_slug = slugify(parsed["title"])
+            candidate_game_id = db.mint_game_id()
+            candidate_slug = db.make_slug(parsed["title"], candidate_game_id)
             collision = check_slug_collision(candidate_slug, games_dir)
             if collision:
                 raise GameGenerationError(f"slug collision: {collision}")
 
             meta = {
+                "game_id": candidate_game_id,
+                "parent_game_id": None,
+                "root_game_id": candidate_game_id,
                 "title": parsed["title"],
                 "description": parsed["description"],
                 "requested_by": requested_by,
@@ -321,6 +328,7 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
                 rollback_game_files(game_dir)
                 raise GameGenerationError(f"smoke test failed: {detail}")
 
+            game_id = candidate_game_id
             slug = candidate_slug
             title = parsed["title"]
             description_out = parsed["description"]
@@ -335,12 +343,14 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
 
     if slug is not None:
         result = {
-            "success": True, "slug": slug, "title": title, "description": description_out,
+            "success": True, "game_id": game_id, "slug": slug, "title": title,
+            "description": description_out,
             "attempts": attempt, "tokens_used": total_tokens, "model": last_model,
             "effort": last_effort, "duration_seconds": duration, "error": None,
             "notes": notes, "url": build_play_url(slug, config),
         }
         db.register_web_game(
+            game_id=result["game_id"],
             slug=result["slug"],
             title=result["title"],
             description=result["description"],
@@ -352,11 +362,13 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
             effort=result["effort"],
             duration_seconds=result["duration_seconds"],
             error=None,
+            parent_game_id=None,
+            root_game_id=result["game_id"],
             conn=db_conn,
         )
     else:
         result = {
-            "success": False, "slug": None, "title": None, "description": None,
+            "success": False, "game_id": None, "slug": None, "title": None, "description": None,
             "attempts": max_attempts, "tokens_used": total_tokens, "model": last_model,
             "effort": last_effort, "duration_seconds": duration, "error": previous_failure,
             "notes": "", "url": None,

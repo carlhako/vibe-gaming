@@ -70,7 +70,7 @@ def resolve_target(slug: str, games_dir: Path, conn=None) -> Path:
         )
     if slug in gg.RESERVED_SLUGS:
         raise GameEnhancementError(f"'{slug}' cannot be enhanced — it's a reserved name")
-    if db.get_web_game(slug, conn=conn) is None:
+    if db.get_web_game_by_slug(slug, conn=conn) is None:
         raise GameEnhancementError(f"no game with slug '{slug}' exists")
     game_dir = Path(games_dir) / slug
     if not (game_dir / "index.html").exists():
@@ -295,11 +295,18 @@ def enhance_game(slug: str, description: str, requested_by: str, config: dict,
             "notes": notes, "backup_dir": str(backup_dir),
             "url": gg.build_play_url(slug, config),
         }
+        # NOTE: this still mutates the existing web_games row in place —
+        # fork-on-enhance (new game_id, parent/root linkage, original left
+        # untouched) is Sprint 3's job. For now, preserve the existing
+        # row's identity/lineage rather than losing it.
+        existing_row = db.get_web_game_by_slug(slug, conn=db_conn)
         db.register_web_game(
-            slug=slug, title=title, description=description_out, requested_by=requested_by,
+            game_id=existing_row["game_id"], slug=slug, title=title,
+            description=description_out, requested_by=requested_by,
             status="success", attempts=attempt, version=new_version,
             model=last_model, effort=last_effort, duration_seconds=duration,
-            error=None, conn=db_conn,
+            error=None, parent_game_id=existing_row["parent_game_id"],
+            root_game_id=existing_row["root_game_id"], conn=db_conn,
         )
     else:
         # Belt-and-braces: guarantee the original survives even if the last

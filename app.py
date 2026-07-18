@@ -18,7 +18,7 @@ from pathlib import Path
 
 from flask import Flask, abort, jsonify, render_template, send_from_directory
 
-_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,49}$")
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
 _BASE_DIR = Path(__file__).parent
 
 
@@ -40,6 +40,7 @@ def _build_manifest(games_dir: Path) -> list[dict]:
                 meta = {}
         games.append({
             "slug": entry.name,
+            "game_id": meta.get("game_id"),
             "title": meta.get("title", entry.name),
             "description": meta.get("description", ""),
             "created_at": meta.get("created_at", ""),
