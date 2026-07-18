@@ -23,11 +23,18 @@ source venv/bin/activate
 pip install -r requirements.txt
 playwright install chromium   # one-time, needed by the smoke test
 
+python3 migrate_to_guid_schema.py   # creates vibegames.db and registers games/sample-game
+
 python3 app.py                 # serves on http://localhost:8600
 ```
 
 That's it — `python3 app.py` starts both the Flask app and the background
 job-runner worker thread(s) that actually talk to DeepSeek.
+
+Setting up on a brand-new VM (system packages, Playwright's OS
+dependencies, systemd, firewall)? See **[VM-SETUP.md](VM-SETUP.md)** for
+the full step-by-step, including what to do if you're copying over an
+existing `games/` directory or an older `vibegames.db`.
 
 ## Configuration
 
