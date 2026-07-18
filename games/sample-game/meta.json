@@ -1,0 +1,8 @@
+{
+  "title": "Sample Snake",
+  "description": "A hand-written placeholder game proving the arcade pipeline works end to end.",
+  "requested_by": "system",
+  "created_at": "2026-07-17T00:00:00Z",
+  "version": 1,
+  "prompt": null
+}

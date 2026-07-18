@@ -1,0 +1,10 @@
+.claude/
+.env
+config.yaml
+vibegames.db
+vibegames.db.bak
+__pycache__/
+*.pyc
+venv/
+games/backups/*
+!games/backups/.gitkeep

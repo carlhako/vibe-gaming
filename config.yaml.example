@@ -1,0 +1,22 @@
+# Copy to config.yaml and adjust as needed. Nothing here is secret — the
+# DeepSeek API key lives in .env instead (see .env.example).
+
+game_web:
+  host: "0.0.0.0"
+  port: 8600
+  base_url: ""              # set to e.g. "https://games.example.com" once deployed behind a real host
+  games_dir: "games"
+
+newaiwebgame:
+  model: ""                 # blank = resolve from effort (see ai_client.py); or pin e.g. "deepseek-chat"
+  effort: "high"             # "high" -> deepseek-reasoner, anything else -> deepseek-chat
+  timeout_seconds: 120       # per ai_client.ask() call
+  max_attempts: 3            # 1 initial + 2 retries
+  smoke_test_timeout_seconds: 20   # per generated-game Playwright headless load
+
+enhanceaiwebgame:
+  model: ""                 # blank = resolve from effort
+  effort: "high"             # enhancement/debugging is complex, keep the reasoning model
+  timeout_seconds: 120
+  max_attempts: 3            # 1 initial + 2 retries; each failed attempt restores the backup first
+  smoke_test_timeout_seconds: 20

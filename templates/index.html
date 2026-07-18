@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Homebot Arcade</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="shell">
+    <aside class="shelf">
+      <div class="wordmark"><span class="wordmark-dot"></span>HOMEBOT<br>ARCADE</div>
+      <div class="shelf-count">{{ games|length }} cartridge{{ '' if games|length == 1 else 's' }}</div>
+      <nav class="cart-list" id="cart-list">
+        {% for g in games %}
+        <button class="cart" data-slug="{{ g.slug }}" data-title="{{ g.title }}" style="--spine: var(--hue-{{ loop.index0 % 5 }})">
+          <span class="cart-spine"></span>
+          <span class="cart-body">
+            <span class="cart-title">{{ g.title }}</span>
+            <span class="cart-desc">{{ g.description }}</span>
+          </span>
+        </button>
+        {% else %}
+        <p class="empty-shelf">No cartridges yet — request one on IRC with<br><code>homebot newaiwebgame &lt;description&gt;</code></p>
+        {% endfor %}
+      </nav>
+    </aside>
+
+    <main class="cabinet">
+      <div class="cabinet-plate">
+        <span class="power-light" id="power-light"></span>
+        <span class="now-playing" id="now-playing">INSERT CARTRIDGE</span>
+      </div>
+      <div class="screen" id="screen">
+        <div class="screen-empty" id="screen-empty">
+          <p>SELECT A GAME<br>FROM THE SHELF</p>
+        </div>
+        <iframe id="game-frame" class="game-frame" title="game"
+                sandbox="allow-scripts allow-forms allow-pointer-lock"
+                referrerpolicy="no-referrer" hidden></iframe>
+      </div>
+    </main>
+  </div>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
