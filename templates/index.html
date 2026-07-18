@@ -15,6 +15,10 @@
       <div class="wordmark"><span class="wordmark-dot"></span>HOMEBOT<br>ARCADE</div>
       <a class="new-game-btn" href="{{ url_for('new_game_form') }}">+ New Game</a>
       <div class="shelf-count">{{ games|length }} cartridge{{ '' if games|length == 1 else 's' }}</div>
+      <div class="sort-toggle">
+        <a href="{{ url_for('index', sort='alpha') }}" class="sort-btn {{ 'active' if sort == 'alpha' else '' }}">A-Z</a>
+        <a href="{{ url_for('index', sort='rating') }}" class="sort-btn {{ 'active' if sort == 'rating' else '' }}">Top rated</a>
+      </div>
       <nav class="cart-list" id="cart-list">
         {% for g in games %}
         <div class="cart" style="--spine: var(--hue-{{ loop.index0 % 5 }})">
@@ -29,6 +33,10 @@
             </span>
           </button>
           {% if g.game_id %}
+          <div class="cart-rate" data-game-id="{{ g.game_id }}">
+            <button class="rate-btn rate-up" data-vote="1" title="Good game">&#128077; <span class="rate-count">{{ g.thumbs_up }}</span></button>
+            <button class="rate-btn rate-down" data-vote="-1" title="Not great">&#128078; <span class="rate-count">{{ g.thumbs_down }}</span></button>
+          </div>
           <a class="cart-enhance" href="{{ url_for('enhance_game_form', game_id=g.game_id) }}" title="Enhance this game">&#9889;</a>
           {% endif %}
         </div>

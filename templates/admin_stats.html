@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin Stats — Homebot Arcade</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="shell">
+    <main class="cabinet form-page">
+      <div class="cabinet-plate">
+        <span class="power-light on"></span>
+        <span class="now-playing">ADMIN STATS</span>
+      </div>
+      <div class="form-panel stats-panel">
+        <a class="back-link" href="{{ url_for('index') }}">&larr; back to the shelf</a>
+        <h1>Access stats</h1>
+
+        <div class="stats-grid">
+          <div class="stat-box">
+            <span class="stat-value">{{ total_hits }}</span>
+            <span class="stat-label">total hits</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-value">{{ unique_clients }}</span>
+            <span class="stat-label">unique visitors (cookie)</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-value">{{ unique_ips }}</span>
+            <span class="stat-label">unique IPs</span>
+          </div>
+        </div>
+
+        <h2>Hits per day (last 30 days)</h2>
+        {% if daily_hits %}
+        <table class="stats-table">
+          <thead><tr><th>Day</th><th>Hits</th></tr></thead>
+          <tbody>
+            {% for row in daily_hits %}
+            <tr><td>{{ row.day }}</td><td>{{ row.n }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="form-hint">No traffic recorded yet.</p>
+        {% endif %}
+
+        <h2>Top 10 games by plays</h2>
+        {% if top_played %}
+        <table class="stats-table">
+          <thead><tr><th>Game</th><th>Plays</th></tr></thead>
+          <tbody>
+            {% for g in top_played %}
+            <tr><td>{{ g.title }}</td><td>{{ g.hits }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="form-hint">No plays recorded yet.</p>
+        {% endif %}
+
+        <h2>Top 10 games by rating</h2>
+        {% if top_rated %}
+        <table class="stats-table">
+          <thead><tr><th>Game</th><th>&#128077;</th><th>&#128078;</th></tr></thead>
+          <tbody>
+            {% for g in top_rated %}
+            <tr><td>{{ g.title }}</td><td>{{ g.thumbs_up }}</td><td>{{ g.thumbs_down }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="form-hint">No votes recorded yet.</p>
+        {% endif %}
+      </div>
+    </main>
+  </div>
+</body>
+</html>

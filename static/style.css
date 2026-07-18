@@ -310,6 +310,73 @@ body {
   filter: brightness(1.08);
 }
 
+/* ---- Sort toggle ---- */
+
+.sort-toggle {
+  display: flex;
+  gap: 6px;
+}
+
+.sort-btn {
+  flex: 1;
+  text-align: center;
+  padding: 6px 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  text-decoration: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.sort-btn:hover {
+  color: var(--ink);
+}
+
+.sort-btn.active {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  background: rgba(255, 180, 0, 0.08);
+}
+
+/* ---- Ratings ---- */
+
+.cart-rate {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+}
+
+.rate-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 10.5px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.rate-btn:hover:not(:disabled) {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.rate-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.rate-count {
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---- Form pages (new game / status) ---- */
 
 .form-page {
@@ -438,4 +505,66 @@ body {
 
 .play-link:hover {
   filter: brightness(1.08);
+}
+
+/* ---- Admin stats ---- */
+
+.stats-panel {
+  max-width: 720px;
+}
+
+.stats-panel h2 {
+  font-size: 14px;
+  margin: 22px 0 10px;
+  color: var(--accent);
+}
+
+.stats-grid {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.stat-box {
+  flex: 1;
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.stats-table th, .stats-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.stats-table th {
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
 }

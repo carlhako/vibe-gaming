@@ -104,6 +104,12 @@ def _now():
     return datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
 
 
+def now_iso() -> str:
+    """Public alias of the same UTC-ISO timestamp format every table uses,
+    for callers outside this module (e.g. app.py's access_log middleware)."""
+    return _now()
+
+
 def _c(conn):
     return conn if conn is not None else get_connection()
 
@@ -178,6 +184,33 @@ def get_web_game_by_slug(slug, conn=None):
     c = _c(conn)
     row = c.execute("SELECT * FROM web_games WHERE slug=?", (slug,)).fetchone()
     return dict(row) if row else None
+
+
+def record_rating(game_id, vote, client_uid, ip_address, conn=None) -> bool:
+    """Record a thumbs up (vote=1) / down (vote=-1) for game_id. Returns
+    True on success, False if this client_uid or ip_address already voted
+    on this game — the two UNIQUE constraints on `ratings` are the actual
+    enforcement (not a pre-check SELECT), so this is race-safe under
+    concurrent requests for the same game/client."""
+    c = _c(conn)
+    try:
+        c.execute(
+            "INSERT INTO ratings (game_id, vote, client_uid, ip_address, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (game_id, vote, client_uid, ip_address, _now()),
+        )
+        c.execute(
+            "UPDATE web_games SET "
+            "thumbs_up = thumbs_up + (CASE WHEN ? = 1 THEN 1 ELSE 0 END), "
+            "thumbs_down = thumbs_down + (CASE WHEN ? = -1 THEN 1 ELSE 0 END) "
+            "WHERE game_id = ?",
+            (vote, vote, game_id),
+        )
+    except sqlite3.IntegrityError:
+        c.rollback()
+        return False
+    c.commit()
+    return True
 
 
 def count_by_root(root_game_id, conn=None) -> int:
