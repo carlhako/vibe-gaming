@@ -25,6 +25,7 @@ from flask import (
 import db
 
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
+_GAME_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _BASE_DIR = Path(__file__).parent
 _VG_UID_COOKIE = "vg_uid"
 _VG_UID_MAX_AGE = 31536000  # 1 year
@@ -53,7 +54,12 @@ def _build_manifest(games_dir: Path) -> list[dict]:
             "description": meta.get("description", ""),
             "created_at": meta.get("created_at", ""),
             "version": meta.get("version", 1),
+            "parent_game_id": meta.get("parent_game_id"),
         })
+
+    titles_by_id = {g["game_id"]: g["title"] for g in games if g["game_id"]}
+    for g in games:
+        g["parent_title"] = titles_by_id.get(g["parent_game_id"])
     return games
 
 
@@ -133,6 +139,50 @@ def create_app(games_dir=None) -> Flask:
         job_id = uuid.uuid4().hex
         db.create_generation_request(
             job_id=job_id, kind="create", prompt=prompt, requested_by=requested_by,
+        )
+
+        resp = redirect(url_for("job_status_page", job_id=job_id))
+        if set_cookie:
+            resp.set_cookie(
+                _VG_UID_COOKIE, vg_uid, max_age=_VG_UID_MAX_AGE,
+                httponly=False, samesite="Lax",
+            )
+        return resp
+
+    @app.get("/games/<game_id>/enhance")
+    def enhance_game_form(game_id):
+        if not _GAME_ID_RE.match(game_id):
+            abort(404)
+        game = db.get_web_game(game_id)
+        if game is None:
+            abort(404)
+        return render_template("enhance.html", game=game)
+
+    @app.post("/games/<game_id>/enhance")
+    def enhance_game_submit(game_id):
+        if not _GAME_ID_RE.match(game_id):
+            abort(404)
+        game = db.get_web_game(game_id)
+        if game is None:
+            abort(404)
+
+        description = (request.form.get("description") or "").strip()
+        new_title = (request.form.get("new_title") or "").strip() or None
+        if not description:
+            return render_template(
+                "enhance.html", game=game, error="Please describe the change you want."
+            ), 400
+
+        vg_uid = request.cookies.get(_VG_UID_COOKIE)
+        set_cookie = vg_uid is None
+        if vg_uid is None:
+            vg_uid = uuid.uuid4().hex
+
+        requested_by = "web:" + vg_uid[:12]
+        job_id = uuid.uuid4().hex
+        db.create_generation_request(
+            job_id=job_id, kind="enhance", prompt=description, requested_by=requested_by,
+            source_game_id=game_id, new_title=new_title,
         )
 
         resp = redirect(url_for("job_status_page", job_id=job_id))

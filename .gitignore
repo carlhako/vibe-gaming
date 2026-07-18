@@ -6,5 +6,3 @@ vibegames.db.bak
 __pycache__/
 *.pyc
 venv/
-games/backups/*
-!games/backups/.gitkeep

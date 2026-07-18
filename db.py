@@ -180,6 +180,17 @@ def get_web_game_by_slug(slug, conn=None):
     return dict(row) if row else None
 
 
+def count_by_root(root_game_id, conn=None) -> int:
+    """Number of web_games rows sharing a root_game_id (the original plus
+    every fork of it). Used to auto-number a blank-titled fork as
+    "<source title> (v{n})" where n = this count + 1."""
+    c = _c(conn)
+    row = c.execute(
+        "SELECT COUNT(*) AS n FROM web_games WHERE root_game_id=?", (root_game_id,)
+    ).fetchone()
+    return row["n"]
+
+
 def get_web_games(sort="alpha", conn=None):
     c = _c(conn)
     if sort == "rating":

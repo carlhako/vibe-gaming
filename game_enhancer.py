@@ -1,53 +1,45 @@
 """
 game_enhancer — the engine behind AI game enhancement.
 
-Given the slug of an existing game and a natural-language enhancement/fix
+Given the game_id of an existing game and a natural-language enhancement/fix
 request, drives DeepSeek (via ai_client) to produce a revised
-self-contained index.html for that game, following the same
-generate -> validate -> verify -> retry shape as game_generator.py: the
-reply uses the identical GAME_FILE/META/NOTES marker protocol and is parsed
-with game_generator.parse_generation_response, validated statically
-(safety.py), and only kept if a headless-browser smoke test (smoke_test.py)
-actually passes.
+self-contained index.html, following the same generate -> validate ->
+verify -> retry shape as game_generator.py (the reply uses the identical
+GAME_FILE/META/NOTES marker protocol, parsed with
+game_generator.parse_generation_response, validated statically (safety.py),
+and only kept if a headless-browser smoke test (smoke_test.py) passes) —
+via the shared game_generator.run_generation_attempts() retry loop.
 
-The current game directory (index.html + meta.json) is backed up — a full
-copy under games/backups/<slug>/<timestamp>/ — before any write, and
-restored automatically whenever an attempt doesn't pan out: a failed safety
-scan or smoke test rolls the live files back immediately so the next retry
-starts clean, and exhausting all attempts leaves the original game exactly
-as it was. Up to max_attempts retries are made, each one feeding the
-previous concrete failure back to the model.
+Enhancing a game forks it: a brand-new game_id/slug/games/<slug>/ directory
+is written, linked to its source via parent_game_id (the immediate source)
+and root_game_id (the original ancestor, unchanged across an arbitrarily
+long fork chain). The source game's files and web_games row are never
+touched — a failed attempt just deletes the half-written new directory,
+same failure path as a failed generate_game() call. Up to max_attempts
+retries are made, each one feeding the previous concrete failure back to
+the model.
 
-The game's slug (and therefore its /play/<slug> URL) never changes across
-an enhancement — only its title, description, and content can. requested_by
-and created_at on the web_games row are preserved from the original
-creation (db.register_web_game does not update either on conflict);
-version is bumped by one on success.
+Title: an explicit new_title is used verbatim if given; otherwise the fork
+is auto-labeled "<source title> (v{n})", where n = count of existing
+web_games rows sharing the source's root_game_id, plus 1 (so the first
+fork of an original is "(v2)").
 
 # Exports:
 #   class GameEnhancementError(Exception)
-#   enhance_game(slug, description, requested_by, config, db_conn=None, games_dir=None, backups_dir=None) -> dict
-#   resolve_target(slug, games_dir, conn=None) -> Path
-#   backup_game_files(slug, game_dir, backups_dir) -> Path
-#   restore_from_backup(game_dir, backup_dir) -> None
+#   enhance_game(source_game_id, description, requested_by, config, db_conn=None,
+#                games_dir=None, job_id=None, new_title=None) -> dict
+#   resolve_target(game_id, games_dir, conn=None) -> dict  (the source's web_games row)
 #   format_report(result) -> str
 """
 
 from __future__ import annotations
 
-import json
-import shutil
 import time
-from datetime import datetime
 from pathlib import Path
 
-import ai_client as ai
 import db
 import game_generator as gg
 import safety
-import smoke_test
-
-BACKUPS_DIR = gg.GAMES_DIR / "backups"
 
 
 class GameEnhancementError(Exception):
@@ -59,56 +51,32 @@ class GameEnhancementError(Exception):
 # Target resolution
 # ---------------------------------------------------------------------------
 
-def resolve_target(slug: str, games_dir: Path, conn=None) -> Path:
-    """Validate `slug` as a safe, existing, registered game and return its
-    directory path. Raises GameEnhancementError otherwise. Registration in
-    the web_games table (not just an on-disk directory) is the source of
-    truth for "this slug can be enhanced"."""
-    if not gg._SLUG_RE.match(slug):
-        raise GameEnhancementError(
-            f"invalid slug '{slug}' (must be lowercase alphanumeric-hyphen, 1-50 chars)"
-        )
-    if slug in gg.RESERVED_SLUGS:
-        raise GameEnhancementError(f"'{slug}' cannot be enhanced — it's a reserved name")
-    if db.get_web_game_by_slug(slug, conn=conn) is None:
-        raise GameEnhancementError(f"no game with slug '{slug}' exists")
-    game_dir = Path(games_dir) / slug
+def resolve_target(game_id: str, games_dir: Path, conn=None) -> dict:
+    """Validate `game_id` as a registered, on-disk game and return its
+    web_games row. Raises GameEnhancementError otherwise. This only reads
+    the source — enhancing never writes to or deletes the source's
+    directory or row."""
+    row = db.get_web_game(game_id, conn=conn)
+    if row is None:
+        raise GameEnhancementError(f"no game with id '{game_id}' exists")
+    game_dir = Path(games_dir) / row["slug"]
     if not (game_dir / "index.html").exists():
-        raise GameEnhancementError(f"no game with slug '{slug}' exists")
-    return game_dir
-
-
-# ---------------------------------------------------------------------------
-# Backup / restore
-# ---------------------------------------------------------------------------
-
-def backup_game_files(slug: str, game_dir: Path, backups_dir: Path) -> Path:
-    """Copy the current game directory into backups_dir/<slug>/<timestamp>/
-    so a human can manually recover the pre-enhancement version later.
-    Returns the backup directory path."""
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_dir = Path(backups_dir) / slug / stamp
-    backup_dir.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(game_dir, backup_dir)
-    return backup_dir
-
-
-def restore_from_backup(game_dir: Path, backup_dir: Path) -> None:
-    """Restore game_dir to exactly match backup_dir's contents."""
-    shutil.rmtree(game_dir, ignore_errors=True)
-    shutil.copytree(backup_dir, game_dir)
+        raise GameEnhancementError(f"no game with id '{game_id}' exists")
+    return row
 
 
 # ---------------------------------------------------------------------------
 # Prompt builders
 # ---------------------------------------------------------------------------
 
-def _build_system_prompt(slug: str, existing_game_html: str) -> str:
+def _build_system_prompt(source_title: str, existing_game_html: str) -> str:
     allowed_hosts = ", ".join(sorted(safety.ALLOWED_CDN_HOSTS))
     return (
-        f"You are enhancing/fixing ONE existing browser game in the arcade, "
-        f"with slug '{slug}'. The game's slug and URL never change — only "
-        "its content, title, and description may.\n\n"
+        f"You are creating an enhanced/fixed version of an existing browser "
+        f"game in the arcade, currently titled '{source_title}'. This "
+        "produces a NEW game entry — the original is left completely "
+        "untouched and stays in the arcade unchanged; you are producing "
+        "revised content for a new entry that forks from it.\n\n"
         "Contract: reply with exactly ONE self-contained index.html file — "
         "all HTML, CSS, and JavaScript inline in that one file, same as the "
         "original. Canvas or plain DOM, whatever suits the game. You may "
@@ -161,25 +129,16 @@ def format_report(result: dict) -> str:
         f"effort: {result['effort']} | time: {result['duration_seconds']:.1f}s | "
         f"attempts: {result['attempts']}]"
     )
-    backup_label = None
-    if result.get("backup_dir"):
-        backup_path = Path(result["backup_dir"])
-        backup_label = f"{backup_path.parent.name}/{backup_path.name}"
-
     if result["success"]:
         lines = [
-            f"Done! '{result['title']}' has been enhanced and is live — "
+            f"Done! '{result['title']}' is live as a new entry — "
             f"play it: {result['url']}"
         ]
-        if backup_label:
-            lines.append(f"Original backed up as: {backup_label}")
         if result.get("notes"):
             lines.append(f"Note: {result['notes']}")
         lines.append(footer)
     else:
         lines = [f"Game enhancement failed: {result['error']}", footer]
-        if backup_label:
-            lines.append(f"Original game restored from backup: {backup_label}")
     return "\n".join(lines)
 
 
@@ -187,137 +146,78 @@ def format_report(result: dict) -> str:
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def enhance_game(slug: str, description: str, requested_by: str, config: dict,
-                  db_conn=None, games_dir: Path | None = None,
-                  backups_dir: Path | None = None) -> dict:
+def enhance_game(source_game_id: str, description: str, requested_by: str, config: dict,
+                  db_conn=None, games_dir: Path | None = None, job_id: str | None = None,
+                  new_title: str | None = None) -> dict:
     """Drive the full enhance -> validate -> smoke-test retry loop and
     return a result dict (result["message"] is ready to display; DB
-    registration is already performed once, on success, before returning)."""
-    games_dir = Path(games_dir) if games_dir is not None else gg.GAMES_DIR
-    backups_dir = Path(backups_dir) if backups_dir is not None else BACKUPS_DIR
+    registration is already performed once, on success, before returning).
 
+    On success this writes a brand-new games/<slug>/ directory and
+    web_games row (parent_game_id=source_game_id, root_game_id=source's
+    root_game_id) — the source game is never modified."""
+    games_dir = Path(games_dir) if games_dir is not None else gg.GAMES_DIR
     cfg = config.get("enhanceaiwebgame", {})
-    max_attempts = cfg.get("max_attempts", 3)
-    model = cfg.get("model", "")
-    effort = cfg.get("effort", "high")
-    ai_timeout = cfg.get("timeout_seconds", 120)
-    smoke_timeout = cfg.get("smoke_test_timeout_seconds", 20)
 
     t0 = time.monotonic()
 
     try:
-        game_dir = resolve_target(slug, games_dir, conn=db_conn)
+        source_row = resolve_target(source_game_id, games_dir, conn=db_conn)
     except GameEnhancementError as exc:
         result = {
-            "success": False, "slug": slug, "title": None, "description": None,
-            "attempts": 0, "tokens_used": 0, "model": "default", "effort": effort,
-            "duration_seconds": time.monotonic() - t0, "error": str(exc),
-            "notes": "", "backup_dir": None, "url": None,
+            "success": False, "game_id": None, "slug": None, "title": None,
+            "description": None, "attempts": 0, "tokens_used": 0, "model": "default",
+            "effort": cfg.get("effort", "high"), "duration_seconds": time.monotonic() - t0,
+            "error": str(exc), "notes": "", "url": None,
+            "parent_game_id": None, "root_game_id": None,
         }
         result["message"] = format_report(result)
         return result
 
-    existing_meta = json.loads((game_dir / "meta.json").read_text(encoding="utf-8"))
-    existing_game_html = (game_dir / "index.html").read_text(encoding="utf-8")
+    existing_game_html = (games_dir / source_row["slug"] / "index.html").read_text(encoding="utf-8")
 
-    backup_dir = backup_game_files(slug, game_dir, backups_dir)
+    title_override = (new_title or "").strip() or None
+    if title_override is None:
+        n = db.count_by_root(source_row["root_game_id"], conn=db_conn) + 1
+        title_override = f"{source_row['title']} (v{n})"
 
-    system_prompt = _build_system_prompt(slug, existing_game_html)
+    system_prompt = _build_system_prompt(source_row["title"], existing_game_html)
 
-    total_tokens = 0
-    last_model = model or "default"
-    last_effort = effort
-    previous_failure = None
-    success = False
-    title = None
-    description_out = None
-    notes = ""
-    attempt = 0
-
-    for attempt in range(1, max_attempts + 1):
-        user_prompt = _build_user_prompt(description, attempt, previous_failure)
-        try:
-            ask_result = ai.ask(
-                user_prompt,
-                system_prompt=system_prompt,
-                model=model,
-                effort=effort,
-                timeout=ai_timeout,
-            )
-        except ai.AIError as exc:
-            previous_failure = f"AI error: {exc}"
-            continue
-
-        total_tokens += ask_result.output_tokens
-        last_model = ask_result.model or "default"
-        last_effort = ask_result.effort
-
-        try:
-            parsed = gg.parse_generation_response(ask_result.text)
-
-            violations = safety.scan(parsed["game_html"])
-            if violations:
-                raise GameEnhancementError("safety violation: " + "; ".join(violations))
-
-            new_meta = {
-                "title": parsed["title"],
-                "description": parsed["description"],
-                "requested_by": existing_meta.get("requested_by", requested_by),
-                "created_at": existing_meta.get("created_at"),
-                "version": existing_meta.get("version", 1) + 1,
-                "prompt": existing_meta.get("prompt", description),
-            }
-            gg.write_game_files(slug, parsed["game_html"], new_meta, games_dir)
-
-            passed, detail = smoke_test.run_smoke_test(game_dir / "index.html", smoke_timeout)
-            if not passed:
-                restore_from_backup(game_dir, backup_dir)
-                raise GameEnhancementError(f"smoke test failed: {detail}")
-
-            title = parsed["title"]
-            description_out = parsed["description"]
-            notes = parsed["notes"]
-            success = True
-            break
-
-        except GameEnhancementError as exc:
-            previous_failure = str(exc)
-            continue
-
+    outcome = gg.run_generation_attempts(
+        description=description, requested_by=requested_by, system_prompt=system_prompt,
+        user_prompt_builder=lambda attempt, prev: _build_user_prompt(description, attempt, prev),
+        cfg=cfg, games_dir=games_dir, job_id=job_id, db_conn=db_conn,
+        parent_game_id=source_row["game_id"], root_game_id=source_row["root_game_id"],
+        title_override=title_override,
+    )
     duration = time.monotonic() - t0
 
-    if success:
-        new_version = existing_meta.get("version", 1) + 1
+    if outcome["success"]:
         result = {
-            "success": True, "slug": slug, "title": title, "description": description_out,
-            "attempts": attempt, "tokens_used": total_tokens, "model": last_model,
-            "effort": last_effort, "duration_seconds": duration, "error": None,
-            "notes": notes, "backup_dir": str(backup_dir),
-            "url": gg.build_play_url(slug, config),
+            "success": True, "game_id": outcome["game_id"], "slug": outcome["slug"],
+            "title": outcome["title"], "description": outcome["description"],
+            "attempts": outcome["attempts"], "tokens_used": outcome["tokens_used"],
+            "model": outcome["model"], "effort": outcome["effort"],
+            "duration_seconds": duration, "error": None, "notes": outcome["notes"],
+            "url": gg.build_play_url(outcome["slug"], config),
+            "parent_game_id": source_row["game_id"], "root_game_id": source_row["root_game_id"],
         }
-        # NOTE: this still mutates the existing web_games row in place —
-        # fork-on-enhance (new game_id, parent/root linkage, original left
-        # untouched) is Sprint 3's job. For now, preserve the existing
-        # row's identity/lineage rather than losing it.
-        existing_row = db.get_web_game_by_slug(slug, conn=db_conn)
         db.register_web_game(
-            game_id=existing_row["game_id"], slug=slug, title=title,
-            description=description_out, requested_by=requested_by,
-            status="success", attempts=attempt, version=new_version,
-            model=last_model, effort=last_effort, duration_seconds=duration,
-            error=None, parent_game_id=existing_row["parent_game_id"],
-            root_game_id=existing_row["root_game_id"], conn=db_conn,
+            game_id=result["game_id"], slug=result["slug"], title=result["title"],
+            description=result["description"], requested_by=requested_by, status="success",
+            attempts=result["attempts"], version=1, model=result["model"],
+            effort=result["effort"], duration_seconds=duration, error=None,
+            parent_game_id=result["parent_game_id"], root_game_id=result["root_game_id"],
+            conn=db_conn,
         )
     else:
-        # Belt-and-braces: guarantee the original survives even if the last
-        # attempt failed before reaching the write step (e.g. a safety
-        # violation), in which case this is a harmless no-op restore.
-        restore_from_backup(game_dir, backup_dir)
         result = {
-            "success": False, "slug": slug, "title": None, "description": None,
-            "attempts": max_attempts, "tokens_used": total_tokens, "model": last_model,
-            "effort": last_effort, "duration_seconds": duration, "error": previous_failure,
-            "notes": "", "backup_dir": str(backup_dir), "url": None,
+            "success": False, "game_id": None, "slug": None, "title": None,
+            "description": None, "attempts": outcome["attempts"],
+            "tokens_used": outcome["tokens_used"], "model": outcome["model"],
+            "effort": outcome["effort"], "duration_seconds": duration,
+            "error": outcome["error"], "notes": "", "url": None,
+            "parent_game_id": None, "root_game_id": None,
         }
 
     result["message"] = format_report(result)

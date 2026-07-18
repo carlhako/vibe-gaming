@@ -1,7 +1,7 @@
-document.querySelectorAll(".cart").forEach((btn) => {
+document.querySelectorAll(".cart-select").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".cart").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
+    document.querySelectorAll(".cart").forEach((c) => c.classList.remove("active"));
+    btn.closest(".cart").classList.add("active");
 
     const frame = document.getElementById("game-frame");
     const empty = document.getElementById("screen-empty");

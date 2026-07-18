@@ -87,10 +87,6 @@ body {
   border: 1px solid var(--line);
   border-radius: 4px;
   overflow: hidden;
-  cursor: pointer;
-  text-align: left;
-  font-family: inherit;
-  color: inherit;
 }
 
 .cart:hover {
@@ -107,12 +103,50 @@ body {
   background: var(--spine, var(--accent));
 }
 
+.cart-select {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+  padding: 0;
+}
+
 .cart-body {
   display: flex;
   flex-direction: column;
   gap: 4px;
   padding: 10px 12px;
   min-width: 0;
+}
+
+.cart-fork {
+  font-size: 10.5px;
+  color: var(--accent2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cart-enhance {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.cart-enhance:hover {
+  color: var(--accent);
+  background: rgba(255, 180, 0, 0.08);
 }
 
 .cart-title {
@@ -342,6 +376,30 @@ body {
 }
 
 .form-panel textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.field-label {
+  font-size: 11.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: -6px;
+}
+
+.form-panel input[type="text"] {
+  width: 100%;
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13.5px;
+  padding: 10px 12px;
+}
+
+.form-panel input[type="text"]:focus {
   outline: none;
   border-color: var(--accent);
 }

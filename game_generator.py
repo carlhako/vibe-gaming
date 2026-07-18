@@ -19,6 +19,9 @@ game directory is live the moment write_game_files() returns.
 #     (result includes "game_id"; slug is derived as slugify(title)-<game_id prefix>
 #     via db.make_slug() so duplicate titles never collide. job_id, when given,
 #     tags each retry attempt in generation_attempts for audit/status purposes)
+#   run_generation_attempts(...) -> dict
+#     (shared ask/parse/safety-scan/write/smoke-test retry loop, reused by
+#     game_enhancer.enhance_game() for fork-on-enhance; see docstring)
 #   slugify(title) -> str
 #   check_slug_collision(slug, games_dir) -> str | None
 #   parse_generation_response(text) -> dict
@@ -249,24 +252,40 @@ def format_report(result: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Orchestrator
+# Shared retry loop (used by generate_game() and game_enhancer.enhance_game())
 # ---------------------------------------------------------------------------
 
-def generate_game(description: str, requested_by: str, config: dict, db_conn=None,
-                   games_dir: Path | None = None, job_id: str | None = None) -> dict:
-    """Drive the full generate -> validate -> smoke-test retry loop and
-    return a result dict (result["message"] is ready to display; DB
-    registration is already performed once, on success, before returning)."""
-    games_dir = Path(games_dir) if games_dir is not None else GAMES_DIR
+def run_generation_attempts(*, description: str, requested_by: str, system_prompt: str,
+                             user_prompt_builder, cfg: dict, games_dir: Path,
+                             job_id: str | None = None, db_conn=None,
+                             parent_game_id: str | None = None,
+                             root_game_id: str | None = None,
+                             title_override: str | None = None) -> dict:
+    """Drive the ask -> parse -> safety-scan -> mint id/slug -> write ->
+    smoke-test retry loop shared by a brand-new game and an enhancement
+    fork. Every successful or failed attempt is written to the real final
+    games/<slug>/ location (never a temp/staging dir) and rolled back on
+    failure, so a caller never has to reconcile a half-written directory.
 
-    cfg = config.get("newaiwebgame", {})
+    `title_override`, when given, replaces the model's own title in the
+    written meta.json/slug/result — used by enhance_game() to apply its
+    "<source title> (vN)" / user-supplied fork title instead of whatever
+    the model calls the revised game. `parent_game_id`/`root_game_id` are
+    written into meta.json as-is (None/None for a brand-new original,
+    which write_game_files' caller then treats as "root_game_id = self").
+
+    Does not touch the web_games table — callers register the result
+    themselves once they've computed their own bookkeeping (duration,
+    status, etc.) around this loop.
+
+    Returns a dict: success/game_id/slug/title/description/notes/attempts/
+    tokens_used/model/effort/error.
+    """
     max_attempts = cfg.get("max_attempts", 3)
     model = cfg.get("model", "")
     effort = cfg.get("effort", "high")
     ai_timeout = cfg.get("timeout_seconds", 120)
     smoke_timeout = cfg.get("smoke_test_timeout_seconds", 20)
-
-    system_prompt = _build_system_prompt()
 
     total_tokens = 0
     last_model = model or "default"
@@ -279,10 +298,8 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
     notes = ""
     attempt = 0
 
-    t0 = time.monotonic()
-
     for attempt in range(1, max_attempts + 1):
-        user_prompt = _build_user_prompt(description, attempt, previous_failure)
+        user_prompt = user_prompt_builder(attempt, previous_failure)
         try:
             ask_result = ai.ask(
                 user_prompt,
@@ -310,17 +327,18 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
             if violations:
                 raise GameGenerationError("safety violation: " + "; ".join(violations))
 
+            final_title = title_override if title_override else parsed["title"]
             candidate_game_id = db.mint_game_id()
-            candidate_slug = db.make_slug(parsed["title"], candidate_game_id)
+            candidate_slug = db.make_slug(final_title, candidate_game_id)
             collision = check_slug_collision(candidate_slug, games_dir)
             if collision:
                 raise GameGenerationError(f"slug collision: {collision}")
 
             meta = {
                 "game_id": candidate_game_id,
-                "parent_game_id": None,
-                "root_game_id": candidate_game_id,
-                "title": parsed["title"],
+                "parent_game_id": parent_game_id,
+                "root_game_id": root_game_id if root_game_id is not None else candidate_game_id,
+                "title": final_title,
                 "description": parsed["description"],
                 "requested_by": requested_by,
                 "created_at": datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z"),
@@ -336,7 +354,7 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
 
             game_id = candidate_game_id
             slug = candidate_slug
-            title = parsed["title"]
+            title = final_title
             description_out = parsed["description"]
             notes = parsed["notes"]
             if job_id is not None:
@@ -362,15 +380,43 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
                 )
             continue
 
+    return {
+        "success": slug is not None,
+        "game_id": game_id, "slug": slug, "title": title, "description": description_out,
+        "notes": notes, "attempts": attempt, "tokens_used": total_tokens,
+        "model": last_model, "effort": last_effort, "error": previous_failure,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator
+# ---------------------------------------------------------------------------
+
+def generate_game(description: str, requested_by: str, config: dict, db_conn=None,
+                   games_dir: Path | None = None, job_id: str | None = None) -> dict:
+    """Drive the full generate -> validate -> smoke-test retry loop and
+    return a result dict (result["message"] is ready to display; DB
+    registration is already performed once, on success, before returning)."""
+    games_dir = Path(games_dir) if games_dir is not None else GAMES_DIR
+    cfg = config.get("newaiwebgame", {})
+    system_prompt = _build_system_prompt()
+
+    t0 = time.monotonic()
+    outcome = run_generation_attempts(
+        description=description, requested_by=requested_by, system_prompt=system_prompt,
+        user_prompt_builder=lambda attempt, prev: _build_user_prompt(description, attempt, prev),
+        cfg=cfg, games_dir=games_dir, job_id=job_id, db_conn=db_conn,
+    )
     duration = time.monotonic() - t0
 
-    if slug is not None:
+    if outcome["success"]:
         result = {
-            "success": True, "game_id": game_id, "slug": slug, "title": title,
-            "description": description_out,
-            "attempts": attempt, "tokens_used": total_tokens, "model": last_model,
-            "effort": last_effort, "duration_seconds": duration, "error": None,
-            "notes": notes, "url": build_play_url(slug, config),
+            "success": True, "game_id": outcome["game_id"], "slug": outcome["slug"],
+            "title": outcome["title"], "description": outcome["description"],
+            "attempts": outcome["attempts"], "tokens_used": outcome["tokens_used"],
+            "model": outcome["model"], "effort": outcome["effort"],
+            "duration_seconds": duration, "error": None, "notes": outcome["notes"],
+            "url": build_play_url(outcome["slug"], config),
         }
         db.register_web_game(
             game_id=result["game_id"],
@@ -392,8 +438,9 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
     else:
         result = {
             "success": False, "game_id": None, "slug": None, "title": None, "description": None,
-            "attempts": max_attempts, "tokens_used": total_tokens, "model": last_model,
-            "effort": last_effort, "duration_seconds": duration, "error": previous_failure,
+            "attempts": outcome["attempts"], "tokens_used": outcome["tokens_used"],
+            "model": outcome["model"], "effort": outcome["effort"],
+            "duration_seconds": duration, "error": outcome["error"],
             "notes": "", "url": None,
         }
 

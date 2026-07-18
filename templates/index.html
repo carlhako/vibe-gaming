@@ -17,13 +17,21 @@
       <div class="shelf-count">{{ games|length }} cartridge{{ '' if games|length == 1 else 's' }}</div>
       <nav class="cart-list" id="cart-list">
         {% for g in games %}
-        <button class="cart" data-slug="{{ g.slug }}" data-title="{{ g.title }}" style="--spine: var(--hue-{{ loop.index0 % 5 }})">
+        <div class="cart" style="--spine: var(--hue-{{ loop.index0 % 5 }})">
           <span class="cart-spine"></span>
-          <span class="cart-body">
-            <span class="cart-title">{{ g.title }}</span>
-            <span class="cart-desc">{{ g.description }}</span>
-          </span>
-        </button>
+          <button class="cart-select" data-slug="{{ g.slug }}" data-title="{{ g.title }}">
+            <span class="cart-body">
+              <span class="cart-title">{{ g.title }}</span>
+              {% if g.parent_title %}
+              <span class="cart-fork">&#8618; enhanced from {{ g.parent_title }}</span>
+              {% endif %}
+              <span class="cart-desc">{{ g.description }}</span>
+            </span>
+          </button>
+          {% if g.game_id %}
+          <a class="cart-enhance" href="{{ url_for('enhance_game_form', game_id=g.game_id) }}" title="Enhance this game">&#9889;</a>
+          {% endif %}
+        </div>
         {% else %}
         <p class="empty-shelf">No cartridges yet — request one on IRC with<br><code>homebot newaiwebgame &lt;description&gt;</code></p>
         {% endfor %}
