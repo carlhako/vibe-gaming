@@ -13,6 +13,7 @@
   <div class="shell">
     <aside class="shelf">
       <div class="wordmark"><span class="wordmark-dot"></span>HOMEBOT<br>ARCADE</div>
+      <a class="new-game-btn" href="{{ url_for('new_game_form') }}">+ New Game</a>
       <div class="shelf-count">{{ games|length }} cartridge{{ '' if games|length == 1 else 's' }}</div>
       <nav class="cart-list" id="cart-list">
         {% for g in games %}

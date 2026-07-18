@@ -188,3 +188,114 @@ def get_web_games(sort="alpha", conn=None):
         order_by = "title COLLATE NOCASE"
     rows = c.execute(f"SELECT * FROM web_games ORDER BY {order_by}").fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# generation_requests / generation_attempts (async job + audit trail)
+# ---------------------------------------------------------------------------
+
+def create_generation_request(job_id, kind, prompt, requested_by, source_game_id=None,
+                               new_title=None, conn=None):
+    """Insert a new queued job. kind is 'create' or 'enhance'."""
+    c = _c(conn)
+    now = _now()
+    c.execute(
+        """
+        INSERT INTO generation_requests
+            (job_id, kind, prompt, new_title, source_game_id, result_game_id,
+             requested_by, status, attempts, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, NULL, ?, 'queued', 0, ?, ?)
+        """,
+        (job_id, kind, prompt, new_title, source_game_id, requested_by, now, now),
+    )
+    c.commit()
+
+
+def get_generation_request(job_id, conn=None):
+    c = _c(conn)
+    row = c.execute(
+        "SELECT * FROM generation_requests WHERE job_id=?", (job_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def update_generation_request(job_id, status=None, result_game_id=None, attempts=None,
+                               model=None, effort=None, duration_seconds=None, error=None,
+                               conn=None):
+    """Sparse update: only columns explicitly passed (non-None) are touched,
+    except `error` which can be intentionally cleared by passing an empty
+    string — pass None to leave it alone."""
+    c = _c(conn)
+    fields = {"updated_at": _now()}
+    if status is not None:
+        fields["status"] = status
+    if result_game_id is not None:
+        fields["result_game_id"] = result_game_id
+    if attempts is not None:
+        fields["attempts"] = attempts
+    if model is not None:
+        fields["model"] = model
+    if effort is not None:
+        fields["effort"] = effort
+    if duration_seconds is not None:
+        fields["duration_seconds"] = duration_seconds
+    if error is not None:
+        fields["error"] = error
+    set_clause = ", ".join(f"{k}=?" for k in fields)
+    c.execute(
+        f"UPDATE generation_requests SET {set_clause} WHERE job_id=?",
+        (*fields.values(), job_id),
+    )
+    c.commit()
+
+
+def claim_next_queued_request(conn=None) -> str | None:
+    """Atomically claim the oldest queued job, marking it 'generating'.
+    Returns the claimed job_id, or None if no queued job is available.
+    Safe under concurrent callers (multiple worker threads/processes)
+    because the UPDATE's WHERE clause re-checks status='queued' and only
+    one caller's UPDATE can affect the row."""
+    c = _c(conn)
+    now = _now()
+    row = c.execute(
+        "SELECT job_id FROM generation_requests WHERE status='queued' "
+        "ORDER BY created_at LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    job_id = row["job_id"]
+    cur = c.execute(
+        "UPDATE generation_requests SET status='generating', updated_at=? "
+        "WHERE job_id=? AND status='queued'",
+        (now, job_id),
+    )
+    c.commit()
+    return job_id if cur.rowcount == 1 else None
+
+
+def sweep_orphaned_requests(conn=None) -> int:
+    """Mark any job stuck in 'generating' (left over from a crash/restart)
+    as failed. Returns the number of rows swept."""
+    c = _c(conn)
+    now = _now()
+    cur = c.execute(
+        "UPDATE generation_requests SET status='failed', "
+        "error='interrupted by restart', updated_at=? WHERE status='generating'",
+        (now,),
+    )
+    c.commit()
+    return cur.rowcount
+
+
+def add_generation_attempt(job_id, attempt_number, outcome, detail=None,
+                            tokens_used=None, conn=None):
+    c = _c(conn)
+    c.execute(
+        """
+        INSERT INTO generation_attempts
+            (job_id, attempt_number, outcome, detail, tokens_used, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (job_id, attempt_number, outcome, detail, tokens_used, _now()),
+    )
+    c.commit()

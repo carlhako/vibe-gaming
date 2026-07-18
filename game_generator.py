@@ -14,9 +14,11 @@ game directory is live the moment write_game_files() returns.
 
 # Exports:
 #   class GameGenerationError(Exception)
-#   generate_game(description, requested_by, config, db_conn=None, games_dir=None) -> dict
+#   generate_game(description, requested_by, config, db_conn=None, games_dir=None,
+#                 job_id=None) -> dict
 #     (result includes "game_id"; slug is derived as slugify(title)-<game_id prefix>
-#     via db.make_slug() so duplicate titles never collide)
+#     via db.make_slug() so duplicate titles never collide. job_id, when given,
+#     tags each retry attempt in generation_attempts for audit/status purposes)
 #   slugify(title) -> str
 #   check_slug_collision(slug, games_dir) -> str | None
 #   parse_generation_response(text) -> dict
@@ -251,7 +253,7 @@ def format_report(result: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def generate_game(description: str, requested_by: str, config: dict, db_conn=None,
-                   games_dir: Path | None = None) -> dict:
+                   games_dir: Path | None = None, job_id: str | None = None) -> dict:
     """Drive the full generate -> validate -> smoke-test retry loop and
     return a result dict (result["message"] is ready to display; DB
     registration is already performed once, on success, before returning)."""
@@ -291,6 +293,10 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
             )
         except ai.AIError as exc:
             previous_failure = f"AI error: {exc}"
+            if job_id is not None:
+                db.add_generation_attempt(
+                    job_id, attempt, "ai_error", detail=previous_failure, conn=db_conn
+                )
             continue
 
         total_tokens += ask_result.output_tokens
@@ -333,10 +339,27 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
             title = parsed["title"]
             description_out = parsed["description"]
             notes = parsed["notes"]
+            if job_id is not None:
+                db.add_generation_attempt(
+                    job_id, attempt, "success", tokens_used=ask_result.output_tokens,
+                    conn=db_conn,
+                )
             break
 
         except GameGenerationError as exc:
             previous_failure = str(exc)
+            if job_id is not None:
+                msg = str(exc)
+                if msg.startswith("safety violation"):
+                    outcome = "safety_violation"
+                elif msg.startswith("smoke test failed"):
+                    outcome = "smoke_test_failed"
+                else:
+                    outcome = "ai_error"
+                db.add_generation_attempt(
+                    job_id, attempt, outcome, detail=msg,
+                    tokens_used=ask_result.output_tokens, conn=db_conn,
+                )
             continue
 
     duration = time.monotonic() - t0

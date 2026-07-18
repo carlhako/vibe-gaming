@@ -20,3 +20,7 @@ enhanceaiwebgame:
   timeout_seconds: 120
   max_attempts: 3            # 1 initial + 2 retries; each failed attempt restores the backup first
   smoke_test_timeout_seconds: 20
+
+job_runner:
+  workers: 1                 # poll-loop threads per process (dev) / per gunicorn worker (prod)
+  poll_interval_seconds: 1   # how often an idle worker checks for a newly queued job
