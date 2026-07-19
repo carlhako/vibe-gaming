@@ -1,0 +1,8 @@
+{
+  "title": "Sopwith",
+  "description": "Pilot your Sopwith Camel biplane across an enemy-held landscape \u2014 strafe buildings, dodge enemy aces, and bomb your way to victory in this CGA-style classic.",
+  "requested_by": "thelounge20",
+  "created_at": "2026-07-17T22:39:25.811809Z",
+  "version": 2,
+  "prompt": "create a sopwith camel clone like the old dos game, make the game play with the same keys and try to replicate the original level and sounds."
+}

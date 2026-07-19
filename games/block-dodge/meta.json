@@ -1,0 +1,8 @@
+{
+  "title": "Block Dodge",
+  "description": "Dodge the falling blocks as long as you can \u2014 weave left and right to survive increasingly fast waves.",
+  "requested_by": "sprint2-vm-verify",
+  "created_at": "2026-07-17T07:00:30.032323Z",
+  "version": 2,
+  "prompt": "a block dodge game where you move left and right to dodge blocks"
+}

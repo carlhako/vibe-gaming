@@ -1,0 +1,8 @@
+{
+  "title": "Connect 4\u00d74",
+  "description": "Classic Connect Four on a 7\u00d76 board \u2014 drop red pieces to beat the yellow AI on Easy (random + opportunistic) or Hard (minimax alpha-beta depth-7) difficulty.",
+  "requested_by": "thelounge20",
+  "created_at": "2026-07-17T08:45:17.169613Z",
+  "version": 1,
+  "prompt": "make a connect 4x4 game that you play with the mouse, create a easy and hard ai."
+}

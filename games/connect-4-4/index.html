@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Connect 4×4</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+  min-height: 100vh;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  font-family: 'Segoe UI', Arial, sans-serif;
+  color: #fff;
+  user-select: none; -webkit-user-select: none;
+}
+h1 {
+  font-size: clamp(1.4rem, 5vw, 2.2rem);
+  font-weight: 900; letter-spacing: 3px;
+  margin-bottom: 14px;
+  background: linear-gradient(90deg, #ff4444, #ffdd00);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.ctrl {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 14px; flex-wrap: wrap; justify-content: center;
+}
+.dg {
+  display: flex;
+  background: rgba(255,255,255,.12);
+  border-radius: 30px; padding: 4px;
+}
+.db {
+  padding: 7px 22px; border: none; border-radius: 26px;
+  cursor: pointer; font-size: 13px; font-weight: 700;
+  background: transparent; color: rgba(255,255,255,.5);
+  transition: all .2s;
+}
+.db.on { background: #e94560; color: #fff; }
+#ngb {
+  padding: 7px 20px;
+  border: 2px solid rgba(255,255,255,.25);
+  border-radius: 26px; cursor: pointer;
+  font-size: 13px; font-weight: 700;
+  background: transparent; color: #fff;
+  transition: all .2s;
+}
+#ngb:hover { background: rgba(255,255,255,.15); }
+.sb { display: flex; gap: 50px; margin-bottom: 12px; text-align: center; }
+.sv .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; opacity: .65; }
+.sv .val { font-size: 30px; font-weight: 900; margin-top: 2px; }
+.p1 .val { color: #ff4444; } .p2 .val { color: #ffdd00; }
+canvas { display: block; cursor: pointer; }
+#statusMsg {
+  margin-top: 13px; font-size: 1.05rem;
+  min-height: 26px; text-align: center; opacity: .9;
+}
+</style>
+</head>
+<body>
+<h1>CONNECT 4×4</h1>
+<div class="ctrl">
+  <div class="dg">
+    <button class="db on" id="eb" onclick="setDiff('easy')">Easy</button>
+    <button class="db" id="hb" onclick="setDiff('hard')">Hard</button>
+  </div>
+  <button id="ngb" onclick="newGame()">↺ New Game</button>
+</div>
+<div class="sb">
+  <div class="sv p1"><div class="lbl">🔴 You</div><div class="val" id="ps">0</div></div>
+  <div class="sv p2"><div class="lbl">🟡 AI</div><div class="val" id="as">0</div></div>
+</div>
+<canvas id="gc"></canvas>
+<div id="statusMsg">Your turn — click a column!</div>
+
+<script>
+const ROWS = 6, COLS = 7, NEED = 4;
+
+const vw = Math.min(window.innerWidth - 20, 560);
+const CELL = Math.floor(vw / COLS);
+const PR = Math.floor(CELL * 0.42);
+const PAD = 8;
+const W = COLS * CELL + PAD * 2;
+const H = (ROWS + 1) * CELL + PAD * 2;
+
+const canvas = document.getElementById('gc');
+const ctx = canvas.getContext('2d');
+canvas.width = W;
+canvas.height = H;
+
+let board, gameOver, currentPlayer, animating, hoverCol, fallingPiece, winCells, aiTimer, difficulty;
+const scores = [0, 0, 0];
+difficulty = 'easy';
+
+function cellX(col) { return PAD + col * CELL + CELL / 2; }
+function cellY(row) { return PAD + (row + 1) * CELL + CELL / 2; }
+
+function initGame() {
+  board = Array.from({ length: ROWS }, () => Array(COLS).fill(0));
+  gameOver = false;
+  currentPlayer = 1;
+  animating = false;
+  hoverCol = -1;
+  fallingPiece = null;
+  winCells = [];
+  if (aiTimer) { clearTimeout(aiTimer); aiTimer = null; }
+}
+
+// ── Drawing ──────────────────────────────────────────
+function drawPiece(x, y, player, alpha, glow) {
+  alpha = (alpha === undefined) ? 1 : alpha;
+  const mainColor = player === 1 ? '#ff3333' : '#ffdd00';
+  const lightColor = player === 1 ? '#ff9999' : '#ffff88';
+  ctx.globalAlpha = alpha;
+  if (glow) { ctx.shadowColor = mainColor; ctx.shadowBlur = 20; }
+  const grad = ctx.createRadialGradient(x - PR * 0.3, y - PR * 0.35, PR * 0.05, x, y, PR);
+  grad.addColorStop(0, lightColor);
+  grad.addColorStop(1, mainColor);
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(x, y, PR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+}
+
+function drawHole(x, y) {
+  ctx.fillStyle = '#080818';
+  ctx.beginPath();
+  ctx.arc(x, y, PR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(x, y, PR - 1, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+function drawRoundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+
+function renderFrame() {
+  ctx.clearRect(0, 0, W, H);
+  // Background
+  ctx.fillStyle = '#13132a';
+  ctx.fillRect(0, 0, W, H);
+
+  // Board shadow + body
+  ctx.shadowColor = 'rgba(0,0,0,0.7)';
+  ctx.shadowBlur = 28;
+  ctx.shadowOffsetY = 10;
+  ctx.fillStyle = '#0e3460';
+  drawRoundRect(PAD, PAD + CELL, COLS * CELL, ROWS * CELL, 12);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+
+  // Column hover highlight
+  if (!gameOver && !animating && hoverCol >= 0 && currentPlayer === 1 && board[0][hoverCol] === 0) {
+    ctx.fillStyle = 'rgba(255,255,255,0.07)';
+    ctx.fillRect(PAD + hoverCol * CELL, PAD + CELL, CELL, ROWS * CELL);
+  }
+
+  // Board cells
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const x = cellX(c), y = cellY(r), v = board[r][c];
+      const isWin = winCells.some(([wr, wc]) => wr === r && wc === c);
+      if (v === 0) drawHole(x, y);
+      else drawPiece(x, y, v, 1, isWin);
+    }
+  }
+
+  // Falling piece (on top)
+  if (fallingPiece) {
+    drawPiece(cellX(fallingPiece.col), fallingPiece.y, fallingPiece.player);
+  }
+
+  // Hover preview in top row
+  if (!gameOver && !animating && hoverCol >= 0 && currentPlayer === 1 && board[0][hoverCol] === 0) {
+    drawPiece(cellX(hoverCol), PAD + CELL / 2, 1, 0.45);
+  }
+
+  // Win flash overlay on board
+  if (gameOver && winCells.length > 0) {
+    const now = Date.now();
+    const flash = 0.12 + 0.08 * Math.sin(now / 200);
+    ctx.fillStyle = `rgba(255,255,255,${flash})`;
+    for (const [wr, wc] of winCells) {
+      ctx.beginPath();
+      ctx.arc(cellX(wc), cellY(wr), PR + 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+// ── Animation loop ────────────────────────────────────
+const GRAVITY = 0.019;
+let lastTs = 0;
+
+function gameLoop(ts) {
+  const dt = Math.min(ts - lastTs, 50);
+  lastTs = ts;
+
+  if (fallingPiece) {
+    fallingPiece.vy += GRAVITY * dt;
+    fallingPiece.y += fallingPiece.vy * dt;
+    const targetY = cellY(fallingPiece.row);
+    if (fallingPiece.y >= targetY) {
+      fallingPiece.y = targetY;
+      pieceLanded();
+    }
+  }
+
+  renderFrame();
+  requestAnimationFrame(gameLoop);
+}
+
+function pieceLanded() {
+  board[fallingPiece.row][fallingPiece.col] = fallingPiece.player;
+  const player = fallingPiece.player;
+  fallingPiece = null;
+  animating = false;
+
+  const won = findWin(board, player);
+  if (won) {
+    gameOver = true;
+    winCells = won;
+    scores[player]++;
+    document.getElementById(player === 1 ? 'ps' : 'as').textContent = scores[player];
+    setMsg(player === 1 ? '🎉 You win! Nicely done!' : '🤖 AI wins this round!');
+    return;
+  }
+  if (boardFull(board)) {
+    gameOver = true;
+    setMsg("It's a draw!");
+    return;
+  }
+  currentPlayer = 3 - player;
+  if (currentPlayer === 2) {
+    setMsg('🤖 AI is thinking…');
+    aiTimer = setTimeout(doAIMove, difficulty === 'hard' ? 480 : 220);
+  } else {
+    setMsg('Your turn — click a column!');
+  }
+}
+
+function dropPiece(col, player) {
+  let row = -1;
+  for (let r = ROWS - 1; r >= 0; r--) {
+    if (board[r][col] === 0) { row = r; break; }
+  }
+  if (row === -1) return false;
+  animating = true;
+  fallingPiece = { col, row, player, y: PAD + CELL / 2, vy: 0 };
+  return true;
+}
+
+// ── Win detection ─────────────────────────────────────
+function findWin(b, player) {
+  const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (b[r][c] !== player) continue;
+      for (const [dr, dc] of dirs) {
+        const cells = [];
+        for (let i = 0; i < NEED; i++) {
+          const nr = r + dr * i, nc = c + dc * i;
+          if (nr < 0 || nr >= ROWS || nc < 0 || nc >= COLS || b[nr][nc] !== player) break;
+          cells.push([nr, nc]);
+        }
+        if (cells.length === NEED) return cells;
+      }
+    }
+  }
+  return null;
+}
+function hasWin(b, player) { return findWin(b, player) !== null; }
+function boardFull(b) {
+  for (let c = 0; c < COLS; c++) if (b[0][c] === 0) return false;
+  return true;
+}
+
+// ── AI ────────────────────────────────────────────────
+function getValidCols(b) {
+  const v = [];
+  for (let c = 0; c < COLS; c++) if (b[0][c] === 0) v.push(c);
+  return v;
+}
+
+function applyMove(b, col, player) {
+  const nb = b.map(r => r.slice());
+  for (let r = ROWS - 1; r >= 0; r--) {
+    if (nb[r][col] === 0) { nb[r][col] = player; break; }
+  }
+  return nb;
+}
+
+function scoreWindow(win, player) {
+  const opp = 3 - player;
+  const pc = win.filter(x => x === player).length;
+  const ec = win.filter(x => x === 0).length;
+  const oc = win.filter(x => x === opp).length;
+  if (oc > 0 && pc > 0) return 0;
+  if (pc === 4) return 1000;
+  if (pc === 3 && ec === 1) return 10;
+  if (pc === 2 && ec === 2) return 3;
+  if (oc === 3 && ec === 1) return -80;
+  if (oc === 2 && ec === 2) return -4;
+  return 0;
+}
+
+function evalBoard(b, aiPlayer) {
+  let score = 0;
+  const cc = Math.floor(COLS / 2);
+  for (let r = 0; r < ROWS; r++) {
+    if (b[r][cc] === aiPlayer) score += 4;
+    if (cc > 0 && b[r][cc-1] === aiPlayer) score += 2;
+    if (cc < COLS-1 && b[r][cc+1] === aiPlayer) score += 2;
+  }
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c <= COLS - NEED; c++)
+      score += scoreWindow(b[r].slice(c, c + NEED), aiPlayer);
+  for (let c = 0; c < COLS; c++)
+    for (let r = 0; r <= ROWS - NEED; r++)
+      score += scoreWindow([b[r][c], b[r+1][c], b[r+2][c], b[r+3][c]], aiPlayer);
+  for (let r = 0; r <= ROWS - NEED; r++) {
+    for (let c = 0; c <= COLS - NEED; c++)
+      score += scoreWindow([b[r][c], b[r+1][c+1], b[r+2][c+2], b[r+3][c+3]], aiPlayer);
+    for (let c = NEED - 1; c < COLS; c++)
+      score += scoreWindow([b[r][c], b[r+1][c-1], b[r+2][c-2], b[r+3][c-3]], aiPlayer);
+  }
+  return score;
+}
+
+function minimax(b, depth, alpha, beta, maximizing, aiPlayer) {
+  const human = 3 - aiPlayer;
+  if (hasWin(b, aiPlayer)) return [null, 100000 + depth];
+  if (hasWin(b, human))   return [null, -100000 - depth];
+  const valid = getValidCols(b);
+  if (valid.length === 0 || depth === 0) return [null, evalBoard(b, aiPlayer) - evalBoard(b, human)];
+  valid.sort((a, bv) => Math.abs(a - 3) - Math.abs(bv - 3));
+  let bestCol = valid[0];
+  if (maximizing) {
+    let bestScore = -Infinity;
+    for (const c of valid) {
+      const [, sc] = minimax(applyMove(b, c, aiPlayer), depth - 1, alpha, beta, false, aiPlayer);
+      if (sc > bestScore) { bestScore = sc; bestCol = c; }
+      alpha = Math.max(alpha, bestScore);
+      if (alpha >= beta) break;
+    }
+    return [bestCol, bestScore];
+  } else {
+    let bestScore = Infinity;
+    for (const c of valid) {
+      const [, sc] = minimax(applyMove(b, c, human), depth - 1, alpha, beta, true, aiPlayer);
+      if (sc < bestScore) { bestScore = sc; bestCol = c; }
+      beta = Math.min(beta, bestScore);
+      if (alpha >= beta) break;
+    }
+    return [bestCol, bestScore];
+  }
+}
+
+function doAIMove() {
+  if (gameOver || currentPlayer !== 2) return;
+  const valid = getValidCols(board);
+  if (valid.length === 0) return;
+  let col;
+
+  if (difficulty === 'easy') {
+    // Always take immediate win
+    for (const c of valid) {
+      if (hasWin(applyMove(board, c, 2), 2)) { col = c; break; }
+    }
+    // 45% chance to block player
+    if (col === undefined && Math.random() < 0.45) {
+      for (const c of valid) {
+        if (hasWin(applyMove(board, c, 1), 1)) { col = c; break; }
+      }
+    }
+    // Otherwise random
+    if (col === undefined) col = valid[Math.floor(Math.random() * valid.length)];
+  } else {
+    const [best] = minimax(board, 7, -Infinity, Infinity, true, 2);
+    col = best;
+  }
+
+  dropPiece(col, 2);
+}
+
+// ── Input ─────────────────────────────────────────────
+function colFromPixelX(px) {
+  const c = Math.floor((px - PAD) / CELL);
+  return (c >= 0 && c < COLS) ? c : -1;
+}
+
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = W / rect.width;
+  hoverCol = (!gameOver && !animating && currentPlayer === 1)
+    ? colFromPixelX((e.clientX - rect.left) * scaleX)
+    : -1;
+});
+
+canvas.addEventListener('mouseleave', () => { hoverCol = -1; });
+
+canvas.addEventListener('click', e => {
+  if (gameOver || animating || currentPlayer !== 1) return;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = W / rect.width;
+  const col = colFromPixelX((e.clientX - rect.left) * scaleX);
+  if (col === -1 || board[0][col] !== 0) return;
+  dropPiece(col, 1);
+});
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  if (gameOver || animating || currentPlayer !== 1) return;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = W / rect.width;
+  const touch = e.changedTouches[0];
+  const col = colFromPixelX((touch.clientX - rect.left) * scaleX);
+  if (col === -1 || board[0][col] !== 0) return;
+  dropPiece(col, 1);
+}, { passive: false });
+
+// ── Controls ──────────────────────────────────────────
+function setMsg(m) { document.getElementById('statusMsg').textContent = m; }
+
+function setDiff(d) {
+  difficulty = d;
+  document.getElementById('eb').classList.toggle('on', d === 'easy');
+  document.getElementById('hb').classList.toggle('on', d === 'hard');
+  newGame();
+}
+
+function newGame() {
+  initGame();
+  setMsg('Your turn — click a column!');
+}
+
+// ── Boot ──────────────────────────────────────────────
+initGame();
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>

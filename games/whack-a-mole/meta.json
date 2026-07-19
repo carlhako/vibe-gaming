@@ -1,0 +1,8 @@
+{
+  "title": "Whack-a-Mole!",
+  "description": "A classic whack-a-mole game with 9 holes, 30-second timer, difficulty that ramps up over time, and cute SVG moles with dazed expressions when hit.",
+  "requested_by": "sprint2-vm-verify",
+  "created_at": "2026-07-17T06:00:14.442128Z",
+  "version": 1,
+  "prompt": "a simple whack-a-mole game with 9 holes and a 30 second timer"
+}
