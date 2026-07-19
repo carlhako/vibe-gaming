@@ -12,6 +12,7 @@ of this process.
 """
 
 import functools
+import hmac
 import json
 import logging
 import os
@@ -49,7 +50,7 @@ def require_admin_token(view):
         expected = os.environ.get("ADMIN_TOKEN")
         auth_header = request.headers.get("Authorization", "")
         supplied = request.args.get("token") or auth_header.removeprefix("Bearer ").strip()
-        if not expected or not supplied or supplied != expected:
+        if not expected or not supplied or not hmac.compare_digest(supplied, expected):
             abort(403)
         return view(*args, **kwargs)
     return wrapped
