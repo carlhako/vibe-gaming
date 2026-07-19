@@ -10,6 +10,32 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
+  <canvas id="starfield" aria-hidden="true"></canvas>
+  <div class="splash-backdrop" id="intro-splash" aria-hidden="true">
+    <div class="splash-cab">
+      <div class="cab-marquee">THE VIBE ARCADE</div>
+      <div class="cab-screen">
+        <div class="cab-screen-inner">
+          <span class="cab-boot cab-boot-1">VIBE-OS v1.0</span>
+          <span class="cab-boot cab-boot-2">RAM OK &middot; CRT OK</span>
+          <span class="cab-title">THE VIBE<br>ARCADE</span>
+          <span class="cab-start">CLICK TO START</span>
+        </div>
+      </div>
+      <div class="cab-deck">
+        <span class="cab-stick"></span>
+        <span class="cab-btn cab-btn-a"></span>
+        <span class="cab-btn cab-btn-b"></span>
+      </div>
+      <div class="cab-base"></div>
+    </div>
+  </div>
+  <script>
+    if (sessionStorage.getItem("vg_seen_intro") ||
+        matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      document.getElementById("intro-splash").hidden = true;
+    }
+  </script>
   <div class="shell">
     <aside class="shelf">
       <div class="wordmark"><span class="wordmark-dot"></span>THE VIBE<br>ARCADE</div>
@@ -101,5 +127,6 @@
   </div>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ url_for('static', filename='arcade-fx.js') }}"></script>
 </body>
 </html>
