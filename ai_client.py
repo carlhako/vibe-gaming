@@ -14,10 +14,23 @@ Talks to the DeepSeek API (OpenAI-compatible Chat Completions) via the
 the environment (see .env.example) — loaded via python-dotenv if a .env file
 is present.
 
-`effort` has no DeepSeek equivalent, so it's mapped onto DeepSeek's two
-models instead of being passed through: "high" selects the reasoning model
-(deepseek-reasoner), anything else selects the fast chat model
-(deepseek-chat). Pass `model` explicitly to bypass this mapping.
+As of 2026-07, DeepSeek's own API (api.deepseek.com) exposes exactly two
+model families — `deepseek-v4-flash` and `deepseek-v4-pro` (confirmed via
+`GET /models`) — each with a "thinking" (chain-of-thought reasoning) mode
+that's toggled per-request rather than selected via a separate model name.
+The old `deepseek-chat` / `deepseek-reasoner` names (which used to be the
+way to pick fast-vs-reasoning) are legacy aliases for deepseek-v4-flash's
+non-thinking/thinking modes and are retired 2026-07-24 — do not use them.
+
+So unlike the old two-model scheme, `effort` no longer selects the model —
+`model` does (defaulting to deepseek-v4-flash). `effort` now toggles
+thinking mode instead: "high" or "max" enables it (at that reasoning depth,
+via the `thinking`/`reasoning_effort` request fields), anything else runs
+the fast non-thinking path with temperature pinned to 0.0 (DeepSeek's own
+recommended setting for code/math output — see
+https://api-docs.deepseek.com/quick_start/parameter_settings), unless the
+caller passes an explicit `temperature`. Pass `model` explicitly to pin
+deepseek-v4-pro or (until retirement) a legacy name.
 """
 
 import os
@@ -29,8 +42,8 @@ from openai import APIError, APITimeoutError, OpenAI
 load_dotenv()
 
 BASE_URL = "https://api.deepseek.com"
-MODEL_FAST = "deepseek-chat"
-MODEL_REASONING = "deepseek-reasoner"
+MODEL_DEFAULT = "deepseek-v4-flash"  # 284B total / 13B active MoE, 1M ctx — fast + cheap
+MODEL_PRO = "deepseek-v4-pro"        # 1.6T total / 49B active MoE, 1M ctx — best quality
 
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 
@@ -45,6 +58,7 @@ class AskResult:
     output_tokens: int
     model: str
     effort: str
+    raw_response: dict
 
 
 def _client() -> OpenAI:
@@ -54,10 +68,24 @@ def _client() -> OpenAI:
     return OpenAI(api_key=api_key, base_url=BASE_URL)
 
 
-def _resolve_model(model: str | None, effort: str | None) -> str:
-    if model:
-        return model
-    return MODEL_REASONING if effort == "high" else MODEL_FAST
+def _resolve_model(model: str | None) -> str:
+    return model or MODEL_DEFAULT
+
+
+def _resolve_thinking(effort: str | None, temperature: float | None) -> tuple[dict, str, float | None]:
+    """Map `effort` onto DeepSeek V4's per-request thinking-mode toggle.
+
+    "high"/"max" enable thinking mode at that reasoning_effort (temperature
+    is documented as a no-op there, so it's only forwarded if the caller set
+    one explicitly). Anything else disables thinking and defaults
+    temperature to 0.0 — DeepSeek's own recommendation for code/math — unless
+    the caller overrode it.
+    """
+    if effort in ("high", "max"):
+        extra_body = {"thinking": {"type": "enabled"}, "reasoning_effort": effort}
+        return extra_body, effort, temperature
+    extra_body = {"thinking": {"type": "disabled"}}
+    return extra_body, "non-thinking", (0.0 if temperature is None else temperature)
 
 
 def ask(
@@ -66,6 +94,7 @@ def ask(
     system_prompt: str | None = None,
     model: str | None = None,
     effort: str | None = None,
+    temperature: float | None = None,
     timeout: int | None = 120,
     **_ignored,
 ) -> AskResult:
@@ -75,19 +104,25 @@ def ask(
     have no DeepSeek equivalent (e.g. web_search) so callers ported over
     unchanged don't need per-call edits.
     """
-    resolved_model = _resolve_model(model, effort)
+    resolved_model = _resolve_model(model)
+    extra_body, resolved_effort, resolved_temperature = _resolve_thinking(effort, temperature)
     system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
 
     client = _client()
+    create_kwargs = dict(
+        model=resolved_model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        timeout=timeout,
+        extra_body=extra_body,
+    )
+    if resolved_temperature is not None:
+        create_kwargs["temperature"] = resolved_temperature
+
     try:
-        response = client.chat.completions.create(
-            model=resolved_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ],
-            timeout=timeout,
-        )
+        response = client.chat.completions.create(**create_kwargs)
     except APITimeoutError:
         raise AIError(f"Error: timed out after {timeout}s")
     except APIError as exc:
@@ -103,5 +138,6 @@ def ask(
         text=text,
         output_tokens=output_tokens,
         model=resolved_model,
-        effort=effort or "medium",
+        effort=resolved_effort,
+        raw_response=response.model_dump(),
     )

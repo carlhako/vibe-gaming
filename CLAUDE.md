@@ -119,11 +119,16 @@ page; `job_runner.py`'s poll loop is what actually calls them.
 ## ai_client.py — the DeepSeek swap
 
 `ai_client.ask(prompt, system_prompt=None, model=None, effort=None,
-timeout=120)` mirrors the `AskResult`/`AIError` shape of the original
-Claude-CLI wrapper it replaced. Key difference: DeepSeek has no "effort"
-concept, so `effort` is mapped onto DeepSeek's two models instead of being
-passed through — `"high"` → `deepseek-reasoner`, anything else →
-`deepseek-chat`. Pass `model` explicitly to bypass that mapping. Requires
+temperature=None, timeout=120)` mirrors the `AskResult`/`AIError` shape of
+the original Claude-CLI wrapper it replaced. As of 2026-07, DeepSeek's own
+API exposes exactly two model families — `deepseek-v4-flash` (default) and
+`deepseek-v4-pro` — each with a chain-of-thought "thinking" mode toggled
+per-request rather than picked via model name, so `effort` no longer
+selects the model (`model` does); instead `"high"`/`"max"` enable thinking
+mode at that depth, anything else runs the fast non-thinking path with
+temperature pinned to 0.0 (DeepSeek's documented recommendation for
+code/math) unless overridden. The old `deepseek-chat`/`deepseek-reasoner`
+names retire 2026-07-24 — don't reintroduce them. Requires
 `DEEPSEEK_API_KEY` in the environment (`.env`, loaded via python-dotenv).
 
 ## Running locally

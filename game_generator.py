@@ -33,6 +33,7 @@ game directory is live the moment write_game_files() returns.
 
 from __future__ import annotations
 
+import copy
 import datetime
 import json
 import re
@@ -193,13 +194,15 @@ def _build_system_prompt() -> str:
     return (
         "You are generating a new browser game for an arcade site that "
         "hosts single-file HTML5/JavaScript games.\n\n"
-        "Contract: reply with exactly ONE self-contained index.html file — "
-        "all HTML, CSS, and JavaScript inline in that one file. Canvas or "
-        "plain DOM, whatever suits the game. You may load external "
-        "JavaScript modules or stylesheets via <script>/<link> tags ONLY "
-        f"from these CDN hosts: {allowed_hosts}. Do not reference any other "
-        "external host, and do not attempt any network calls back to this "
-        "site or anywhere else at runtime.\n\n"
+        "## Contract\n"
+        "Reply with exactly ONE self-contained index.html file — all HTML, "
+        "CSS, and JavaScript inline in that one file. Canvas or plain DOM, "
+        "whatever suits the game. You may load external JavaScript modules "
+        "or stylesheets via <script>/<link> tags ONLY from these CDN hosts: "
+        f"{allowed_hosts}. Do not reference any other external host, and do "
+        "not attempt any network calls back to this site or anywhere else "
+        "at runtime.\n\n"
+        "## Sandbox constraints\n"
         "The game will be played inside a sandboxed <iframe> with no "
         "same-origin access: document.cookie, localStorage, sessionStorage, "
         "indexedDB, and window.parent/window.top are all unavailable — keep "
@@ -209,6 +212,14 @@ def _build_system_prompt() -> str:
         "appropriate, must render something immediately on load (never a "
         "blank screen), and must not throw uncaught exceptions during normal "
         "play.\n\n"
+        "## Quality bar\n"
+        "Make it a complete, satisfying game, not a bare-bones prototype: "
+        "give the player clear feedback (score, lives, or similar), a "
+        "sensible difficulty curve, an explicit win/lose or game-over state, "
+        "and an obvious way to restart without reloading the page. A small, "
+        "focused game that fully works and feels polished beats an "
+        "ambitious one that's half-finished.\n\n"
+        "## Reply format\n"
         "Reply in EXACTLY this format, with nothing outside the markers:\n\n"
         f"{_MARKERS[0]}\n```html\n<the complete index.html source>\n```\n"
         f"{_MARKERS[1]}\n```json\n"
@@ -255,6 +266,24 @@ def format_report(result: dict) -> str:
 # Shared retry loop (used by generate_game() and game_enhancer.enhance_game())
 # ---------------------------------------------------------------------------
 
+def _redact_raw_response(raw_response: dict, game_html: str | None) -> str:
+    """JSON-serialize ai_client's raw API response for the generation_attempts
+    audit trail, with the generated game source blanked out — it's already
+    on disk (or, on a failed attempt, already discarded), so keeping a second
+    copy in every attempt row would make the table balloon for no benefit.
+    Everything else (ids, timestamps, finish_reason, usage, reasoning_content
+    if thinking mode was on) is kept as-is."""
+    redacted = copy.deepcopy(raw_response)
+    if game_html:
+        placeholder = f"<stripped {len(game_html)} chars of game source>"
+        for choice in redacted.get("choices") or []:
+            message = choice.get("message") or {}
+            content = message.get("content")
+            if isinstance(content, str) and game_html in content:
+                message["content"] = content.replace(game_html, placeholder)
+    return json.dumps(redacted, default=str)
+
+
 def run_generation_attempts(*, description: str, requested_by: str, system_prompt: str,
                              user_prompt_builder, cfg: dict, games_dir: Path,
                              job_id: str | None = None, db_conn=None,
@@ -299,6 +328,7 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
     attempt = 0
 
     for attempt in range(1, max_attempts + 1):
+        attempt_t0 = time.monotonic()
         user_prompt = user_prompt_builder(attempt, previous_failure)
         try:
             ask_result = ai.ask(
@@ -312,7 +342,8 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
             previous_failure = f"AI error: {exc}"
             if job_id is not None:
                 db.add_generation_attempt(
-                    job_id, attempt, "ai_error", detail=previous_failure, conn=db_conn
+                    job_id, attempt, "ai_error", detail=previous_failure,
+                    duration_seconds=time.monotonic() - attempt_t0, conn=db_conn,
                 )
             continue
 
@@ -320,6 +351,7 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
         last_model = ask_result.model or "default"
         last_effort = ask_result.effort
 
+        parsed = None
         try:
             parsed = parse_generation_response(ask_result.text)
 
@@ -360,6 +392,8 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
             if job_id is not None:
                 db.add_generation_attempt(
                     job_id, attempt, "success", tokens_used=ask_result.output_tokens,
+                    duration_seconds=time.monotonic() - attempt_t0,
+                    raw_response=_redact_raw_response(ask_result.raw_response, parsed["game_html"]),
                     conn=db_conn,
                 )
             break
@@ -376,7 +410,12 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
                     outcome = "ai_error"
                 db.add_generation_attempt(
                     job_id, attempt, outcome, detail=msg,
-                    tokens_used=ask_result.output_tokens, conn=db_conn,
+                    tokens_used=ask_result.output_tokens,
+                    duration_seconds=time.monotonic() - attempt_t0,
+                    raw_response=_redact_raw_response(
+                        ask_result.raw_response, parsed["game_html"] if parsed else None
+                    ),
+                    conn=db_conn,
                 )
             continue
 
@@ -430,6 +469,7 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
             model=result["model"],
             effort=result["effort"],
             duration_seconds=result["duration_seconds"],
+            tokens_used=result["tokens_used"],
             error=None,
             parent_game_id=None,
             root_game_id=result["game_id"],

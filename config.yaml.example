@@ -7,17 +7,44 @@ game_web:
   base_url: ""              # set to e.g. "https://games.example.com" once deployed behind a real host
   games_dir: "games"
 
+# DeepSeek model reference (as of 2026-07-19 — see ai_client.py docstring):
+# api.deepseek.com's GET /models currently exposes exactly two model
+# families. Unlike the old deepseek-chat/deepseek-reasoner scheme, `model`
+# no longer implies a reasoning depth — that's `effort` below, which toggles
+# DeepSeek V4's per-request thinking mode on top of whichever model you pick.
+#
+#   deepseek-v4-flash   284B total / 13B active MoE, 1M context. Fast and
+#                       cheap ($0.14/$0.28 per 1M tok, input/output, cache
+#                       miss), with reasoning quality close to v4-pro when
+#                       thinking mode is on. Good default for both new
+#                       generation and enhancement.
+#   deepseek-v4-pro     1.6T total / 49B active MoE, 1M context. Best raw
+#                       quality for hard reasoning/agentic work, ~3x
+#                       v4-flash's cost ($0.435/$0.87 per 1M tok). Worth
+#                       trying if v4-flash output quality isn't cutting it.
+#
+# Legacy aliases (deepseek-chat -> v4-flash non-thinking mode,
+# deepseek-reasoner -> v4-flash thinking mode) are RETIRED 2026-07-24 —
+# don't use them in new configs; kept below only so you can see what they
+# mapped to.
+
 newaiwebgame:
-  model: ""                 # blank = resolve from effort (see ai_client.py); or pin e.g. "deepseek-chat"
-  effort: "high"             # "high" -> deepseek-reasoner, anything else -> deepseek-chat
-  timeout_seconds: 120       # per ai_client.ask() call
+  model: "deepseek-v4-flash"
+  # model: "deepseek-v4-pro"
+  # model: "deepseek-chat"        # DEPRECATED, retires 2026-07-24 — use deepseek-v4-flash + effort other than high/max
+  # model: "deepseek-reasoner"    # DEPRECATED, retires 2026-07-24 — use deepseek-v4-flash + effort: high
+  effort: "high"             # "high"/"max" -> thinking mode on (reasoning_effort); anything else -> fast non-thinking path, temperature pinned to 0.0
+  timeout_seconds: 1800      # per ai_client.ask() call (30 min) — thinking-mode generations of a full game can run well past 120s
   max_attempts: 3            # 1 initial + 2 retries
   smoke_test_timeout_seconds: 20   # per generated-game Playwright headless load
 
 enhanceaiwebgame:
-  model: ""                 # blank = resolve from effort
-  effort: "high"             # enhancement/debugging is complex, keep the reasoning model
-  timeout_seconds: 120
+  model: "deepseek-v4-flash"
+  # model: "deepseek-v4-pro"
+  # model: "deepseek-chat"        # DEPRECATED, retires 2026-07-24
+  # model: "deepseek-reasoner"    # DEPRECATED, retires 2026-07-24
+  effort: "high"             # enhancement/debugging is complex, keep thinking mode on
+  timeout_seconds: 1800      # per ai_client.ask() call (30 min); see note above
   max_attempts: 3            # 1 initial + 2 retries; each failed attempt restores the backup first
   smoke_test_timeout_seconds: 20
 

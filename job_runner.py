@@ -58,13 +58,15 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
         db.update_generation_request(
             job_id, status="success", result_game_id=result["game_id"],
             attempts=result["attempts"], model=result["model"], effort=result["effort"],
-            duration_seconds=result["duration_seconds"], conn=conn,
+            duration_seconds=result["duration_seconds"], tokens_used=result["tokens_used"],
+            conn=conn,
         )
     else:
         db.update_generation_request(
             job_id, status="failed", attempts=result["attempts"], model=result["model"],
             effort=result["effort"], duration_seconds=result["duration_seconds"],
-            error=result["error"] or "unknown error", conn=conn,
+            tokens_used=result["tokens_used"], error=result["error"] or "unknown error",
+            conn=conn,
         )
 
 

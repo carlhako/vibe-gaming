@@ -32,9 +32,19 @@ None
 """
 
 
+def _raw_response(text):
+    return {
+        "id": "mock-completion",
+        "model": "deepseek-v4-flash",
+        "choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+
 def _ask_result(title):
-    return mock.Mock(text=_fake_response(title), output_tokens=5,
-                      model="deepseek-chat", effort="high")
+    text = _fake_response(title)
+    return mock.Mock(text=text, output_tokens=5, model="deepseek-v4-flash", effort="high",
+                      raw_response=_raw_response(text))
 
 
 def test_three_generation_fork_chain_shares_root(isolated_db, games_dir):
@@ -106,7 +116,8 @@ None
     bad_cfg = dict(CONFIG)
     bad_cfg["enhanceaiwebgame"] = dict(CONFIG["enhanceaiwebgame"], max_attempts=1)
     with mock.patch.object(ai, "ask", return_value=mock.Mock(
-            text=unsafe_response, output_tokens=1, model="m", effort="high")):
+            text=unsafe_response, output_tokens=1, model="m", effort="high",
+            raw_response=_raw_response(unsafe_response))):
         result = ge.enhance_game(original["game_id"], "break it", "web:b", bad_cfg, games_dir=games_dir)
 
     assert not result["success"]

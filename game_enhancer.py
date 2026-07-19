@@ -77,13 +77,15 @@ def _build_system_prompt(source_title: str, existing_game_html: str) -> str:
         "produces a NEW game entry — the original is left completely "
         "untouched and stays in the arcade unchanged; you are producing "
         "revised content for a new entry that forks from it.\n\n"
-        "Contract: reply with exactly ONE self-contained index.html file — "
-        "all HTML, CSS, and JavaScript inline in that one file, same as the "
-        "original. Canvas or plain DOM, whatever suits the game. You may "
-        "load external JavaScript modules or stylesheets via <script>/<link> "
+        "## Contract\n"
+        "Reply with exactly ONE self-contained index.html file — all HTML, "
+        "CSS, and JavaScript inline in that one file, same as the original. "
+        "Canvas or plain DOM, whatever suits the game. You may load "
+        "external JavaScript modules or stylesheets via <script>/<link> "
         f"tags ONLY from these CDN hosts: {allowed_hosts}. Do not reference "
         "any other external host, and do not attempt any network calls back "
         "to this site or anywhere else at runtime.\n\n"
+        "## Sandbox constraints\n"
         "The game will be played inside a sandboxed <iframe> with no "
         "same-origin access: document.cookie, localStorage, sessionStorage, "
         "indexedDB, and window.parent/window.top are all unavailable — keep "
@@ -92,11 +94,17 @@ def _build_system_prompt(source_title: str, existing_game_html: str) -> str:
         "The game must respond to keyboard, mouse, or touch input as "
         "appropriate, must render something immediately on load (never a "
         "blank screen), and must not throw uncaught exceptions during "
-        "normal play. Apply the requested change while preserving "
-        "everything else about the game that the request doesn't ask you "
-        "to touch.\n\n"
-        "Here is the CURRENT game:\n"
+        "normal play.\n\n"
+        "## Quality bar\n"
+        "Apply the requested change while preserving everything else about "
+        "the game that the request doesn't ask you to touch — its feel, "
+        "controls, and existing polish are working and should survive "
+        "unrelated edits. Don't let the change regress the game to a "
+        "half-finished state: it should still be complete and satisfying to "
+        "play afterward, with clear feedback and an obvious way to restart.\n\n"
+        "## Current game\n"
         f"```html\n{existing_game_html}\n```\n\n"
+        "## Reply format\n"
         "Reply in EXACTLY this format, with nothing outside the markers:\n\n"
         f"{gg._MARKERS[0]}\n```html\n<the complete updated index.html source>\n```\n"
         f"{gg._MARKERS[1]}\n```json\n"
@@ -206,7 +214,8 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
             game_id=result["game_id"], slug=result["slug"], title=result["title"],
             description=result["description"], requested_by=requested_by, status="success",
             attempts=result["attempts"], version=1, model=result["model"],
-            effort=result["effort"], duration_seconds=duration, error=None,
+            effort=result["effort"], duration_seconds=duration,
+            tokens_used=result["tokens_used"], error=None,
             parent_game_id=result["parent_game_id"], root_game_id=result["root_game_id"],
             conn=db_conn,
         )

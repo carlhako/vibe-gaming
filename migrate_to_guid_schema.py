@@ -63,13 +63,15 @@ def _update_meta_json(games_dir: Path, slug: str, game_id: str,
 
 
 def _sync_unregistered_games(conn, games_dir: Path) -> int:
-    """Register any games/<slug>/ directory that has no game_id yet -
-    whether that's because it predates web_games entirely (no row by that
-    slug at all, e.g. a hand-written game) or because it just never got a
-    meta.json rewrite. Matches an existing web_games row by slug first (so
-    this never mints a second game_id for something already registered),
-    then inserts a fresh row only if nothing matched. Returns the count of
-    games touched."""
+    """Register any games/<slug>/ directory with no matching web_games row -
+    whether that's because it predates web_games entirely (a hand-written
+    game with no meta.json game_id at all) or because its meta.json's
+    game_id was committed to git without a matching DB row ever being
+    created (vibegames.db is gitignored, so this happens on every fresh
+    clone for games/sample-game/). Matches an existing row by game_id, then
+    by slug, so this never mints a second game_id for something already
+    registered; inserts a fresh row (reusing meta.json's game_id if it has
+    one) only if nothing matched. Returns the count of games touched."""
     if not games_dir.exists():
         return 0
     synced = 0
@@ -86,18 +88,29 @@ def _sync_unregistered_games(conn, games_dir: Path) -> int:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 meta = {}
-        if meta.get("game_id"):
-            continue  # already has an identity - nothing to do
 
-        existing = conn.execute(
-            "SELECT * FROM web_games WHERE slug=?", (slug,)
-        ).fetchone()
+        # A game_id in meta.json is NOT proof it's registered - e.g.
+        # games/sample-game/ ships its game_id committed to git, but
+        # vibegames.db is gitignored, so a fresh clone has no matching
+        # web_games row yet. Look the row up by game_id first (if present),
+        # falling back to slug, and only skip if a row genuinely exists.
+        existing = None
+        if meta.get("game_id"):
+            existing = conn.execute(
+                "SELECT * FROM web_games WHERE game_id=?", (meta["game_id"],)
+            ).fetchone()
+        if existing is None:
+            existing = conn.execute(
+                "SELECT * FROM web_games WHERE slug=?", (slug,)
+            ).fetchone()
         if existing is not None:
             game_id = existing["game_id"]
             parent_game_id = existing["parent_game_id"]
             root_game_id = existing["root_game_id"]
+            if meta.get("game_id") == game_id and meta.get("root_game_id"):
+                continue  # meta.json already matches this row - nothing to do
         else:
-            game_id = db.mint_game_id()
+            game_id = meta.get("game_id") or db.mint_game_id()
             parent_game_id = None
             root_game_id = game_id
             now = db.now_iso()

@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS web_games (
     model            TEXT,
     effort           TEXT,
     duration_seconds REAL,
+    tokens_used      INTEGER,
     error            TEXT,
     parent_game_id   TEXT REFERENCES web_games(game_id),
     root_game_id     TEXT REFERENCES web_games(game_id),
@@ -55,6 +56,7 @@ CREATE TABLE IF NOT EXISTS generation_requests (
     model            TEXT,
     effort           TEXT,
     duration_seconds REAL,
+    tokens_used      INTEGER,
     error            TEXT,
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL
@@ -62,13 +64,15 @@ CREATE TABLE IF NOT EXISTS generation_requests (
 CREATE INDEX IF NOT EXISTS idx_genreq_status ON generation_requests(status);
 
 CREATE TABLE IF NOT EXISTS generation_attempts (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id         TEXT NOT NULL REFERENCES generation_requests(job_id),
-    attempt_number INTEGER NOT NULL,
-    outcome        TEXT NOT NULL,
-    detail         TEXT,
-    tokens_used    INTEGER,
-    created_at     TEXT NOT NULL
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id           TEXT NOT NULL REFERENCES generation_requests(job_id),
+    attempt_number   INTEGER NOT NULL,
+    outcome          TEXT NOT NULL,
+    detail           TEXT,
+    tokens_used      INTEGER,
+    duration_seconds REAL,
+    raw_response     TEXT,
+    created_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_genattempts_job ON generation_attempts(job_id);
 
@@ -114,10 +118,29 @@ def _c(conn):
     return conn if conn is not None else get_connection()
 
 
+# Columns added after a table's initial CREATE TABLE IF NOT EXISTS shipped —
+# ALTER TABLE ADD COLUMN them in on an existing DB, since SQLite has no
+# "ADD COLUMN IF NOT EXISTS". Safe to re-run: skipped once the column exists.
+_ADDED_COLUMNS = {
+    "web_games": [("tokens_used", "INTEGER")],
+    "generation_requests": [("tokens_used", "INTEGER")],
+    "generation_attempts": [("duration_seconds", "REAL"), ("raw_response", "TEXT")],
+}
+
+
+def _ensure_columns(conn):
+    for table, columns in _ADDED_COLUMNS.items():
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, coltype in columns:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {coltype}")
+
+
 def get_connection(check_same_thread=True):
     conn = sqlite3.connect(DB_PATH, check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _ensure_columns(conn)
     conn.commit()
     return conn
 
@@ -141,7 +164,8 @@ def make_slug(title: str, game_id: str) -> str:
 
 def register_web_game(game_id, slug, title, description, requested_by, status, attempts,
                        version=1, model=None, effort=None, duration_seconds=None,
-                       error=None, parent_game_id=None, root_game_id=None, conn=None):
+                       tokens_used=None, error=None, parent_game_id=None, root_game_id=None,
+                       conn=None):
     """Insert or update the live registry row for a generated web game.
 
     One row per game_id: a re-registration (e.g. retry of the same job)
@@ -157,19 +181,21 @@ def register_web_game(game_id, slug, title, description, requested_by, status, a
         """
         INSERT INTO web_games
             (game_id, slug, title, description, requested_by, status, attempts, version,
-             model, effort, duration_seconds, error, parent_game_id, root_game_id,
+             model, effort, duration_seconds, tokens_used, error, parent_game_id, root_game_id,
              created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(game_id) DO UPDATE
             SET slug=excluded.slug, title=excluded.title, description=excluded.description,
                 status=excluded.status, attempts=excluded.attempts,
                 version=excluded.version, model=excluded.model,
                 effort=excluded.effort, duration_seconds=excluded.duration_seconds,
+                tokens_used=excluded.tokens_used,
                 error=excluded.error, parent_game_id=excluded.parent_game_id,
                 root_game_id=excluded.root_game_id, updated_at=excluded.updated_at
         """,
         (game_id, slug, title, description, requested_by, status, attempts, version,
-         model, effort, duration_seconds, error, parent_game_id, root_game_id, now, now),
+         model, effort, duration_seconds, tokens_used, error, parent_game_id, root_game_id,
+         now, now),
     )
     c.commit()
 
@@ -264,8 +290,8 @@ def get_generation_request(job_id, conn=None):
 
 
 def update_generation_request(job_id, status=None, result_game_id=None, attempts=None,
-                               model=None, effort=None, duration_seconds=None, error=None,
-                               conn=None):
+                               model=None, effort=None, duration_seconds=None,
+                               tokens_used=None, error=None, conn=None):
     """Sparse update: only columns explicitly passed (non-None) are touched,
     except `error` which can be intentionally cleared by passing an empty
     string — pass None to leave it alone."""
@@ -283,6 +309,8 @@ def update_generation_request(job_id, status=None, result_game_id=None, attempts
         fields["effort"] = effort
     if duration_seconds is not None:
         fields["duration_seconds"] = duration_seconds
+    if tokens_used is not None:
+        fields["tokens_used"] = tokens_used
     if error is not None:
         fields["error"] = error
     set_clause = ", ".join(f"{k}=?" for k in fields)
@@ -332,14 +360,20 @@ def sweep_orphaned_requests(conn=None) -> int:
 
 
 def add_generation_attempt(job_id, attempt_number, outcome, detail=None,
-                            tokens_used=None, conn=None):
+                            tokens_used=None, duration_seconds=None, raw_response=None,
+                            conn=None):
+    """`raw_response`, when given, should already be a JSON-serialized string
+    (see game_generator._redact_raw_response) — the caller strips the
+    generated game source out of it first so this audit blob stays small."""
     c = _c(conn)
     c.execute(
         """
         INSERT INTO generation_attempts
-            (job_id, attempt_number, outcome, detail, tokens_used, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+            (job_id, attempt_number, outcome, detail, tokens_used, duration_seconds,
+             raw_response, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (job_id, attempt_number, outcome, detail, tokens_used, _now()),
+        (job_id, attempt_number, outcome, detail, tokens_used, duration_seconds,
+         raw_response, _now()),
     )
     c.commit()
