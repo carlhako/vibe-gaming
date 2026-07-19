@@ -33,11 +33,17 @@
       </div>
       <nav class="cart-list" id="cart-list">
         {% for g in games %}
-        <div class="cart" style="--spine: var(--hue-{{ loop.index0 % 5 }})">
+        {% if g.family_index == 0 %}{% if not loop.first %}</div>{% endif %}<div class="cart-family">{% endif %}
+        <div class="cart {{ 'cart-sibling' if g.family_index > 0 else '' }}" style="--spine: var(--hue-{{ g.family_hue }})">
           <span class="cart-spine"></span>
-          <button class="cart-select" data-slug="{{ g.slug }}" data-title="{{ g.title }}">
+          <button class="cart-select" data-slug="{{ g.slug }}" data-title="{{ g.title }}" title="{{ g.title }}">
             <span class="cart-body">
-              <span class="cart-title">{{ g.title }}</span>
+              <span class="cart-title-row">
+                <span class="cart-title">{{ g.base_title }}</span>
+                {% if g.version_label %}
+                <span class="cart-version-badge">{{ g.version_label }}</span>
+                {% endif %}
+              </span>
               {% if g.parent_title %}
               <span class="cart-fork">&#8618; enhanced from {{ g.parent_title }}</span>
               {% endif %}
@@ -57,6 +63,7 @@
           <a class="cart-enhance" href="{{ url_for('enhance_game_form', game_id=g.game_id) }}" title="Enhance this game">&#9889;</a>
           {% endif %}
         </div>
+        {% if loop.last %}</div>{% endif %}
         {% else %}
         <p class="empty-shelf">No cartridges yet — request one on IRC with<br><code>homebot newaiwebgame &lt;description&gt;</code></p>
         {% endfor %}

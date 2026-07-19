@@ -75,8 +75,17 @@ body {
 .cart-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
   overflow-y: auto;
+}
+
+/* A family is one original plus every fork of it (shared root_game_id).
+   Tighter internal gap than .cart-list's inter-family gap keeps siblings
+   visually clustered even when a game is scattered by rating elsewhere. */
+.cart-family {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .cart {
@@ -87,6 +96,11 @@ body {
   border: 1px solid var(--line);
   border-radius: 4px;
   overflow: hidden;
+}
+
+.cart-sibling {
+  width: calc(100% - 12px);
+  margin-left: 12px;
 }
 
 .cart:hover {
@@ -176,13 +190,36 @@ body {
   background: rgba(255, 180, 0, 0.08);
 }
 
+.cart-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
 .cart-title {
   font-weight: 700;
   font-size: 13px;
   color: var(--ink);
-  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+}
+
+.cart-version-badge {
+  flex-shrink: 0;
+  background: rgba(255, 180, 0, 0.12);
+  color: var(--accent);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 6px;
+  border-radius: 10px;
+  white-space: nowrap;
 }
 
 .cart-desc {

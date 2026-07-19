@@ -89,6 +89,74 @@ def _build_manifest(games_dir: Path) -> list[dict]:
     return games
 
 
+_VERSION_SUFFIX_RE = re.compile(r"\s*\(v(\d+)\)\s*$", re.IGNORECASE)
+
+
+def _split_version_suffix(title: str) -> tuple[str, str | None]:
+    """Split a trailing '(vN)' fork marker off a title, e.g.
+    'Tower Defence (v3)' -> ('Tower Defence', 'v3'). Titles with no such
+    marker (originals, or hand-written games) return (title, None)."""
+    m = _VERSION_SUFFIX_RE.search(title)
+    if not m:
+        return title, None
+    return title[:m.start()].rstrip(), f"v{m.group(1)}"
+
+
+def _stable_hue(key: str) -> int:
+    """Deterministic 0-4 index from a string, independent of Python's
+    per-process hash randomization (so a game's spine color doesn't shift
+    on every restart) — used to color every game in a fork family the same
+    hue so siblings visually cluster on the shelf."""
+    return sum(ord(c) for c in key) % 5
+
+
+def _group_and_sort_games(games: list[dict], sort: str) -> list[dict]:
+    """Cluster games sharing a root_game_id (an original plus all its
+    forks) so they sit adjacent on the shelf instead of being scattered by
+    rating, and annotate each with the fields the sidebar needs to render
+    that grouping: base_title/version_label (the '(vN)' suffix pulled out
+    so it can't be truncated away), family_size/family_index (position
+    within its family), and family_hue (shared spine color). Works fine
+    when some family members are hidden — grouping is keyed on
+    root_game_id, not on any particular member being present."""
+    families: dict[str, list[dict]] = {}
+    for g in games:
+        base_title, version_label = _split_version_suffix(g["title"])
+        g["base_title"] = base_title
+        g["version_label"] = version_label
+        family_key = g.get("root_game_id") or g.get("game_id") or g["slug"]
+        families.setdefault(family_key, []).append((family_key, g))
+
+    ranked_families = []
+    for family_key, keyed_members in families.items():
+        members = [g for _, g in keyed_members]
+        members.sort(key=lambda m: (m.get("created_at") or "", m["title"].casefold()))
+        if len(members) > 1:
+            for m in members:
+                if m["version_label"] is None:
+                    m["version_label"] = "Original"
+        hue = _stable_hue(family_key)
+        for idx, m in enumerate(members):
+            m["family_size"] = len(members)
+            m["family_index"] = idx
+            m["family_hue"] = hue
+
+        base_for_sort = members[0]["base_title"].casefold()
+        if sort == "rating":
+            best_score = max(m["thumbs_up"] - m["thumbs_down"] for m in members)
+            best_up = max(m["thumbs_up"] for m in members)
+            rank_key = (-best_score, -best_up, base_for_sort)
+        else:
+            rank_key = (base_for_sort,)
+        ranked_families.append((rank_key, members))
+
+    ranked_families.sort(key=lambda item: item[0])
+    result = []
+    for _, members in ranked_families:
+        result.extend(members)
+    return result
+
+
 def _manifest_cache_key(games_dir: Path) -> tuple:
     """Cheap fingerprint of games_dir's contents: changes whenever a game is
     added, removed, or its meta.json is rewritten (index.html rewrites alone
@@ -180,13 +248,7 @@ def create_app(games_dir=None) -> Flask:
                 or "anonymous"
             )
 
-        if sort == "rating":
-            games.sort(key=lambda g: (
-                -(g["thumbs_up"] - g["thumbs_down"]), -g["thumbs_up"], g["title"].casefold(),
-            ))
-        else:
-            games.sort(key=lambda g: g["title"].casefold())
-        return games
+        return _group_and_sort_games(games, sort)
 
     def build_lineage(games: list[dict], game_id: str) -> dict:
         """Ancestor chain (root -> ... -> parent) plus sibling forks (other
