@@ -132,6 +132,14 @@ body {
   white-space: nowrap;
 }
 
+.cart-creator {
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cart-enhance {
   flex-shrink: 0;
   display: flex;
@@ -145,6 +153,25 @@ body {
 }
 
 .cart-enhance:hover {
+  color: var(--accent);
+  background: rgba(255, 180, 0, 0.08);
+}
+
+.cart-info {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  border-left: 1px solid var(--line);
+  background: none;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.cart-info:hover {
   color: var(--accent);
   background: rgba(255, 180, 0, 0.08);
 }
@@ -567,4 +594,184 @@ body {
   text-transform: uppercase;
   font-size: 10.5px;
   letter-spacing: 0.04em;
+}
+
+/* ---- Account / signup ---- */
+
+.account-form {
+  margin: 0;
+}
+
+.account-link {
+  display: block;
+  text-align: center;
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12px;
+  text-decoration: none;
+  padding: 7px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  width: 100%;
+}
+
+.account-link:hover {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.signin-confirm {
+  font-size: 11px;
+  color: var(--accent2);
+  text-align: center;
+}
+
+.account-games-list {
+  list-style: none;
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.account-games-list a {
+  color: var(--accent2);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.account-games-list a:hover {
+  text-decoration: underline;
+}
+
+.form-panel h2 {
+  font-size: 14px;
+  margin-top: 22px;
+  margin-bottom: 10px;
+}
+
+.form-note {
+  background: rgba(255, 180, 0, 0.06);
+  border: 1px solid var(--accent-dim);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+  padding: 10px 12px;
+  margin-bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.form-note .inline-form {
+  margin: 0;
+}
+
+.form-note button {
+  background: var(--accent);
+  color: #17130a;
+  font-weight: 700;
+  font-family: inherit;
+  font-size: 12px;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.form-note button:hover {
+  filter: brightness(1.08);
+}
+
+/* ---- Info modal ---- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 20px;
+}
+
+.modal-backdrop[hidden] {
+  display: none;
+}
+
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  max-width: 520px;
+  width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 28px 30px;
+  position: relative;
+}
+
+.modal-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.modal-close:hover {
+  color: var(--ink);
+}
+
+.modal h2 {
+  font-size: 18px;
+  margin-bottom: 8px;
+  padding-right: 24px;
+}
+
+.modal-meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 14px;
+}
+
+.modal-prompt {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.6;
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 12px;
+  margin-bottom: 16px;
+  white-space: pre-wrap;
+}
+
+.modal-lineage h3 {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 14px 0 6px;
+}
+
+.modal-lineage a {
+  color: var(--accent2);
+  font-size: 13px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.modal-lineage a:hover {
+  text-decoration: underline;
 }

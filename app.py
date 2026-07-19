@@ -79,6 +79,8 @@ def _build_manifest(games_dir: Path) -> list[dict]:
             "created_at": meta.get("created_at", ""),
             "version": meta.get("version", 1),
             "parent_game_id": meta.get("parent_game_id"),
+            "root_game_id": meta.get("root_game_id"),
+            "prompt": meta.get("prompt", ""),
         })
 
     titles_by_id = {g["game_id"]: g["title"] for g in games if g["game_id"]}
@@ -132,19 +134,44 @@ def create_app(games_dir=None) -> Flask:
             games = list(cache["games"])
 
         game_ids = [g["game_id"] for g in games if g["game_id"]]
-        ratings_by_id = {}
+        by_id = {}
+        conn = None
         if game_ids:
             conn = db.get_connection()
             placeholders = ",".join("?" * len(game_ids))
             rows = conn.execute(
-                f"SELECT game_id, thumbs_up, thumbs_down FROM web_games "
-                f"WHERE game_id IN ({placeholders})",
+                f"SELECT game_id, thumbs_up, thumbs_down, model, effort, tokens_used, "
+                f"requested_by, creator_uid FROM web_games WHERE game_id IN ({placeholders})",
                 game_ids,
             ).fetchall()
-            ratings_by_id = {r["game_id"]: (r["thumbs_up"], r["thumbs_down"]) for r in rows}
+            by_id = {r["game_id"]: dict(r) for r in rows}
 
         for g in games:
-            g["thumbs_up"], g["thumbs_down"] = ratings_by_id.get(g["game_id"], (0, 0))
+            row = by_id.get(g["game_id"], {})
+            g["thumbs_up"] = row.get("thumbs_up", 0)
+            g["thumbs_down"] = row.get("thumbs_down", 0)
+            g["model"] = row.get("model")
+            g["effort"] = row.get("effort")
+            g["tokens_used"] = row.get("tokens_used")
+            g["requested_by"] = row.get("requested_by")
+            g["creator_uid"] = row.get("creator_uid")
+
+        creator_uids = {g["creator_uid"] for g in games if g.get("creator_uid")}
+        usernames_by_uid = {}
+        if creator_uids:
+            conn = conn or db.get_connection()
+            placeholders = ",".join("?" * len(creator_uids))
+            rows = conn.execute(
+                f"SELECT uid, username FROM users WHERE uid IN ({placeholders})",
+                list(creator_uids),
+            ).fetchall()
+            usernames_by_uid = {r["uid"]: r["username"] for r in rows}
+        for g in games:
+            g["creator_name"] = (
+                usernames_by_uid.get(g.get("creator_uid"))
+                or g.get("requested_by")
+                or "anonymous"
+            )
 
         if sort == "rating":
             games.sort(key=lambda g: (
@@ -154,12 +181,46 @@ def create_app(games_dir=None) -> Flask:
             games.sort(key=lambda g: g["title"].casefold())
         return games
 
+    def build_lineage(games: list[dict], game_id: str) -> dict:
+        """Ancestor chain (root -> ... -> parent) plus sibling forks (other
+        games sharing this root_game_id), computed purely from the
+        already-loaded games list — no extra DB query."""
+        by_id = {g["game_id"]: g for g in games if g["game_id"]}
+        game = by_id.get(game_id)
+        if game is None:
+            return {"ancestors": [], "siblings": []}
+
+        ancestors = []
+        seen = {game_id}
+        cur = game
+        while cur.get("parent_game_id") and cur["parent_game_id"] not in seen:
+            parent = by_id.get(cur["parent_game_id"])
+            if parent is None:
+                break
+            ancestors.append(parent)
+            seen.add(parent["game_id"])
+            cur = parent
+        ancestors.reverse()
+
+        root_id = game.get("root_game_id") or game_id
+        siblings = [
+            g for g in games
+            if g.get("root_game_id") == root_id and g["game_id"] != game_id
+            and g["game_id"] not in seen
+        ]
+        return {"ancestors": ancestors, "siblings": siblings}
+
     @app.get("/")
     def index():
         sort = request.args.get("sort", "alpha")
         if sort not in ("alpha", "rating"):
             sort = "alpha"
-        return render_template("index.html", games=get_games(sort), sort=sort)
+        vg_uid = request.cookies.get(_VG_UID_COOKIE)
+        user = db.get_user(vg_uid) if vg_uid else None
+        return render_template(
+            "index.html", games=get_games(sort), sort=sort,
+            user=user, signed_in=request.args.get("signed_in") == "1",
+        )
 
     @app.get("/api/games")
     def api_games():
@@ -167,6 +228,35 @@ def create_app(games_dir=None) -> Flask:
         if sort not in ("alpha", "rating"):
             sort = "alpha"
         return jsonify(get_games(sort))
+
+    @app.get("/api/games/<game_id>/info")
+    def api_game_info(game_id):
+        if not _GAME_ID_RE.match(game_id):
+            abort(404)
+        games = get_games()
+        by_id = {g["game_id"]: g for g in games if g["game_id"]}
+        game = by_id.get(game_id)
+        if game is None:
+            abort(404)
+        lineage = build_lineage(games, game_id)
+        return jsonify({
+            "game_id": game_id,
+            "title": game["title"],
+            "description": game["description"],
+            "prompt": game.get("prompt", ""),
+            "model": game.get("model"),
+            "effort": game.get("effort"),
+            "tokens_used": game.get("tokens_used"),
+            "created_at": game.get("created_at"),
+            "version": game.get("version"),
+            "creator": game.get("creator_name", "anonymous"),
+            "ancestors": [
+                {"slug": g["slug"], "title": g["title"]} for g in lineage["ancestors"]
+            ],
+            "siblings": [
+                {"slug": g["slug"], "title": g["title"]} for g in lineage["siblings"]
+            ],
+        })
 
     @app.post("/api/games/<game_id>/rate")
     def rate_game(game_id):
@@ -219,7 +309,9 @@ def create_app(games_dir=None) -> Flask:
 
     @app.get("/games/new")
     def new_game_form():
-        return render_template("new_game.html")
+        vg_uid = request.cookies.get(_VG_UID_COOKIE)
+        user = db.get_user(vg_uid) if vg_uid else None
+        return render_template("new_game.html", user=user)
 
     @app.post("/games/new")
     def new_game_submit():
@@ -238,6 +330,7 @@ def create_app(games_dir=None) -> Flask:
         job_id = uuid.uuid4().hex
         db.create_generation_request(
             job_id=job_id, kind="create", prompt=prompt, requested_by=requested_by,
+            creator_uid=vg_uid,
         )
 
         resp = redirect(url_for("job_status_page", job_id=job_id))
@@ -255,7 +348,9 @@ def create_app(games_dir=None) -> Flask:
         game = db.get_web_game(game_id)
         if game is None:
             abort(404)
-        return render_template("enhance.html", game=game)
+        vg_uid = request.cookies.get(_VG_UID_COOKIE)
+        user = db.get_user(vg_uid) if vg_uid else None
+        return render_template("enhance.html", game=game, user=user)
 
     @app.post("/games/<game_id>/enhance")
     def enhance_game_submit(game_id):
@@ -281,10 +376,77 @@ def create_app(games_dir=None) -> Flask:
         job_id = uuid.uuid4().hex
         db.create_generation_request(
             job_id=job_id, kind="enhance", prompt=description, requested_by=requested_by,
-            source_game_id=game_id, new_title=new_title,
+            source_game_id=game_id, new_title=new_title, creator_uid=vg_uid,
         )
 
         resp = redirect(url_for("job_status_page", job_id=job_id))
+        if set_cookie:
+            resp.set_cookie(
+                _VG_UID_COOKIE, vg_uid, max_age=_VG_UID_MAX_AGE,
+                httponly=False, samesite="Lax",
+            )
+        return resp
+
+    @app.post("/signup")
+    def signup():
+        """No input needed — signing up just upgrades whatever vg_uid the
+        visitor already has (or mints one) into a durable users row.
+        Username is set separately via POST /account."""
+        vg_uid = request.cookies.get(_VG_UID_COOKIE)
+        set_cookie = vg_uid is None
+        if vg_uid is None:
+            vg_uid = uuid.uuid4().hex
+        db.ensure_user(vg_uid)
+        resp = redirect(url_for("account_page"))
+        if set_cookie:
+            resp.set_cookie(
+                _VG_UID_COOKIE, vg_uid, max_age=_VG_UID_MAX_AGE,
+                httponly=False, samesite="Lax",
+            )
+        return resp
+
+    @app.get("/u/<uid>")
+    def sign_in(uid):
+        if not _GAME_ID_RE.match(uid):
+            abort(404)
+        user = db.get_user(uid)
+        if user is None:
+            abort(404)
+        resp = redirect(url_for("index", signed_in="1"))
+        resp.set_cookie(
+            _VG_UID_COOKIE, uid, max_age=_VG_UID_MAX_AGE,
+            httponly=False, samesite="Lax",
+        )
+        return resp
+
+    @app.get("/account")
+    def account_page():
+        vg_uid = request.cookies.get(_VG_UID_COOKIE)
+        user = db.get_user(vg_uid) if vg_uid else None
+        my_games = [g for g in get_games() if g.get("creator_uid") == vg_uid] if vg_uid else []
+        return render_template("account.html", uid=vg_uid, user=user, my_games=my_games)
+
+    @app.post("/account")
+    def account_update():
+        vg_uid = request.cookies.get(_VG_UID_COOKIE)
+        set_cookie = vg_uid is None
+        if vg_uid is None:
+            vg_uid = uuid.uuid4().hex
+        db.ensure_user(vg_uid)
+        username = (request.form.get("username") or "").strip()[:40] or None
+        ok = db.set_username(vg_uid, username)
+        user = db.get_user(vg_uid)
+        my_games = [g for g in get_games() if g.get("creator_uid") == vg_uid]
+        if ok:
+            resp = redirect(url_for("account_page"))
+        else:
+            resp = app.make_response((
+                render_template(
+                    "account.html", uid=vg_uid, user=user, my_games=my_games,
+                    error="That username is already taken.",
+                ),
+                400,
+            ))
         if set_cookie:
             resp.set_cookie(
                 _VG_UID_COOKIE, vg_uid, max_age=_VG_UID_MAX_AGE,

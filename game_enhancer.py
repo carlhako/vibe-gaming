@@ -156,7 +156,7 @@ def format_report(result: dict) -> str:
 
 def enhance_game(source_game_id: str, description: str, requested_by: str, config: dict,
                   db_conn=None, games_dir: Path | None = None, job_id: str | None = None,
-                  new_title: str | None = None) -> dict:
+                  new_title: str | None = None, creator_uid: str | None = None) -> dict:
     """Drive the full enhance -> validate -> smoke-test retry loop and
     return a result dict (result["message"] is ready to display; DB
     registration is already performed once, on success, before returning).
@@ -217,6 +217,7 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
             effort=result["effort"], duration_seconds=duration,
             tokens_used=result["tokens_used"], error=None,
             parent_game_id=result["parent_game_id"], root_game_id=result["root_game_id"],
+            creator_uid=creator_uid,
             conn=db_conn,
         )
     else:

@@ -13,6 +13,18 @@
   <div class="shell">
     <aside class="shelf">
       <div class="wordmark"><span class="wordmark-dot"></span>HOMEBOT<br>ARCADE</div>
+      {% if not user %}
+      <form class="account-form" method="post" action="{{ url_for('signup') }}">
+        <button class="account-link" type="submit">Sign up</button>
+      </form>
+      {% elif not user.username %}
+      <a class="account-link" href="{{ url_for('account_page') }}">Set a username &rarr;</a>
+      {% else %}
+      <a class="account-link" href="{{ url_for('account_page') }}">{{ user.username }}</a>
+      {% endif %}
+      {% if signed_in %}
+      <p class="signin-confirm">Signed in.</p>
+      {% endif %}
       <a class="new-game-btn" href="{{ url_for('new_game_form') }}">+ New Game</a>
       <div class="shelf-count">{{ games|length }} cartridge{{ '' if games|length == 1 else 's' }}</div>
       <div class="sort-toggle">
@@ -30,6 +42,9 @@
               <span class="cart-fork">&#8618; enhanced from {{ g.parent_title }}</span>
               {% endif %}
               <span class="cart-desc">{{ g.description }}</span>
+              {% if g.game_id %}
+              <span class="cart-creator">by {{ g.creator_name or "anonymous" }}</span>
+              {% endif %}
             </span>
           </button>
           {% if g.game_id %}
@@ -37,6 +52,7 @@
             <button class="rate-btn rate-up" data-vote="1" title="Good game">&#128077; <span class="rate-count">{{ g.thumbs_up }}</span></button>
             <button class="rate-btn rate-down" data-vote="-1" title="Not great">&#128078; <span class="rate-count">{{ g.thumbs_down }}</span></button>
           </div>
+          <button class="cart-info" data-game-id="{{ g.game_id }}" title="Game info">&#8505;</button>
           <a class="cart-enhance" href="{{ url_for('enhance_game_form', game_id=g.game_id) }}" title="Enhance this game">&#9889;</a>
           {% endif %}
         </div>
@@ -61,6 +77,17 @@
       </div>
     </main>
   </div>
+
+  <div class="modal-backdrop" id="info-modal-backdrop" hidden>
+    <div class="modal" id="info-modal" role="dialog" aria-modal="true" aria-labelledby="info-modal-title">
+      <button class="modal-close" id="info-modal-close" aria-label="Close">&times;</button>
+      <h2 id="info-modal-title"></h2>
+      <p class="modal-meta" id="info-modal-meta"></p>
+      <p class="modal-prompt" id="info-modal-prompt"></p>
+      <div class="modal-lineage" id="info-modal-lineage"></div>
+    </div>
+  </div>
+
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

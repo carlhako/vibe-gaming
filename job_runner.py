@@ -33,12 +33,13 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
             result = game_generator.generate_game(
                 job["prompt"], job["requested_by"], config,
                 db_conn=conn, games_dir=games_dir, job_id=job_id,
+                creator_uid=job.get("creator_uid"),
             )
         elif job["kind"] == "enhance":
             result = game_enhancer.enhance_game(
                 job["source_game_id"], job["prompt"], job["requested_by"], config,
                 db_conn=conn, games_dir=games_dir, job_id=job_id,
-                new_title=job.get("new_title"),
+                new_title=job.get("new_title"), creator_uid=job.get("creator_uid"),
             )
         else:
             raise ValueError(f"unknown job kind: {job['kind']!r}")

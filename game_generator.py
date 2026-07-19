@@ -432,7 +432,8 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
 # ---------------------------------------------------------------------------
 
 def generate_game(description: str, requested_by: str, config: dict, db_conn=None,
-                   games_dir: Path | None = None, job_id: str | None = None) -> dict:
+                   games_dir: Path | None = None, job_id: str | None = None,
+                   creator_uid: str | None = None) -> dict:
     """Drive the full generate -> validate -> smoke-test retry loop and
     return a result dict (result["message"] is ready to display; DB
     registration is already performed once, on success, before returning)."""
@@ -473,6 +474,7 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
             error=None,
             parent_game_id=None,
             root_game_id=result["game_id"],
+            creator_uid=creator_uid,
             conn=db_conn,
         )
     else:

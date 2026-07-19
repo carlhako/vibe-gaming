@@ -23,7 +23,19 @@
           Describe the change or fix you want. This creates a brand-new
           entry in the arcade with your changes — the original game is
           left exactly as it is, and both will show up on the shelf.
+          Generation can take up to about 20 minutes; you'll be taken to a
+          status page you can bookmark and revisit if you close the tab.
         </p>
+        {% if not user %}
+        <div class="form-note">
+          You're not signed in — this game will be credited to
+          &ldquo;anonymous&rdquo;. Sign up first if you want it tagged as
+          yours:
+          <form class="inline-form" method="post" action="{{ url_for('signup') }}">
+            <button type="submit">Sign up</button>
+          </form>
+        </div>
+        {% endif %}
         {% if error %}
         <p class="form-error">{{ error }}</p>
         {% endif %}

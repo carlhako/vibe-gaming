@@ -63,6 +63,25 @@ aspirational:
 - **Audit trail**: every generation/enhancement attempt (not just the
   final outcome) is logged to `generation_attempts` — retries included —
   keyed on `generation_requests.job_id`.
+- **Game info modal**: every game card has an ℹ️ button opening a modal
+  with the generation prompt, model, effort, tokens used, creator, and
+  fork lineage (the ancestor chain back to the root plus a flat list of
+  sibling forks) — served by `GET /api/games/<game_id>/info` and rendered
+  client-side (`static/app.js`). The prompt is read from `meta.json`
+  (already written per-game on disk); model/effort/tokens/creator come
+  from the `web_games` row.
+- **Simple UID signup**: no passwords — `POST /signup` upgrades whatever
+  `vg_uid` cookie a visitor already has (minting one if needed) into a
+  durable `users` row. `/u/<uid>` is the resulting bookmarkable sign-in
+  link: visiting it on any browser/device sets that `vg_uid` cookie,
+  making the identity portable. `/account` lets a signed-up visitor set a
+  unique username and see the games they've created. Every game/fork
+  created through the web UI is tagged with `web_games.creator_uid`
+  (the requester's `vg_uid`), shown as a "by &lt;creator&gt;" caption on
+  every card and surfaced in the info modal. Ratings were already keyed
+  by the full `vg_uid` before this existed, so signing up doesn't change
+  vote-uniqueness — it just attaches a durable, cross-device identity to
+  a cookie value that was already the enforcement key.
 - `safety.py` — regex blocklist + CDN allowlist, scans generated HTML
   before it's ever written to disk.
 - `smoke_test.py` — headless Playwright load of generated HTML, fails the
@@ -82,10 +101,13 @@ aspirational:
   or `gunicorn -c gunicorn.conf.py app:app`; deploying it somewhere is a
   separate decision.
 - No lineage/tree grouping in the sidebar — an original and every fork of
-  it are listed as independent flat entries (a small "↳ enhanced from
-  &lt;parent&gt;" caption is the only lineage hint).
-- No auth/accounts beyond the anonymous `vg_uid` cookie and the single
-  shared `ADMIN_TOKEN` for `/admin/stats`.
+  it are listed as independent flat entries; the "↳ enhanced from
+  &lt;parent&gt;" caption plus the info modal's ancestor/sibling lists are
+  the only lineage views (no full descendant tree).
+- No passwords, email, or OAuth — accounts are just a `users` row keyed on
+  the same `vg_uid` cookie value already used for ratings, plus a single
+  shared `ADMIN_TOKEN` for `/admin/stats`. Losing the `/u/<uid>` link means
+  losing the account; there's no recovery flow.
 
 ## How the generation pipeline works
 
@@ -156,8 +178,10 @@ generation pipeline at all. Ratings, however, live in the DB keyed by
 
 ```
 app.py                 Flask site: menu, /games/new, /games/<id>/enhance,
-                        /status/<job_id>, /api/games (sort), rate endpoint,
-                        access-log middleware, /admin/stats
+                        /status/<job_id>, /api/games (sort), /api/games/<id>/info
+                        (prompt/model/tokens/lineage), rate endpoint, /signup,
+                        /u/<uid> (sign-in link), /account, access-log
+                        middleware, /admin/stats
 job_runner.py           DB-polling background worker: claims generation_requests,
                         dispatches to game_generator/game_enhancer
 game_generator.py       generate_game() + shared run_generation_attempts() retry loop
@@ -166,13 +190,14 @@ safety.py               regex blocklist + CDN allowlist for generated HTML
 smoke_test.py           headless Playwright load, fails on JS errors
 ai_client.py            DeepSeek Chat Completions client (swap point for other providers)
 db.py                   SQLite: web_games, generation_requests, generation_attempts,
-                        ratings, access_log
+                        ratings, access_log, users
 migrate_to_guid_schema.py  one-time migration from the pre-GUID schema (idempotent)
 gunicorn.conf.py        post_fork hook starts job_runner workers per worker process
 templates/index.html    menu shell: sidebar (sort toggle, rate/enhance controls) + iframe
 templates/new_game.html  "Create New Game" prompt form
 templates/enhance.html  enhancement prompt + optional new-title form
 templates/status.html   job status page (polls static/status.js)
+templates/account.html  set username, show /u/<uid> sign-in link + your games
 templates/admin_stats.html  access-log/usage dashboard, behind ADMIN_TOKEN
 static/style.css        arcade-cabinet styling
 static/app.js           play-on-click, thumbs-vote, sort toggle behavior

@@ -101,6 +101,12 @@ CREATE TABLE IF NOT EXISTS access_log (
 );
 CREATE INDEX IF NOT EXISTS idx_access_log_created ON access_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_access_log_path ON access_log(path);
+
+CREATE TABLE IF NOT EXISTS users (
+    uid        TEXT PRIMARY KEY,
+    username   TEXT UNIQUE,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -122,8 +128,8 @@ def _c(conn):
 # ALTER TABLE ADD COLUMN them in on an existing DB, since SQLite has no
 # "ADD COLUMN IF NOT EXISTS". Safe to re-run: skipped once the column exists.
 _ADDED_COLUMNS = {
-    "web_games": [("tokens_used", "INTEGER")],
-    "generation_requests": [("tokens_used", "INTEGER")],
+    "web_games": [("tokens_used", "INTEGER"), ("creator_uid", "TEXT")],
+    "generation_requests": [("tokens_used", "INTEGER"), ("creator_uid", "TEXT")],
     "generation_attempts": [("duration_seconds", "REAL"), ("raw_response", "TEXT")],
 }
 
@@ -165,13 +171,15 @@ def make_slug(title: str, game_id: str) -> str:
 def register_web_game(game_id, slug, title, description, requested_by, status, attempts,
                        version=1, model=None, effort=None, duration_seconds=None,
                        tokens_used=None, error=None, parent_game_id=None, root_game_id=None,
-                       conn=None):
+                       creator_uid=None, conn=None):
     """Insert or update the live registry row for a generated web game.
 
     One row per game_id: a re-registration (e.g. retry of the same job)
     UPSERTs in place, bumping updated_at while created_at is preserved from
     the original insert. root_game_id defaults to game_id itself (an
-    original, not a fork) when not given.
+    original, not a fork) when not given. creator_uid is the web vg_uid
+    cookie value of whoever requested this game, or None if unknown/not
+    from the web UI.
     """
     c = _c(conn)
     now = _now()
@@ -182,8 +190,8 @@ def register_web_game(game_id, slug, title, description, requested_by, status, a
         INSERT INTO web_games
             (game_id, slug, title, description, requested_by, status, attempts, version,
              model, effort, duration_seconds, tokens_used, error, parent_game_id, root_game_id,
-             created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             creator_uid, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(game_id) DO UPDATE
             SET slug=excluded.slug, title=excluded.title, description=excluded.description,
                 status=excluded.status, attempts=excluded.attempts,
@@ -191,11 +199,12 @@ def register_web_game(game_id, slug, title, description, requested_by, status, a
                 effort=excluded.effort, duration_seconds=excluded.duration_seconds,
                 tokens_used=excluded.tokens_used,
                 error=excluded.error, parent_game_id=excluded.parent_game_id,
-                root_game_id=excluded.root_game_id, updated_at=excluded.updated_at
+                root_game_id=excluded.root_game_id, creator_uid=excluded.creator_uid,
+                updated_at=excluded.updated_at
         """,
         (game_id, slug, title, description, requested_by, status, attempts, version,
          model, effort, duration_seconds, tokens_used, error, parent_game_id, root_game_id,
-         now, now),
+         creator_uid, now, now),
     )
     c.commit()
 
@@ -250,6 +259,39 @@ def count_by_root(root_game_id, conn=None) -> int:
     return row["n"]
 
 
+def get_user(uid, conn=None):
+    c = _c(conn)
+    row = c.execute("SELECT * FROM users WHERE uid=?", (uid,)).fetchone()
+    return dict(row) if row else None
+
+
+def ensure_user(uid, conn=None):
+    """Idempotent: insert a users row for uid if none exists yet (username
+    left NULL). This is what 'signing up' does — it upgrades the vg_uid
+    cookie the visitor already has into a durable row, it does not mint a
+    new identity."""
+    c = _c(conn)
+    c.execute(
+        "INSERT INTO users (uid, username, created_at) VALUES (?, NULL, ?) "
+        "ON CONFLICT(uid) DO NOTHING",
+        (uid, _now()),
+    )
+    c.commit()
+
+
+def set_username(uid, username, conn=None) -> bool:
+    """Returns False (no change made) if username is already taken by a
+    different uid — caller should show a 'username taken' form error."""
+    c = _c(conn)
+    try:
+        c.execute("UPDATE users SET username=? WHERE uid=?", (username or None, uid))
+    except sqlite3.IntegrityError:
+        c.rollback()
+        return False
+    c.commit()
+    return True
+
+
 def get_web_games(sort="alpha", conn=None):
     c = _c(conn)
     if sort == "rating":
@@ -265,7 +307,7 @@ def get_web_games(sort="alpha", conn=None):
 # ---------------------------------------------------------------------------
 
 def create_generation_request(job_id, kind, prompt, requested_by, source_game_id=None,
-                               new_title=None, conn=None):
+                               new_title=None, creator_uid=None, conn=None):
     """Insert a new queued job. kind is 'create' or 'enhance'."""
     c = _c(conn)
     now = _now()
@@ -273,10 +315,10 @@ def create_generation_request(job_id, kind, prompt, requested_by, source_game_id
         """
         INSERT INTO generation_requests
             (job_id, kind, prompt, new_title, source_game_id, result_game_id,
-             requested_by, status, attempts, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, NULL, ?, 'queued', 0, ?, ?)
+             requested_by, creator_uid, status, attempts, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 'queued', 0, ?, ?)
         """,
-        (job_id, kind, prompt, new_title, source_game_id, requested_by, now, now),
+        (job_id, kind, prompt, new_title, source_game_id, requested_by, creator_uid, now, now),
     )
     c.commit()
 

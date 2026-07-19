@@ -21,9 +21,21 @@
         <h1>Request a new game</h1>
         <p class="form-hint">
           Describe the game you want. DeepSeek will generate it in the
-          background — this can take a minute or two, and you'll be taken to
-          a status page that updates automatically.
+          background — this can take up to about 20 minutes, and you'll be
+          taken to a status page that updates automatically. That page's
+          URL is unique to this request, so you can bookmark it and check
+          back later if you close the tab.
         </p>
+        {% if not user %}
+        <div class="form-note">
+          You're not signed in — this game will be credited to
+          &ldquo;anonymous&rdquo;. Sign up first if you want it tagged as
+          yours:
+          <form class="inline-form" method="post" action="{{ url_for('signup') }}">
+            <button type="submit">Sign up</button>
+          </form>
+        </div>
+        {% endif %}
         {% if error %}
         <p class="form-error">{{ error }}</p>
         {% endif %}
