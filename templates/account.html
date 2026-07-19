@@ -25,6 +25,12 @@
           If you lose it, your user is lost:<br>
           <code>{{ url_for('sign_in', uid=uid, _external=True) }}</code>
         </p>
+        <p class="form-hint">
+          Your token is your raw account id — copy and save it somewhere safe.
+          You can paste it on the <a href="{{ url_for('sign_in_form') }}">sign-in page</a>
+          to get back in later:<br>
+          <code>{{ uid }}</code>
+        </p>
         {% if error %}
         <p class="form-error">{{ error }}</p>
         {% endif %}

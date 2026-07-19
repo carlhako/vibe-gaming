@@ -15,6 +15,7 @@ import functools
 import hmac
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -37,6 +38,7 @@ _GAME_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _BASE_DIR = Path(__file__).parent
 _VG_UID_COOKIE = "vg_uid"
 _VG_UID_MAX_AGE = 31536000  # 1 year
+_ADMIN_PAGE_SIZES = (20, 50, 100, 1000)
 
 _logger = logging.getLogger(__name__)
 
@@ -54,6 +56,22 @@ def require_admin_token(view):
             abort(403)
         return view(*args, **kwargs)
     return wrapped
+
+
+def _page_params(prefix):
+    """Read `{prefix}_page` / `{prefix}_per` pagination query params,
+    falling back to page 1 / 20-per-page on anything missing or invalid."""
+    try:
+        per = int(request.args.get(f"{prefix}_per", 20))
+    except (TypeError, ValueError):
+        per = 20
+    if per not in _ADMIN_PAGE_SIZES:
+        per = 20
+    try:
+        page = max(1, int(request.args.get(f"{prefix}_page", 1)))
+    except (TypeError, ValueError):
+        page = 1
+    return page, per
 
 
 def _build_manifest(games_dir: Path) -> list[dict]:
@@ -484,18 +502,35 @@ def create_app(games_dir=None) -> Flask:
             )
         return resp
 
-    @app.get("/u/<uid>")
-    def sign_in(uid):
-        if not _GAME_ID_RE.match(uid):
-            abort(404)
-        user = db.get_user(uid)
-        if user is None:
-            abort(404)
+    def _do_sign_in(uid):
+        """Validate uid format + existence; on success return a redirect
+        response with the vg_uid cookie set, else (None, error_message)."""
+        if not _GAME_ID_RE.match(uid) or db.get_user(uid) is None:
+            return None, "Token not recognized. Double-check what you pasted."
         resp = redirect(url_for("index", signed_in="1"))
         resp.set_cookie(
             _VG_UID_COOKIE, uid, max_age=_VG_UID_MAX_AGE,
             httponly=False, samesite="Lax",
         )
+        return resp, None
+
+    @app.get("/u/<uid>")
+    def sign_in(uid):
+        resp, _error = _do_sign_in(uid)
+        if resp is None:
+            abort(404)
+        return resp
+
+    @app.get("/signin")
+    def sign_in_form():
+        return render_template("signin.html")
+
+    @app.post("/signin")
+    def sign_in_submit():
+        token = (request.form.get("token") or "").strip()
+        resp, error = _do_sign_in(token)
+        if resp is None:
+            return render_template("signin.html", error=error, token=token), 400
         return resp
 
     @app.get("/account")
@@ -532,6 +567,16 @@ def create_app(games_dir=None) -> Flask:
                 httponly=False, samesite="Lax",
             )
         return resp
+
+    @app.get("/leaderboard")
+    def leaderboard():
+        ranking = db.get_user_leaderboard()
+        games_by_uid = {}
+        for game in get_games():  # default include_hidden=False
+            uid = game.get("creator_uid")
+            if uid:
+                games_by_uid.setdefault(uid, []).append(game)
+        return render_template("leaderboard.html", ranking=ranking, games_by_uid=games_by_uid)
 
     @app.get("/status/<job_id>")
     def job_status_page(job_id):
@@ -623,12 +668,61 @@ def create_app(games_dir=None) -> Flask:
         all_games = get_games(include_hidden=True)
         all_users = db.get_all_users(conn=conn)
 
+        admin_token = request.args.get("token")
+        history_page, history_per = _page_params("history")
+        plays_page, plays_per = _page_params("plays")
+
+        history_total = db.count_generation_requests(conn=conn)
+        history_pages = max(1, math.ceil(history_total / history_per))
+        history_page = min(history_page, history_pages)
+        history_rows = db.get_generation_history(
+            limit=history_per, offset=(history_page - 1) * history_per, conn=conn)
+
+        plays_total = db.count_plays(conn=conn)
+        plays_pages = max(1, math.ceil(plays_total / plays_per))
+        plays_page = min(plays_page, plays_pages)
+        plays_rows = db.get_play_history(
+            limit=plays_per, offset=(plays_page - 1) * plays_per, conn=conn)
+
+        def _stats_url(**overrides):
+            params = dict(token=admin_token,
+                          history_page=history_page, history_per=history_per,
+                          plays_page=plays_page, plays_per=plays_per)
+            params.update(overrides)
+            return url_for("admin_stats",
+                           **{k: v for k, v in params.items() if v is not None})
+
+        def _pager(tab, page, pages, per, total, keep):
+            return {
+                "tab": tab, "page": page, "pages": pages,
+                "per": per, "total": total,
+                "prev_url": _stats_url(**{f"{tab}_page": page - 1}) + f"#{tab}"
+                            if page > 1 else None,
+                "next_url": _stats_url(**{f"{tab}_page": page + 1}) + f"#{tab}"
+                            if page < pages else None,
+                # Params the page-size GET form must re-send as hidden inputs
+                # (a GET form replaces the whole query string): the token and
+                # the *other* tab's state. Its own page is deliberately absent
+                # so changing the page size resets to page 1.
+                "keep": {k: v for k, v in keep.items() if v is not None},
+            }
+
+        history_pager = _pager(
+            "history", history_page, history_pages, history_per, history_total,
+            keep={"token": admin_token, "plays_page": plays_page, "plays_per": plays_per})
+        plays_pager = _pager(
+            "plays", plays_page, plays_pages, plays_per, plays_total,
+            keep={"token": admin_token, "history_page": history_page, "history_per": history_per})
+
         return render_template(
             "admin_stats.html",
             total_hits=total_hits, unique_clients=unique_clients, unique_ips=unique_ips,
             daily_hits=daily_hits, top_played=top_played, top_rated=top_rated,
-            all_games=all_games, admin_token=request.args.get("token"),
+            all_games=all_games, admin_token=admin_token,
             all_users=all_users,
+            history_rows=history_rows, history_pager=history_pager,
+            plays_rows=plays_rows, plays_pager=plays_pager,
+            page_sizes=_ADMIN_PAGE_SIZES,
         )
 
     @app.post("/admin/games/<game_id>/hidden")

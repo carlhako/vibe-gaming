@@ -32,6 +32,15 @@ body {
   min-height: 100vh;
 }
 
+/* The arcade shell (index page) locks to the viewport height so the shelf
+   and the cabinet each get their own scroll region below, instead of the
+   whole page scrolling as one column. Other pages using .shell (account,
+   admin stats, etc.) keep natural document scrolling. */
+.shell-arcade {
+  height: 100vh;
+  overflow: hidden;
+}
+
 /* ---- Shelf (sidebar) ---- */
 
 .shelf {
@@ -77,6 +86,8 @@ body {
   flex-direction: column;
   gap: 14px;
   overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 /* A family is one original plus every fork of it (shared root_game_id).
@@ -361,7 +372,17 @@ body {
 
 @media (max-width: 860px) {
   .shell { flex-direction: column; }
-  .shelf { width: 100%; border-right: none; border-bottom: 1px solid var(--line); max-height: 40vh; }
+  .shelf {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+  /* On the narrow layout the shelf's header controls alone can exceed the
+     40vh cap, so the whole shelf scrolls as one unit instead of trying to
+     carve out space for just the game list. */
+  .cart-list { flex: none; overflow-y: visible; min-height: auto; }
   .cabinet { padding: 16px; }
 }
 
@@ -644,6 +665,8 @@ body {
 }
 
 .admin-tabs .admin-tab[data-hue="0"] { --tab-hue: var(--hue-0); }
+.admin-tabs .admin-tab[data-hue="1"] { --tab-hue: var(--hue-1); }
+.admin-tabs .admin-tab[data-hue="2"] { --tab-hue: var(--hue-2); }
 .admin-tabs .admin-tab[data-hue="3"] { --tab-hue: var(--hue-3); }
 .admin-tabs .admin-tab[data-hue="4"] { --tab-hue: var(--hue-4); }
 
@@ -704,6 +727,45 @@ body {
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 6px 0 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pager-size select {
+  background: var(--panel-raised);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font: inherit;
+  margin-left: 6px;
+}
+
+.pager-links {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.pager-links a {
+  color: var(--accent2);
+  text-decoration: none;
+}
+
+.pager-links a:hover {
+  text-decoration: underline;
+}
+
+.pager-off {
+  opacity: 0.4;
 }
 
 .stats-table {
@@ -873,6 +935,61 @@ body {
   font-size: 14px;
   margin-top: 22px;
   margin-bottom: 10px;
+}
+
+/* ---- Leaderboard ---- */
+
+.leaderboard-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.leaderboard-row {
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.leaderboard-row summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.leaderboard-row summary::-webkit-details-marker {
+  display: none;
+}
+
+.leaderboard-row[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.leaderboard-row .account-games-list {
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.leaderboard-rank {
+  color: var(--muted);
+  font-size: 12px;
+  width: 34px;
+}
+
+.leaderboard-name {
+  flex: 1;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.leaderboard-likes {
+  color: var(--accent2);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .form-note {

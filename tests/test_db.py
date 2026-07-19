@@ -166,3 +166,127 @@ def test_get_web_games_sort_rating(isolated_db):
     ordered = db.get_web_games(sort="rating")
     ids_in_order = [g["game_id"] for g in ordered]
     assert ids_in_order.index(high) < ids_in_order.index(low)
+
+
+def test_generation_history_pagination_and_join(isolated_db):
+    db.create_generation_request(
+        job_id="job-1", kind="create", prompt="a snake game", requested_by="web:aaa",
+        creator_uid="uid-signed-up",
+    )
+    db.create_generation_request(
+        job_id="job-2", kind="enhance", prompt="make it faster", requested_by="web:bbb",
+        new_title="Snake II",
+    )
+    db.create_generation_request(
+        job_id="job-3", kind="create", prompt="a pong game", requested_by="web:ccc",
+    )
+
+    game_id = db.mint_game_id()
+    db.register_web_game(
+        game_id=game_id, slug=f"snake-ii-{game_id[:8]}", title="Snake II",
+        description="d", requested_by="web:bbb", status="success", attempts=1,
+    )
+    db.update_generation_request("job-2", status="success", result_game_id=game_id)
+    db.update_generation_request("job-3", status="failed", error="boom")
+
+    db.ensure_user("uid-signed-up")
+    db.set_username("uid-signed-up", "carl")
+
+    assert db.count_generation_requests() == 3
+
+    rows = db.get_generation_history()
+    assert [r["job_id"] for r in rows] == ["job-3", "job-2", "job-1"], "newest first"
+
+    failed, success, first = rows
+    assert failed["status"] == "failed"
+    assert failed["result_title"] is None
+    assert failed["result_slug"] is None
+    assert success["kind"] == "enhance"
+    assert success["result_title"] == "Snake II"
+    assert success["result_slug"] == f"snake-ii-{game_id[:8]}"
+    assert first["creator_username"] == "carl"
+
+    page = db.get_generation_history(limit=2, offset=2)
+    assert [r["job_id"] for r in page] == ["job-1"]
+
+
+def test_play_history_joins_and_paginates(isolated_db):
+    game_id = _make_game()
+    db.ensure_user("player-uid")
+    db.set_username("player-uid", "alice")
+
+    db.record_play(game_id, client_uid="player-uid", ip_address="1.1.1.1")
+    db.record_play(game_id, client_uid=None, ip_address="2.2.2.2")
+    db.record_play("no-such-game", client_uid="anon-uid", ip_address="3.3.3.3")
+
+    assert db.count_plays() == 3
+
+    rows = db.get_play_history()
+    assert [r["ip_address"] for r in rows] == ["3.3.3.3", "2.2.2.2", "1.1.1.1"], "newest first"
+
+    orphan, anon, named = rows
+    assert orphan["game_title"] is None, "play of an unregistered game_id joins to NULL"
+    assert orphan["username"] is None
+    assert anon["client_uid"] is None
+    assert named["username"] == "alice"
+    assert named["game_title"] is not None
+    assert named["game_slug"] is not None
+
+    page = db.get_play_history(limit=2, offset=2)
+    assert [r["ip_address"] for r in page] == ["1.1.1.1"]
+
+
+def test_get_user_leaderboard_sums_and_ranks(isolated_db):
+    uid_high = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    uid_low = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    db.ensure_user(uid_high)
+    db.ensure_user(uid_low)
+
+    g1 = db.mint_game_id()
+    db.register_web_game(
+        game_id=g1, slug=f"g1-{g1[:8]}", title="G1", description="d",
+        requested_by="web:x", status="success", attempts=1, creator_uid=uid_high,
+    )
+    g2 = db.mint_game_id()
+    db.register_web_game(
+        game_id=g2, slug=f"g2-{g2[:8]}", title="G2", description="d",
+        requested_by="web:x", status="success", attempts=1, creator_uid=uid_high,
+    )
+    g3 = db.mint_game_id()
+    db.register_web_game(
+        game_id=g3, slug=f"g3-{g3[:8]}", title="G3", description="d",
+        requested_by="web:x", status="success", attempts=1, creator_uid=uid_low,
+    )
+    db.record_rating(g1, 1, client_uid="c1", ip_address="1.1.1.1")
+    db.record_rating(g2, 1, client_uid="c2", ip_address="2.2.2.2")
+    db.record_rating(g3, 1, client_uid="c3", ip_address="3.3.3.3")
+
+    board = db.get_user_leaderboard()
+    by_uid = {r["uid"]: r for r in board}
+    assert by_uid[uid_high]["total_likes"] == 2
+    assert by_uid[uid_low]["total_likes"] == 1
+    assert board[0]["uid"] == uid_high, "higher-liked user ranks first"
+
+
+def test_get_user_leaderboard_includes_hidden_games_in_total(isolated_db):
+    uid = "cccccccccccccccccccccccccccccccc"[:32]
+    db.ensure_user(uid)
+    game_id = db.mint_game_id()
+    db.register_web_game(
+        game_id=game_id, slug=f"hidden-{game_id[:8]}", title="Hidden", description="d",
+        requested_by="web:x", status="success", attempts=1, creator_uid=uid,
+    )
+    db.record_rating(game_id, 1, client_uid="c1", ip_address="1.1.1.1")
+    db.set_game_hidden(game_id, True)
+
+    row = next(r for r in db.get_user_leaderboard() if r["uid"] == uid)
+    assert row["total_likes"] == 1, "a hidden game's likes still count toward the total"
+
+
+def test_get_user_leaderboard_includes_zero_game_users(isolated_db):
+    uid = "dddddddddddddddddddddddddddddddd"[:32]
+    db.ensure_user(uid)
+    board = db.get_user_leaderboard()
+    row = next(r for r in board if r["uid"] == uid)
+    assert row["total_likes"] == 0
+    assert row["game_count"] == 0

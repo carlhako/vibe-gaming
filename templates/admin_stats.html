@@ -21,7 +21,29 @@
           <button type="button" class="admin-tab" data-tab="traffic" data-hue="3" role="tab">Traffic</button>
           <button type="button" class="admin-tab" data-tab="games" data-hue="0" role="tab">Games</button>
           <button type="button" class="admin-tab" data-tab="users" data-hue="4" role="tab">Users</button>
+          <button type="button" class="admin-tab" data-tab="history" data-hue="1" role="tab">History</button>
+          <button type="button" class="admin-tab" data-tab="plays" data-hue="2" role="tab">Play history</button>
         </div>
+
+        {% macro pager(pg) %}
+        <div class="pager">
+          <form method="get" action="{{ url_for('admin_stats') }}#{{ pg.tab }}" class="pager-size">
+            {% for k, v in pg.keep.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+            <label>Rows
+              <select name="{{ pg.tab }}_per" onchange="this.form.submit()">
+                {% for n in page_sizes %}<option value="{{ n }}" {{ 'selected' if pg.per == n }}>{{ n }}</option>{% endfor %}
+              </select>
+            </label>
+          </form>
+          {% if pg.total > pg.per %}
+          <nav class="pager-links">
+            {% if pg.prev_url %}<a href="{{ pg.prev_url }}">&larr; prev</a>{% else %}<span class="pager-off">&larr; prev</span>{% endif %}
+            <span>page {{ pg.page }} of {{ pg.pages }}</span>
+            {% if pg.next_url %}<a href="{{ pg.next_url }}">next &rarr;</a>{% else %}<span class="pager-off">next &rarr;</span>{% endif %}
+          </nav>
+          {% endif %}
+        </div>
+        {% endmacro %}
 
         <div class="admin-panel" id="tab-traffic" role="tabpanel">
           <div class="stats-grid">
@@ -147,6 +169,52 @@
           </table>
           {% else %}
           <p class="form-hint">No signed-up users yet.</p>
+          {% endif %}
+        </div>
+
+        <div class="admin-panel" id="tab-history" role="tabpanel">
+          <h2>Generation history</h2>
+          {{ pager(history_pager) }}
+          {% if history_rows %}
+          <table class="stats-table">
+            <thead><tr><th>When</th><th>Kind</th><th>Title</th><th>Requested by</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              {% for r in history_rows %}
+              <tr class="{{ 'is-hidden-row' if r.status == 'failed' }}">
+                <td>{{ r.created_at[:19].replace('T', ' ') }}</td>
+                <td>{{ 'new' if r.kind == 'create' else r.kind }}</td>
+                <td>{{ r.result_title or r.new_title or (r.prompt[:60] ~ ('…' if r.prompt|length > 60 else '')) }}</td>
+                <td>{{ r.creator_username or (r.creator_uid[:8] ~ '…' if r.creator_uid else r.requested_by) }}</td>
+                <td>{{ r.status }}</td>
+                <td>{% if r.result_slug %}<a class="game-row-play-link" href="{{ url_for('play', slug=r.result_slug) }}" target="_blank" rel="noopener">Play &#8599;</a>{% endif %}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <p class="form-hint">No generation jobs yet.</p>
+          {% endif %}
+        </div>
+
+        <div class="admin-panel" id="tab-plays" role="tabpanel">
+          <h2>Recent plays</h2>
+          {{ pager(plays_pager) }}
+          {% if plays_rows %}
+          <table class="stats-table">
+            <thead><tr><th>When</th><th>Game</th><th>User</th><th>IP</th></tr></thead>
+            <tbody>
+              {% for p in plays_rows %}
+              <tr>
+                <td>{{ p.played_at[:19].replace('T', ' ') }}</td>
+                <td>{% if p.game_slug %}<a href="{{ url_for('play', slug=p.game_slug) }}" target="_blank" rel="noopener">{{ p.game_title }}</a>{% else %}{{ p.game_title or '—' }}{% endif %}</td>
+                <td>{{ p.username or (p.client_uid[:8] ~ '…' if p.client_uid else '—') }}</td>
+                <td>{{ p.ip_address or '—' }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <p class="form-hint">No plays recorded yet.</p>
           {% endif %}
         </div>
       </div>

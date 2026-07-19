@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Leaderboard — The Vibe Arcade</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="shell">
+    <main class="cabinet form-page">
+      <div class="cabinet-plate">
+        <span class="power-light on"></span>
+        <span class="now-playing">LEADERBOARD</span>
+      </div>
+      <div class="form-panel">
+        <a class="back-link" href="{{ url_for('index') }}">&larr; back to the shelf</a>
+        <h1>Leaderboard</h1>
+        {% if not ranking %}
+        <p class="form-hint">No users yet.</p>
+        {% else %}
+        <ol class="leaderboard-list">
+          {% for row in ranking %}
+          <li class="leaderboard-row">
+            <details>
+              <summary>
+                <span class="leaderboard-rank">#{{ loop.index }}</span>
+                <span class="leaderboard-name">{{ row.username or "anonymous-" + row.uid[:8] }}</span>
+                <span class="leaderboard-likes">&#128077; {{ row.total_likes }}</span>
+              </summary>
+              {% set games = games_by_uid.get(row.uid, []) %}
+              {% if games %}
+              <ul class="account-games-list">
+                {% for g in games %}
+                <li>{{ g.title }} — <a class="game-row-play-link" href="{{ url_for('play', slug=g.slug) }}" target="_blank" rel="noopener">Play &#8599;</a></li>
+                {% endfor %}
+              </ul>
+              {% else %}
+              <p class="form-hint">No visible games.</p>
+              {% endif %}
+            </details>
+          </li>
+          {% endfor %}
+        </ol>
+        {% endif %}
+      </div>
+    </main>
+  </div>
+</body>
+</html>

@@ -36,13 +36,14 @@
       document.getElementById("intro-splash").hidden = true;
     }
   </script>
-  <div class="shell">
+  <div class="shell shell-arcade">
     <aside class="shelf">
       <div class="wordmark"><span class="wordmark-dot"></span>THE VIBE<br>ARCADE</div>
       {% if not user %}
       <form class="account-form" method="post" action="{{ url_for('signup') }}">
         <button class="account-link" type="submit">Create User</button>
       </form>
+      <a class="account-link" href="{{ url_for('sign_in_form') }}">Sign in</a>
       {% elif not user.username %}
       <a class="account-link" href="{{ url_for('account_page') }}">Set a username &rarr;</a>
       {% else %}
@@ -51,6 +52,7 @@
       {% if signed_in %}
       <p class="signin-confirm">Signed in.</p>
       {% endif %}
+      <a class="account-link" href="{{ url_for('leaderboard') }}">&#127942; Leaderboard</a>
       <a class="new-game-btn" href="{{ url_for('new_game_form') }}">+ New Game</a>
       <div class="shelf-count">{{ games|length }} cartridge{{ '' if games|length == 1 else 's' }}</div>
       <div class="sort-toggle">

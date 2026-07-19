@@ -304,6 +304,62 @@ def get_recent_plays(game_id, limit=20, conn=None):
     return [r["played_at"] for r in rows]
 
 
+def count_generation_requests(conn=None) -> int:
+    c = _c(conn)
+    row = c.execute("SELECT COUNT(*) AS n FROM generation_requests").fetchone()
+    return row["n"]
+
+
+def get_generation_history(limit=20, offset=0, conn=None):
+    """One page of generation/enhancement jobs, newest first — every run,
+    failures included. Joins in the resulting game's title/slug (NULL for
+    failed or still-running jobs) and the requester's username if their
+    vg_uid has a users row."""
+    c = _c(conn)
+    rows = c.execute(
+        """
+        SELECT gr.job_id, gr.kind, gr.prompt, gr.new_title, gr.status,
+               gr.requested_by, gr.creator_uid, gr.created_at,
+               wg.title AS result_title, wg.slug AS result_slug,
+               u.username AS creator_username
+        FROM generation_requests gr
+        LEFT JOIN web_games wg ON wg.game_id = gr.result_game_id
+        LEFT JOIN users u ON u.uid = gr.creator_uid
+        ORDER BY gr.created_at DESC, gr.job_id
+        LIMIT ? OFFSET ?
+        """,
+        (limit, offset),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_plays(conn=None) -> int:
+    c = _c(conn)
+    row = c.execute("SELECT COUNT(*) AS n FROM plays").fetchone()
+    return row["n"]
+
+
+def get_play_history(limit=20, offset=0, conn=None):
+    """One page of plays across all games, newest first (by autoincrement
+    id, which is insertion order). Joins in the game's title/slug and the
+    player's username if their vg_uid has a users row."""
+    c = _c(conn)
+    rows = c.execute(
+        """
+        SELECT p.played_at, p.client_uid, p.ip_address,
+               wg.title AS game_title, wg.slug AS game_slug,
+               u.username
+        FROM plays p
+        LEFT JOIN web_games wg ON wg.game_id = p.game_id
+        LEFT JOIN users u ON u.uid = p.client_uid
+        ORDER BY p.id DESC
+        LIMIT ? OFFSET ?
+        """,
+        (limit, offset),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def rename_game(game_id, title, conn=None) -> bool:
     """Returns False if game_id has no web_games row (nothing to update)."""
     c = _c(conn)
@@ -347,6 +403,26 @@ def get_user(uid, conn=None):
 def get_all_users(conn=None):
     c = _c(conn)
     rows = c.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_user_leaderboard(conn=None):
+    """Every user, ranked by total thumbs_up across ALL their games —
+    hidden games' likes still count toward the total; it's up to the
+    caller to filter hidden games out of any *displayed* per-user game
+    list. Users with zero games/likes are included, sorted last."""
+    c = _c(conn)
+    rows = c.execute(
+        """
+        SELECT u.uid, u.username,
+               COALESCE(SUM(wg.thumbs_up), 0) AS total_likes,
+               COUNT(wg.game_id) AS game_count
+        FROM users u
+        LEFT JOIN web_games wg ON wg.creator_uid = u.uid
+        GROUP BY u.uid
+        ORDER BY total_likes DESC, u.created_at
+        """
+    ).fetchall()
     return [dict(r) for r in rows]
 
 
