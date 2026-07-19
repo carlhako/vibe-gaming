@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Homebot Arcade</title>
+<title>The Vibe Arcade</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -12,7 +12,7 @@
 <body>
   <div class="shell">
     <aside class="shelf">
-      <div class="wordmark"><span class="wordmark-dot"></span>HOMEBOT<br>ARCADE</div>
+      <div class="wordmark"><span class="wordmark-dot"></span>THE VIBE<br>ARCADE</div>
       {% if not user %}
       <form class="account-form" method="post" action="{{ url_for('signup') }}">
         <button class="account-link" type="submit">Sign up</button>
@@ -85,6 +85,10 @@
       <p class="modal-meta" id="info-modal-meta"></p>
       <p class="modal-prompt" id="info-modal-prompt"></p>
       <div class="modal-lineage" id="info-modal-lineage"></div>
+      <div class="modal-plays">
+        <h3 id="info-modal-play-count"></h3>
+        <ul class="modal-plays-list" id="info-modal-plays-list"></ul>
+      </div>
     </div>
   </div>
 

@@ -88,6 +88,16 @@ CREATE TABLE IF NOT EXISTS ratings (
 );
 CREATE INDEX IF NOT EXISTS idx_ratings_game ON ratings(game_id);
 
+CREATE TABLE IF NOT EXISTS plays (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id    TEXT NOT NULL REFERENCES web_games(game_id),
+    client_uid TEXT,
+    ip_address TEXT,
+    played_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_plays_game ON plays(game_id);
+CREATE INDEX IF NOT EXISTS idx_plays_game_played_at ON plays(game_id, played_at DESC);
+
 CREATE TABLE IF NOT EXISTS access_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     method      TEXT NOT NULL,
@@ -246,6 +256,32 @@ def record_rating(game_id, vote, client_uid, ip_address, conn=None) -> bool:
         return False
     c.commit()
     return True
+
+
+def record_play(game_id, client_uid=None, ip_address=None, conn=None):
+    """Log one play of game_id — called every time /play/<slug> is served."""
+    c = _c(conn)
+    c.execute(
+        "INSERT INTO plays (game_id, client_uid, ip_address, played_at) VALUES (?, ?, ?, ?)",
+        (game_id, client_uid, ip_address, _now()),
+    )
+    c.commit()
+
+
+def get_play_count(game_id, conn=None) -> int:
+    c = _c(conn)
+    row = c.execute("SELECT COUNT(*) AS n FROM plays WHERE game_id=?", (game_id,)).fetchone()
+    return row["n"]
+
+
+def get_recent_plays(game_id, limit=20, conn=None):
+    """Most recent play timestamps for game_id, newest first."""
+    c = _c(conn)
+    rows = c.execute(
+        "SELECT played_at FROM plays WHERE game_id=? ORDER BY played_at DESC LIMIT ?",
+        (game_id, limit),
+    ).fetchall()
+    return [r["played_at"] for r in rows]
 
 
 def count_by_root(root_game_id, conn=None) -> int:

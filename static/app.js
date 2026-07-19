@@ -127,6 +127,22 @@ async function openInfoModal(gameId) {
       });
     }
 
+    const count = data.play_count || 0;
+    document.getElementById("info-modal-play-count").textContent =
+      `Play history — ${count} play${count === 1 ? "" : "s"}`;
+    const playsList = document.getElementById("info-modal-plays-list");
+    playsList.innerHTML = "";
+    (data.recent_plays || []).forEach((ts) => {
+      const li = document.createElement("li");
+      li.textContent = new Date(ts).toLocaleString();
+      playsList.appendChild(li);
+    });
+    if (!data.recent_plays || data.recent_plays.length === 0) {
+      const li = document.createElement("li");
+      li.textContent = "No plays yet.";
+      playsList.appendChild(li);
+    }
+
     infoBackdrop.hidden = false;
     document.getElementById("info-modal-close").focus();
   } catch (err) {

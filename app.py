@@ -250,6 +250,8 @@ def create_app(games_dir=None) -> Flask:
             "created_at": game.get("created_at"),
             "version": game.get("version"),
             "creator": game.get("creator_name", "anonymous"),
+            "play_count": db.get_play_count(game_id),
+            "recent_plays": db.get_recent_plays(game_id, limit=20),
             "ancestors": [
                 {"slug": g["slug"], "title": g["title"]} for g in lineage["ancestors"]
             ],
@@ -305,6 +307,13 @@ def create_app(games_dir=None) -> Flask:
         game_dir = games_dir / slug
         if not (game_dir / "index.html").exists():
             abort(404)
+        game = db.get_web_game_by_slug(slug)
+        if game is not None:
+            db.record_play(
+                game["game_id"],
+                client_uid=request.cookies.get(_VG_UID_COOKIE),
+                ip_address=request.remote_addr or "unknown",
+            )
         return send_from_directory(game_dir, "index.html")
 
     @app.get("/games/new")

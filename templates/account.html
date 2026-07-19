@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Account — Homebot Arcade</title>
+<title>Account — The Vibe Arcade</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -20,8 +20,9 @@
         <a class="back-link" href="{{ url_for('index') }}">&larr; back to the shelf</a>
         <h1>Your account</h1>
         {% if uid %}
-        <p class="form-hint">
-          Bookmark this link to sign back in as you from any browser or device:<br>
+        <p class="form-hint form-warning">
+          Save or bookmark this link — it's the URL you use to sign in.
+          If you lose it, your user is lost:<br>
           <code>{{ url_for('sign_in', uid=uid, _external=True) }}</code>
         </p>
         {% if error %}
