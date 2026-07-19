@@ -278,6 +278,22 @@ def get_play_count(game_id, conn=None) -> int:
     return row["n"]
 
 
+def get_play_counts(game_ids, conn=None) -> dict:
+    """Play counts for many games at once, keyed by game_id. Games with no
+    plays are simply absent from the returned dict (caller should default
+    to 0)."""
+    if not game_ids:
+        return {}
+    c = _c(conn)
+    placeholders = ",".join("?" * len(game_ids))
+    rows = c.execute(
+        f"SELECT game_id, COUNT(*) AS n FROM plays WHERE game_id IN ({placeholders}) "
+        f"GROUP BY game_id",
+        list(game_ids),
+    ).fetchall()
+    return {r["game_id"]: r["n"] for r in rows}
+
+
 def get_recent_plays(game_id, limit=20, conn=None):
     """Most recent play timestamps for game_id, newest first."""
     c = _c(conn)
@@ -286,6 +302,17 @@ def get_recent_plays(game_id, limit=20, conn=None):
         (game_id, limit),
     ).fetchall()
     return [r["played_at"] for r in rows]
+
+
+def rename_game(game_id, title, conn=None) -> bool:
+    """Returns False if game_id has no web_games row (nothing to update)."""
+    c = _c(conn)
+    cur = c.execute(
+        "UPDATE web_games SET title=?, updated_at=? WHERE game_id=?",
+        (title, _now(), game_id),
+    )
+    c.commit()
+    return cur.rowcount > 0
 
 
 def set_game_hidden(game_id, hidden: bool, conn=None) -> bool:

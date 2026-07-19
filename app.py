@@ -135,6 +135,7 @@ def create_app(games_dir=None) -> Flask:
 
         game_ids = [g["game_id"] for g in games if g["game_id"]]
         by_id = {}
+        play_counts = {}
         conn = None
         if game_ids:
             conn = db.get_connection()
@@ -145,6 +146,7 @@ def create_app(games_dir=None) -> Flask:
                 game_ids,
             ).fetchall()
             by_id = {r["game_id"]: dict(r) for r in rows}
+            play_counts = db.get_play_counts(game_ids, conn=conn)
 
         for g in games:
             row = by_id.get(g["game_id"], {})
@@ -156,6 +158,7 @@ def create_app(games_dir=None) -> Flask:
             g["requested_by"] = row.get("requested_by")
             g["creator_uid"] = row.get("creator_uid")
             g["hidden"] = bool(row.get("hidden", 0))
+            g["play_count"] = play_counts.get(g["game_id"], 0)
 
         if not include_hidden:
             games = [g for g in games if not g["hidden"]]
@@ -216,9 +219,9 @@ def create_app(games_dir=None) -> Flask:
 
     @app.get("/")
     def index():
-        sort = request.args.get("sort", "alpha")
+        sort = request.args.get("sort", "rating")
         if sort not in ("alpha", "rating"):
-            sort = "alpha"
+            sort = "rating"
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
         user = db.get_user(vg_uid) if vg_uid else None
         return render_template(
@@ -228,9 +231,9 @@ def create_app(games_dir=None) -> Flask:
 
     @app.get("/api/games")
     def api_games():
-        sort = request.args.get("sort", "alpha")
+        sort = request.args.get("sort", "rating")
         if sort not in ("alpha", "rating"):
-            sort = "alpha"
+            sort = "rating"
         return jsonify(get_games(sort))
 
     @app.get("/api/games/<game_id>/info")
@@ -573,6 +576,31 @@ def create_app(games_dir=None) -> Flask:
         hidden = request.form.get("hidden") == "1"
         if not db.set_game_hidden(game_id, hidden):
             abort(404)
+        return redirect(url_for("admin_stats", token=request.args.get("token")))
+
+    @app.post("/admin/games/<game_id>/rename")
+    @require_admin_token
+    def admin_rename_game(game_id):
+        if not _GAME_ID_RE.match(game_id):
+            abort(404)
+        new_title = (request.form.get("title") or "").strip()[:120]
+        if not new_title:
+            abort(400)
+        game = db.get_web_game(game_id)
+        if game is None:
+            abort(404)
+        db.rename_game(game_id, new_title)
+
+        meta_path = games_dir / game["slug"] / "meta.json"
+        meta = {}
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                meta = {}
+        meta["title"] = new_title
+        meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
         return redirect(url_for("admin_stats", token=request.args.get("token")))
 
     return app

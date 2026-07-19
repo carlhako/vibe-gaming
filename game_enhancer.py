@@ -20,9 +20,11 @@ retries are made, each one feeding the previous concrete failure back to
 the model.
 
 Title: an explicit new_title is used verbatim if given; otherwise the fork
-is auto-labeled "<source title> (v{n})", where n = count of existing
+is auto-labeled "<base title> (v{n})", where n = count of existing
 web_games rows sharing the source's root_game_id, plus 1 (so the first
-fork of an original is "(v2)").
+fork of an original is "(v2)"). <base title> strips any trailing "(vN)"
+the source title already carries, so enhancing a fork produces
+"Tower Defence (v3)" rather than "Tower Defence (v2) (v3)".
 
 # Exports:
 #   class GameEnhancementError(Exception)
@@ -34,6 +36,7 @@ fork of an original is "(v2)").
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
@@ -187,7 +190,8 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
     title_override = (new_title or "").strip() or None
     if title_override is None:
         n = db.count_by_root(source_row["root_game_id"], conn=db_conn) + 1
-        title_override = f"{source_row['title']} (v{n})"
+        base_title = re.sub(r"\s*\(v\d+\)$", "", source_row["title"]).strip()
+        title_override = f"{base_title} (v{n})"
 
     system_prompt = _build_system_prompt(source_row["title"], existing_game_html)
 

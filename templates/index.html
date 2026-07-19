@@ -50,6 +50,7 @@
           {% if g.game_id %}
           <div class="cart-rate" data-game-id="{{ g.game_id }}">
             <button class="rate-btn rate-up" data-vote="1" title="Good game">&#128077; <span class="rate-count">{{ g.thumbs_up }}</span></button>
+            <span class="cart-play-count" title="Times played">({{ g.play_count }})</span>
             <button class="rate-btn rate-down" data-vote="-1" title="Not great">&#128078; <span class="rate-count">{{ g.thumbs_down }}</span></button>
           </div>
           <button class="cart-info" data-game-id="{{ g.game_id }}" title="Game info">&#8505;</button>

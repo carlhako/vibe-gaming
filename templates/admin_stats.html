@@ -81,7 +81,7 @@
           playable at their direct link.
         </p>
         <table class="stats-table">
-          <thead><tr><th>Game</th><th>Visibility</th></tr></thead>
+          <thead><tr><th>Game</th><th>Visibility</th><th></th></tr></thead>
           <tbody>
             {% for g in all_games %}
             <tr>
@@ -103,6 +103,12 @@
                 </form>
                 {% else %}
                 <span class="form-hint">no game_id — can't be hidden</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if g.game_id %}
+                <button type="button" class="rename-btn"
+                        data-game-id="{{ g.game_id }}" data-title="{{ g.title }}">Rename</button>
                 {% endif %}
               </td>
             </tr>
@@ -133,5 +139,34 @@
       </div>
     </main>
   </div>
+
+  <dialog id="rename-dialog" class="rename-dialog">
+    <form method="post" id="rename-form">
+      <label class="field-label" for="rename-input">New name</label>
+      <input type="text" id="rename-input" name="title" maxlength="120" required>
+      <div class="dialog-actions">
+        <button type="button" id="rename-cancel">Cancel</button>
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script>
+    const ADMIN_TOKEN = {{ admin_token | tojson }};
+    const renameDialog = document.getElementById("rename-dialog");
+    const renameForm = document.getElementById("rename-form");
+    const renameInput = document.getElementById("rename-input");
+
+    document.querySelectorAll(".rename-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        renameInput.value = btn.dataset.title;
+        renameForm.action = `/admin/games/${encodeURIComponent(btn.dataset.gameId)}/rename?token=${encodeURIComponent(ADMIN_TOKEN)}`;
+        renameDialog.showModal();
+        renameInput.focus();
+      });
+    });
+
+    document.getElementById("rename-cancel").addEventListener("click", () => renameDialog.close());
+  </script>
 </body>
 </html>
