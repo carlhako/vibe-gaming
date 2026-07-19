@@ -17,125 +17,138 @@
         <a class="back-link" href="{{ url_for('index') }}">&larr; back to the shelf</a>
         <h1>Access stats</h1>
 
-        <div class="stats-grid">
-          <div class="stat-box">
-            <span class="stat-value">{{ total_hits }}</span>
-            <span class="stat-label">total hits</span>
-          </div>
-          <div class="stat-box">
-            <span class="stat-value">{{ unique_clients }}</span>
-            <span class="stat-label">unique visitors (cookie)</span>
-          </div>
-          <div class="stat-box">
-            <span class="stat-value">{{ unique_ips }}</span>
-            <span class="stat-label">unique IPs</span>
-          </div>
+        <div class="admin-tabs" role="tablist">
+          <button type="button" class="admin-tab" data-tab="traffic" data-hue="3" role="tab">Traffic</button>
+          <button type="button" class="admin-tab" data-tab="games" data-hue="0" role="tab">Games</button>
+          <button type="button" class="admin-tab" data-tab="users" data-hue="4" role="tab">Users</button>
         </div>
 
-        <h2>Hits per day (last 30 days)</h2>
-        {% if daily_hits %}
-        <table class="stats-table">
-          <thead><tr><th>Day</th><th>Hits</th></tr></thead>
-          <tbody>
-            {% for row in daily_hits %}
-            <tr><td>{{ row.day }}</td><td>{{ row.n }}</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-        <p class="form-hint">No traffic recorded yet.</p>
-        {% endif %}
+        <div class="admin-panel" id="tab-traffic" role="tabpanel">
+          <div class="stats-grid">
+            <div class="stat-box">
+              <span class="stat-value">{{ total_hits }}</span>
+              <span class="stat-label">total hits</span>
+            </div>
+            <div class="stat-box">
+              <span class="stat-value">{{ unique_clients }}</span>
+              <span class="stat-label">unique visitors (cookie)</span>
+            </div>
+            <div class="stat-box">
+              <span class="stat-value">{{ unique_ips }}</span>
+              <span class="stat-label">unique IPs</span>
+            </div>
+          </div>
 
-        <h2>Top 10 games by plays</h2>
-        {% if top_played %}
-        <table class="stats-table">
-          <thead><tr><th>Game</th><th>Plays</th></tr></thead>
-          <tbody>
-            {% for g in top_played %}
-            <tr><td>{{ g.title }}</td><td>{{ g.hits }}</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-        <p class="form-hint">No plays recorded yet.</p>
-        {% endif %}
+          <h2>Hits per day (last 30 days)</h2>
+          {% if daily_hits %}
+          <table class="stats-table">
+            <thead><tr><th>Day</th><th>Hits</th></tr></thead>
+            <tbody>
+              {% for row in daily_hits %}
+              <tr><td>{{ row.day }}</td><td>{{ row.n }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <p class="form-hint">No traffic recorded yet.</p>
+          {% endif %}
+        </div>
 
-        <h2>Top 10 games by rating</h2>
-        {% if top_rated %}
-        <table class="stats-table">
-          <thead><tr><th>Game</th><th>&#128077;</th><th>&#128078;</th></tr></thead>
-          <tbody>
-            {% for g in top_rated %}
-            <tr><td>{{ g.title }}</td><td>{{ g.thumbs_up }}</td><td>{{ g.thumbs_down }}</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-        <p class="form-hint">No votes recorded yet.</p>
-        {% endif %}
+        <div class="admin-panel" id="tab-games" role="tabpanel">
+          <h2>Top 10 games by plays</h2>
+          {% if top_played %}
+          <table class="stats-table">
+            <thead><tr><th>Game</th><th>Plays</th></tr></thead>
+            <tbody>
+              {% for g in top_played %}
+              <tr><td>{{ g.title }}</td><td>{{ g.hits }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <p class="form-hint">No plays recorded yet.</p>
+          {% endif %}
 
-        <h2>All games</h2>
-        {% if all_games %}
-        <p class="form-hint">
-          Hidden games are dropped from the shelf on the main page but stay
-          playable at their direct link.
-        </p>
-        <table class="stats-table">
-          <thead><tr><th>Game</th><th>Visibility</th><th></th></tr></thead>
-          <tbody>
-            {% for g in all_games %}
-            <tr>
-              <td>{{ g.title }}</td>
-              <td>
-                {% if g.game_id %}
-                <form class="visibility-form" method="post"
-                      action="{{ url_for('admin_set_game_hidden', game_id=g.game_id, token=admin_token) }}">
-                  <label>
-                    <input type="radio" name="hidden" value="0" {{ 'checked' if not g.hidden }}
-                           onchange="this.form.submit()">
-                    Show
-                  </label>
-                  <label>
-                    <input type="radio" name="hidden" value="1" {{ 'checked' if g.hidden }}
-                           onchange="this.form.submit()">
-                    Hide
-                  </label>
-                </form>
-                {% else %}
-                <span class="form-hint">no game_id — can't be hidden</span>
-                {% endif %}
-              </td>
-              <td>
-                {% if g.game_id %}
-                <button type="button" class="rename-btn"
-                        data-game-id="{{ g.game_id }}" data-title="{{ g.title }}">Rename</button>
-                {% endif %}
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-        <p class="form-hint">No games found.</p>
-        {% endif %}
+          <h2>Top 10 games by rating</h2>
+          {% if top_rated %}
+          <table class="stats-table">
+            <thead><tr><th>Game</th><th>&#128077;</th><th>&#128078;</th></tr></thead>
+            <tbody>
+              {% for g in top_rated %}
+              <tr><td>{{ g.title }}</td><td>{{ g.thumbs_up }}</td><td>{{ g.thumbs_down }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <p class="form-hint">No votes recorded yet.</p>
+          {% endif %}
 
-        <h2>Users</h2>
-        {% if all_users %}
-        <table class="stats-table">
-          <thead><tr><th>User ID</th><th>Username</th><th>Sign-in link</th></tr></thead>
-          <tbody>
-            {% for u in all_users %}
-            <tr>
-              <td><code>{{ u.uid }}</code></td>
-              <td>{{ u.username or '—' }}</td>
-              <td><a href="{{ url_for('sign_in', uid=u.uid) }}">{{ url_for('sign_in', uid=u.uid, _external=True) }}</a></td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-        <p class="form-hint">No signed-up users yet.</p>
-        {% endif %}
+          <h2>All games</h2>
+          {% if all_games %}
+          <p class="form-hint">
+            Hidden games are dropped from the shelf on the main page but stay
+            playable at their direct link — use "Play" below to reach one.
+          </p>
+          <table class="stats-table">
+            <thead><tr><th>Game</th><th>Visibility</th><th></th><th></th></tr></thead>
+            <tbody>
+              {% for g in all_games %}
+              <tr class="{{ 'is-hidden-row' if g.hidden }}">
+                <td>{{ g.title }}</td>
+                <td>
+                  {% if g.game_id %}
+                  <form class="visibility-form" method="post"
+                        action="{{ url_for('admin_set_game_hidden', game_id=g.game_id, token=admin_token) }}">
+                    <label>
+                      <input type="radio" name="hidden" value="0" {{ 'checked' if not g.hidden }}
+                             onchange="this.form.submit()">
+                      Show
+                    </label>
+                    <label>
+                      <input type="radio" name="hidden" value="1" {{ 'checked' if g.hidden }}
+                             onchange="this.form.submit()">
+                      Hide
+                    </label>
+                  </form>
+                  {% else %}
+                  <span class="form-hint">no game_id — can't be hidden</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if g.game_id %}
+                  <button type="button" class="rename-btn"
+                          data-game-id="{{ g.game_id }}" data-title="{{ g.title }}">Rename</button>
+                  {% endif %}
+                </td>
+                <td><a class="game-row-play-link" href="{{ url_for('play', slug=g.slug) }}" target="_blank" rel="noopener">Play &#8599;</a></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <p class="form-hint">No games found.</p>
+          {% endif %}
+        </div>
+
+        <div class="admin-panel" id="tab-users" role="tabpanel">
+          <h2>Users</h2>
+          {% if all_users %}
+          <table class="stats-table">
+            <thead><tr><th>User ID</th><th>Username</th><th>Sign-in link</th></tr></thead>
+            <tbody>
+              {% for u in all_users %}
+              <tr>
+                <td><code>{{ u.uid }}</code></td>
+                <td>{{ u.username or '—' }}</td>
+                <td><a href="{{ url_for('sign_in', uid=u.uid) }}">{{ url_for('sign_in', uid=u.uid, _external=True) }}</a></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <p class="form-hint">No signed-up users yet.</p>
+          {% endif %}
+        </div>
       </div>
     </main>
   </div>
@@ -167,6 +180,26 @@
     });
 
     document.getElementById("rename-cancel").addEventListener("click", () => renameDialog.close());
+
+    // ---- Tabs ----
+    const tabButtons = document.querySelectorAll(".admin-tab");
+    const tabPanels = document.querySelectorAll(".admin-panel");
+
+    function showTab(name) {
+      const known = [...tabButtons].some((btn) => btn.dataset.tab === name);
+      if (!known) name = tabButtons[0].dataset.tab;
+      tabButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === name));
+      tabPanels.forEach((panel) => { panel.hidden = panel.id !== `tab-${name}`; });
+    }
+
+    tabButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        showTab(btn.dataset.tab);
+        history.replaceState(null, "", `#${btn.dataset.tab}`);
+      });
+    });
+
+    showTab((location.hash || "#traffic").slice(1));
   </script>
 </body>
 </html>
