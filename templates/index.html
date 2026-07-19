@@ -15,7 +15,7 @@
       <div class="wordmark"><span class="wordmark-dot"></span>THE VIBE<br>ARCADE</div>
       {% if not user %}
       <form class="account-form" method="post" action="{{ url_for('signup') }}">
-        <button class="account-link" type="submit">Sign up</button>
+        <button class="account-link" type="submit">Create User</button>
       </form>
       {% elif not user.username %}
       <a class="account-link" href="{{ url_for('account_page') }}">Set a username &rarr;</a>
