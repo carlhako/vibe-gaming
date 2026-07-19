@@ -321,7 +321,7 @@ def create_app(games_dir=None) -> Flask:
     def api_game_info(game_id):
         if not _GAME_ID_RE.match(game_id):
             abort(404)
-        games = get_games()
+        games = get_games(include_hidden=True)
         by_id = {g["game_id"]: g for g in games if g["game_id"]}
         game = by_id.get(game_id)
         if game is None:
@@ -341,10 +341,12 @@ def create_app(games_dir=None) -> Flask:
             "play_count": db.get_play_count(game_id),
             "recent_plays": db.get_recent_plays(game_id, limit=20),
             "ancestors": [
-                {"slug": g["slug"], "title": g["title"]} for g in lineage["ancestors"]
+                {"slug": g["slug"], "title": g["title"], "hidden": g.get("hidden", False)}
+                for g in lineage["ancestors"]
             ],
             "siblings": [
-                {"slug": g["slug"], "title": g["title"]} for g in lineage["siblings"]
+                {"slug": g["slug"], "title": g["title"], "hidden": g.get("hidden", False)}
+                for g in lineage["siblings"]
             ],
         })
 

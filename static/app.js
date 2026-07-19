@@ -1,18 +1,23 @@
+function playSlug(slug, title) {
+  document.querySelectorAll(".cart").forEach((c) => c.classList.remove("active"));
+  const cart = document.querySelector(`.cart-select[data-slug="${CSS.escape(slug)}"]`);
+  if (cart) cart.closest(".cart").classList.add("active");
+
+  const frame = document.getElementById("game-frame");
+  const empty = document.getElementById("screen-empty");
+  const nowPlaying = document.getElementById("now-playing");
+  const powerLight = document.getElementById("power-light");
+
+  frame.src = "/play/" + encodeURIComponent(slug);
+  frame.hidden = false;
+  empty.hidden = true;
+  nowPlaying.textContent = title;
+  powerLight.classList.add("on");
+}
+
 document.querySelectorAll(".cart-select").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".cart").forEach((c) => c.classList.remove("active"));
-    btn.closest(".cart").classList.add("active");
-
-    const frame = document.getElementById("game-frame");
-    const empty = document.getElementById("screen-empty");
-    const nowPlaying = document.getElementById("now-playing");
-    const powerLight = document.getElementById("power-light");
-
-    frame.src = "/play/" + encodeURIComponent(btn.dataset.slug);
-    frame.hidden = false;
-    empty.hidden = true;
-    nowPlaying.textContent = btn.dataset.title;
-    powerLight.classList.add("on");
+    playSlug(btn.dataset.slug, btn.dataset.title);
   });
 });
 
@@ -73,8 +78,9 @@ let infoModalLastFocused = null;
 function renderLineageLink(item) {
   const link = document.createElement("a");
   link.href = "#";
-  link.textContent = item.title;
+  link.textContent = item.hidden ? `${item.title} (hidden)` : item.title;
   link.dataset.slug = item.slug;
+  link.dataset.title = item.title;
   return link;
 }
 
@@ -177,8 +183,5 @@ document.getElementById("info-modal-lineage").addEventListener("click", (evt) =>
   if (!a) return;
   evt.preventDefault();
   closeInfoModal();
-  const cart = document.querySelector(
-    `.cart-select[data-slug="${CSS.escape(a.dataset.slug)}"]`
-  );
-  if (cart) cart.click();
+  playSlug(a.dataset.slug, a.dataset.title || a.textContent);
 });
