@@ -601,6 +601,20 @@ body {
   letter-spacing: 0.04em;
 }
 
+.visibility-form {
+  display: flex;
+  gap: 14px;
+  margin: 0;
+}
+
+.visibility-form label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--ink);
+}
+
 /* ---- Account / signup ---- */
 
 .account-form {

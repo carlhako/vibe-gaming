@@ -73,6 +73,63 @@
         {% else %}
         <p class="form-hint">No votes recorded yet.</p>
         {% endif %}
+
+        <h2>All games</h2>
+        {% if all_games %}
+        <p class="form-hint">
+          Hidden games are dropped from the shelf on the main page but stay
+          playable at their direct link.
+        </p>
+        <table class="stats-table">
+          <thead><tr><th>Game</th><th>Visibility</th></tr></thead>
+          <tbody>
+            {% for g in all_games %}
+            <tr>
+              <td>{{ g.title }}</td>
+              <td>
+                {% if g.game_id %}
+                <form class="visibility-form" method="post"
+                      action="{{ url_for('admin_set_game_hidden', game_id=g.game_id, token=admin_token) }}">
+                  <label>
+                    <input type="radio" name="hidden" value="0" {{ 'checked' if not g.hidden }}
+                           onchange="this.form.submit()">
+                    Show
+                  </label>
+                  <label>
+                    <input type="radio" name="hidden" value="1" {{ 'checked' if g.hidden }}
+                           onchange="this.form.submit()">
+                    Hide
+                  </label>
+                </form>
+                {% else %}
+                <span class="form-hint">no game_id — can't be hidden</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="form-hint">No games found.</p>
+        {% endif %}
+
+        <h2>Users</h2>
+        {% if all_users %}
+        <table class="stats-table">
+          <thead><tr><th>User ID</th><th>Username</th><th>Sign-in link</th></tr></thead>
+          <tbody>
+            {% for u in all_users %}
+            <tr>
+              <td><code>{{ u.uid }}</code></td>
+              <td>{{ u.username or '—' }}</td>
+              <td><a href="{{ url_for('sign_in', uid=u.uid) }}">{{ url_for('sign_in', uid=u.uid, _external=True) }}</a></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="form-hint">No signed-up users yet.</p>
+        {% endif %}
       </div>
     </main>
   </div>

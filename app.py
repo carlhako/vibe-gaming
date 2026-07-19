@@ -119,7 +119,7 @@ def create_app(games_dir=None) -> Flask:
     cache_lock = threading.Lock()
     cache = {"key": None, "games": []}
 
-    def get_games(sort: str = "alpha") -> list[dict]:
+    def get_games(sort: str = "alpha", include_hidden: bool = False) -> list[dict]:
         """The disk-scanned manifest (cached, mtime-keyed) stays the source
         of truth for *which* games exist — including hand-written games
         like sample-game that were never registered in web_games — but
@@ -141,7 +141,7 @@ def create_app(games_dir=None) -> Flask:
             placeholders = ",".join("?" * len(game_ids))
             rows = conn.execute(
                 f"SELECT game_id, thumbs_up, thumbs_down, model, effort, tokens_used, "
-                f"requested_by, creator_uid FROM web_games WHERE game_id IN ({placeholders})",
+                f"requested_by, creator_uid, hidden FROM web_games WHERE game_id IN ({placeholders})",
                 game_ids,
             ).fetchall()
             by_id = {r["game_id"]: dict(r) for r in rows}
@@ -155,6 +155,10 @@ def create_app(games_dir=None) -> Flask:
             g["tokens_used"] = row.get("tokens_used")
             g["requested_by"] = row.get("requested_by")
             g["creator_uid"] = row.get("creator_uid")
+            g["hidden"] = bool(row.get("hidden", 0))
+
+        if not include_hidden:
+            games = [g for g in games if not g["hidden"]]
 
         creator_uids = {g["creator_uid"] for g in games if g.get("creator_uid")}
         usernames_by_uid = {}
@@ -550,12 +554,26 @@ def create_app(games_dir=None) -> Flask:
             g for g in db.get_web_games(sort="rating", conn=conn)
             if (g["thumbs_up"] or g["thumbs_down"])
         ][:10]
+        all_games = get_games(include_hidden=True)
+        all_users = db.get_all_users(conn=conn)
 
         return render_template(
             "admin_stats.html",
             total_hits=total_hits, unique_clients=unique_clients, unique_ips=unique_ips,
             daily_hits=daily_hits, top_played=top_played, top_rated=top_rated,
+            all_games=all_games, admin_token=request.args.get("token"),
+            all_users=all_users,
         )
+
+    @app.post("/admin/games/<game_id>/hidden")
+    @require_admin_token
+    def admin_set_game_hidden(game_id):
+        if not _GAME_ID_RE.match(game_id):
+            abort(404)
+        hidden = request.form.get("hidden") == "1"
+        if not db.set_game_hidden(game_id, hidden):
+            abort(404)
+        return redirect(url_for("admin_stats", token=request.args.get("token")))
 
     return app
 

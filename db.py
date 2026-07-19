@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS web_games (
     root_game_id     TEXT REFERENCES web_games(game_id),
     thumbs_up        INTEGER NOT NULL DEFAULT 0,
     thumbs_down      INTEGER NOT NULL DEFAULT 0,
+    hidden           INTEGER NOT NULL DEFAULT 0,
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL
 );
@@ -138,7 +139,10 @@ def _c(conn):
 # ALTER TABLE ADD COLUMN them in on an existing DB, since SQLite has no
 # "ADD COLUMN IF NOT EXISTS". Safe to re-run: skipped once the column exists.
 _ADDED_COLUMNS = {
-    "web_games": [("tokens_used", "INTEGER"), ("creator_uid", "TEXT")],
+    "web_games": [
+        ("tokens_used", "INTEGER"), ("creator_uid", "TEXT"),
+        ("hidden", "INTEGER NOT NULL DEFAULT 0"),
+    ],
     "generation_requests": [("tokens_used", "INTEGER"), ("creator_uid", "TEXT")],
     "generation_attempts": [("duration_seconds", "REAL"), ("raw_response", "TEXT")],
 }
@@ -284,6 +288,18 @@ def get_recent_plays(game_id, limit=20, conn=None):
     return [r["played_at"] for r in rows]
 
 
+def set_game_hidden(game_id, hidden: bool, conn=None) -> bool:
+    """Returns False if game_id has no web_games row (nothing to update —
+    e.g. a hand-written game like sample-game that was never registered)."""
+    c = _c(conn)
+    cur = c.execute(
+        "UPDATE web_games SET hidden=?, updated_at=? WHERE game_id=?",
+        (1 if hidden else 0, _now(), game_id),
+    )
+    c.commit()
+    return cur.rowcount > 0
+
+
 def count_by_root(root_game_id, conn=None) -> int:
     """Number of web_games rows sharing a root_game_id (the original plus
     every fork of it). Used to auto-number a blank-titled fork as
@@ -299,6 +315,12 @@ def get_user(uid, conn=None):
     c = _c(conn)
     row = c.execute("SELECT * FROM users WHERE uid=?", (uid,)).fetchone()
     return dict(row) if row else None
+
+
+def get_all_users(conn=None):
+    c = _c(conn)
+    rows = c.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
+    return [dict(r) for r in rows]
 
 
 def ensure_user(uid, conn=None):
