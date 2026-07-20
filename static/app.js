@@ -120,6 +120,13 @@ document.querySelectorAll(".cart-rate").forEach((rateBox) => {
 const infoBackdrop = document.getElementById("info-modal-backdrop");
 let infoModalLastFocused = null;
 
+function formatDuration(seconds) {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.round(seconds % 60);
+  return `${mins}m ${secs}s`;
+}
+
 function renderLineageLink(item) {
   const link = document.createElement("a");
   link.href = "#";
@@ -141,6 +148,7 @@ async function openInfoModal(gameId) {
       `by ${data.creator || "anonymous"}`,
       data.model ? `${data.model} (${data.effort || "default"})` : null,
       data.tokens_used != null ? `${data.tokens_used} tokens` : null,
+      data.duration_seconds != null ? `${formatDuration(data.duration_seconds)} to generate` : null,
     ].filter(Boolean).join(" · ");
     document.getElementById("info-modal-meta").textContent = meta;
     document.getElementById("info-modal-prompt").textContent =

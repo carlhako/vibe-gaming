@@ -248,7 +248,8 @@ def create_app(games_dir=None) -> Flask:
             placeholders = ",".join("?" * len(game_ids))
             rows = conn.execute(
                 f"SELECT game_id, thumbs_up, thumbs_down, model, effort, tokens_used, "
-                f"requested_by, creator_uid, hidden FROM web_games WHERE game_id IN ({placeholders})",
+                f"duration_seconds, requested_by, creator_uid, hidden "
+                f"FROM web_games WHERE game_id IN ({placeholders})",
                 game_ids,
             ).fetchall()
             by_id = {r["game_id"]: dict(r) for r in rows}
@@ -261,6 +262,7 @@ def create_app(games_dir=None) -> Flask:
             g["model"] = row.get("model")
             g["effort"] = row.get("effort")
             g["tokens_used"] = row.get("tokens_used")
+            g["duration_seconds"] = row.get("duration_seconds")
             g["requested_by"] = row.get("requested_by")
             g["creator_uid"] = row.get("creator_uid")
             g["hidden"] = bool(row.get("hidden", 0))
@@ -354,6 +356,7 @@ def create_app(games_dir=None) -> Flask:
             "model": game.get("model"),
             "effort": game.get("effort"),
             "tokens_used": game.get("tokens_used"),
+            "duration_seconds": game.get("duration_seconds"),
             "created_at": game.get("created_at"),
             "version": game.get("version"),
             "creator": game.get("creator_name", "anonymous"),
@@ -660,6 +663,14 @@ def create_app(games_dir=None) -> Flask:
             "queue_position": queue_position,
             "eta_seconds": eta_seconds,
             "avg_duration_seconds": avg_duration_seconds,
+            # updated_at is bumped exactly when claim_next_queued_request()
+            # flips status to 'generating', so it doubles as that
+            # transition's timestamp — the client derives its live elapsed
+            # timer from this rather than counting ticks, so it's still
+            # correct after the tab was backgrounded/throttled.
+            "generating_started_at": job["updated_at"] if job["status"] == "generating" else None,
+            "tokens_used": job["tokens_used"],
+            "duration_seconds": job["duration_seconds"],
         })
 
     @app.before_request
