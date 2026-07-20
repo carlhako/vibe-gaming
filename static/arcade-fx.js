@@ -112,6 +112,62 @@
   resize();
   start();
 
+  // ---- Wordmark Pac-Man marquee ----
+  // A little pacman treks across the dot row under the wordmark, eating
+  // dots as he reaches them, then resets. Layout is real DOM/rAF math (not
+  // pure CSS keyframes) so the "eaten" state stays in sync with pacman's
+  // actual position regardless of how many dots fit the current width.
+  const marquee = document.getElementById("marquee");
+  if (marquee) {
+    const pacman = marquee.querySelector(".pacman");
+    const dotsLayer = document.createElement("div");
+    dotsLayer.className = "marquee-dots";
+    marquee.insertBefore(dotsLayer, marquee.firstChild);
+
+    const DOT_GAP = 13; // px between dot centers
+    const LOOP_MS = 3800;
+    const TRAVEL_FRACTION = 0.86; // rest of the loop is a beat pause before resetting
+
+    let dots = [];
+
+    function layoutDots() {
+      const trackWidth = marquee.clientWidth;
+      const count = Math.max(4, Math.floor(trackWidth / DOT_GAP));
+      dotsLayer.innerHTML = "";
+      dots = Array.from({ length: count }, (_, i) => {
+        const dot = document.createElement("span");
+        dot.className = "pac-dot";
+        const x = count === 1 ? 0 : (i / (count - 1)) * (trackWidth - 4);
+        dot.style.left = `${x}px`;
+        dotsLayer.appendChild(dot);
+        return { el: dot, x };
+      });
+    }
+
+    layoutDots();
+    addEventListener("resize", layoutDots);
+
+    if (!REDUCED) {
+      function pacFrame(t) {
+        requestAnimationFrame(pacFrame);
+        const phase = (t % LOOP_MS) / LOOP_MS;
+        if (phase > TRAVEL_FRACTION) {
+          pacman.style.opacity = "0";
+          for (const d of dots) d.el.classList.remove("eaten");
+          return;
+        }
+        pacman.style.opacity = "1";
+        const progress = phase / TRAVEL_FRACTION;
+        const pacX = progress * (marquee.clientWidth - 12);
+        pacman.style.transform = `translateX(${pacX}px)`;
+        for (const d of dots) {
+          if (d.x <= pacX + 4) d.el.classList.add("eaten");
+        }
+      }
+      requestAnimationFrame(pacFrame);
+    }
+  }
+
   // ---- Game-start hook ----
   // .cart-select clicks bubble here (only rate/info buttons stopPropagation,
   // and those aren't game starts); modal lineage links replay via cart.click(),

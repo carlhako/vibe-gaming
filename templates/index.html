@@ -39,6 +39,9 @@
   <div class="shell shell-arcade">
     <aside class="shelf">
       <div class="wordmark"><span class="wordmark-dot"></span>THE VIBE<br>ARCADE</div>
+      <div class="marquee" id="marquee" aria-hidden="true">
+        <div class="pacman"><span class="pac-top"></span><span class="pac-bottom"></span></div>
+      </div>
       {% if not user %}
       <form class="account-form" method="post" action="{{ url_for('signup') }}">
         <button class="account-link" type="submit">Create User</button>
@@ -83,9 +86,11 @@
           </button>
           {% if g.game_id %}
           <div class="cart-rate" data-game-id="{{ g.game_id }}">
-            <button class="rate-btn rate-up" data-vote="1" title="Good game">&#128077; <span class="rate-count">{{ g.thumbs_up }}</span></button>
+            <span class="rate-buttons">
+              <button class="rate-btn rate-up" data-vote="1" title="Good game">&#128077; <span class="rate-count">{{ g.thumbs_up }}</span></button>
+              <button class="rate-btn rate-down" data-vote="-1" title="Not great">&#128078; <span class="rate-count">{{ g.thumbs_down }}</span></button>
+            </span>
             <span class="cart-play-count" title="Times played">({{ g.play_count }})</span>
-            <button class="rate-btn rate-down" data-vote="-1" title="Not great">&#128078; <span class="rate-count">{{ g.thumbs_down }}</span></button>
           </div>
           <button class="cart-info" data-game-id="{{ g.game_id }}" title="Game info">&#8505;</button>
           <a class="cart-enhance" href="{{ url_for('enhance_game_form', game_id=g.game_id) }}" title="Enhance this game">&#9889;</a>

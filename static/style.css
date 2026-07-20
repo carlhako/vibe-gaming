@@ -44,7 +44,7 @@ body {
 /* ---- Shelf (sidebar) ---- */
 
 .shelf {
-  width: 300px;
+  width: 340px;
   flex-shrink: 0;
   background: var(--panel);
   border-right: 1px solid var(--line);
@@ -88,6 +88,38 @@ body {
   overflow-y: auto;
   flex: 1;
   min-height: 0;
+}
+
+/* Dark themed scrollbar for the shelf, so it doesn't default to the
+   browser's light system scrollbar against this dark panel. Also applied
+   to .shelf itself since the narrow-viewport breakpoint makes the whole
+   shelf scroll instead of just .cart-list (see the 860px media query). */
+.cart-list,
+.shelf {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) var(--panel);
+}
+
+.cart-list::-webkit-scrollbar,
+.shelf::-webkit-scrollbar {
+  width: 9px;
+}
+
+.cart-list::-webkit-scrollbar-track,
+.shelf::-webkit-scrollbar-track {
+  background: var(--panel);
+}
+
+.cart-list::-webkit-scrollbar-thumb,
+.shelf::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 5px;
+  border: 2px solid var(--panel);
+}
+
+.cart-list::-webkit-scrollbar-thumb:hover,
+.shelf::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-dim);
 }
 
 /* A family is one original plus every fork of it (shared root_game_id).
@@ -364,9 +396,10 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .power-light.on { animation: none; }
-  .wordmark, .wordmark::after, .wordmark-dot,
+  .wordmark, .wordmark-dot, .pac-top, .pac-bottom,
   .cart.active .cart-spine, .cart:hover .cart-select::after,
   .splash-cab, .splash-cab *, .splash-backdrop { animation: none !important; }
+  .pacman { display: none; }
   #starfield { display: none; }
 }
 
@@ -441,11 +474,20 @@ body {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 6px 8px;
   border-left: 1px solid var(--line);
 }
 
+.rate-buttons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .rate-btn {
-  flex: 1;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -454,7 +496,8 @@ body {
   color: var(--muted);
   font-family: inherit;
   font-size: 10.5px;
-  padding: 3px 8px;
+  padding: 3px 6px;
+  border-radius: 3px;
   cursor: pointer;
 }
 
@@ -1380,20 +1423,6 @@ body {
   animation: wordmark-glow 4s ease-in-out infinite alternate;
 }
 
-.wordmark::after {
-  content: "";
-  display: block;
-  height: 3px;
-  margin-top: 8px;
-  border-radius: 2px;
-  background: repeating-linear-gradient(
-    90deg,
-    var(--accent) 0 6px,
-    transparent 6px 14px
-  );
-  animation: marquee-chase 1.2s steps(2) infinite;
-}
-
 .wordmark-dot {
   animation: blink 2.4s ease-in-out infinite;
 }
@@ -1403,9 +1432,81 @@ body {
   to { text-shadow: 0 0 10px rgba(255, 180, 0, 0.7); }
 }
 
-@keyframes marquee-chase {
-  from { background-position-x: 0; }
-  to { background-position-x: 14px; }
+/* Pac-Man marquee: a little arcade nod under the wordmark, in place of the
+   old plain chasing-dash bar. Dots are laid out and "eaten" in JS
+   (arcade-fx.js) since the mouth-chomp needs to stay a pure CSS loop while
+   the eat-as-you-pass timing needs real position math against pacman's
+   current x. */
+.marquee {
+  position: relative;
+  height: 14px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+
+.marquee-dots {
+  position: absolute;
+  inset: 0;
+}
+
+.pac-dot {
+  position: absolute;
+  top: 50%;
+  width: 3px;
+  height: 3px;
+  margin-top: -1.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.85;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.pac-dot.eaten {
+  opacity: 0;
+  transform: scale(0.2);
+}
+
+.pacman {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  margin-top: -6px;
+  opacity: 0;
+}
+
+.pac-top,
+.pac-bottom {
+  position: absolute;
+  left: 0;
+  width: 12px;
+  height: 6px;
+  background: var(--accent);
+  animation: pac-chomp-top 0.35s linear infinite;
+}
+
+.pac-top {
+  top: 0;
+  border-radius: 12px 12px 0 0;
+  transform-origin: bottom center;
+}
+
+.pac-bottom {
+  bottom: 0;
+  border-radius: 0 0 12px 12px;
+  transform-origin: top center;
+  animation-name: pac-chomp-bottom;
+}
+
+@keyframes pac-chomp-top {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(-28deg); }
+}
+
+@keyframes pac-chomp-bottom {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(28deg); }
 }
 
 .cart-select {
