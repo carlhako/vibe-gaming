@@ -21,6 +21,28 @@ document.querySelectorAll(".cart-select").forEach((btn) => {
   });
 });
 
+// ---- Fork family accordion ----
+// Each family's "N earlier versions" row expands its older versions in
+// place; only one family stays open at a time, so opening one collapses
+// whichever other family was previously expanded.
+document.querySelectorAll(".cart-family-toggle").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const children = document.getElementById(btn.getAttribute("aria-controls"));
+    if (!children) return;
+    const expanding = !children.classList.contains("expanded");
+
+    document.querySelectorAll(".cart-family-children.expanded").forEach((other) => {
+      if (other === children) return;
+      other.classList.remove("expanded");
+      const otherBtn = document.querySelector(`.cart-family-toggle[aria-controls="${other.id}"]`);
+      if (otherBtn) otherBtn.setAttribute("aria-expanded", "false");
+    });
+
+    children.classList.toggle("expanded", expanding);
+    btn.setAttribute("aria-expanded", String(expanding));
+  });
+});
+
 // ---- Shelf tools collapse ----
 // The arrow in the shelf header folds the tools block (marquee, account
 // links, New Game) away so the game list gets the vertical space back.

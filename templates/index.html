@@ -80,13 +80,14 @@
       <div class="shelf-meta">
         <span class="shelf-count">{{ games|length }} cartridge{{ '' if games|length == 1 else 's' }}</span>
         <div class="sort-toggle">
+          <a href="{{ url_for('index', sort='date') }}" class="sort-btn {{ 'active' if sort == 'date' else '' }}">Newest</a>
           <a href="{{ url_for('index', sort='alpha') }}" class="sort-btn {{ 'active' if sort == 'alpha' else '' }}">A-Z</a>
           <a href="{{ url_for('index', sort='rating') }}" class="sort-btn {{ 'active' if sort == 'rating' else '' }}">Top rated</a>
         </div>
       </div>
       <nav class="cart-list" id="cart-list">
         {% for g in games %}
-        {% if g.family_index == 0 %}{% if not loop.first %}</div>{% endif %}<div class="cart-family">{% endif %}
+        {% if g.family_index == 0 %}<div class="cart-family">{% endif %}
         <div class="cart {{ 'cart-sibling' if g.family_index > 0 else '' }}" style="--spine: var(--hue-{{ g.family_hue }})">
           <span class="cart-spine"></span>
           <div class="cart-main">
@@ -120,7 +121,18 @@
             {% endif %}
           </div>
         </div>
-        {% if loop.last %}</div>{% endif %}
+        {% if g.family_index == 0 and g.family_size > 1 %}
+        <button class="cart-family-toggle" type="button" aria-expanded="false" aria-controls="family-children-{{ g.game_id or g.slug }}">
+          <span class="cart-family-toggle-arrow">&#9662;</span>
+          {{ g.family_size - 1 }} earlier version{{ '' if g.family_size == 2 else 's' }}
+        </button>
+        <div class="cart-family-children" id="family-children-{{ g.game_id or g.slug }}">
+        <div class="cart-family-children-inner">
+        {% endif %}
+        {% if g.family_last %}
+          {% if g.family_size > 1 %}</div></div>{% endif %}
+        </div>
+        {% endif %}
         {% else %}
         <p class="empty-shelf">No cartridges yet — request one on IRC with<br><code>homebot newaiwebgame &lt;description&gt;</code></p>
         {% endfor %}

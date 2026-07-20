@@ -44,7 +44,7 @@ body {
 /* ---- Shelf (sidebar) ---- */
 
 .shelf {
-  width: 340px;
+  width: 510px;
   flex-shrink: 0;
   background: var(--panel);
   border-right: 1px solid var(--line);
@@ -230,6 +230,58 @@ body {
 .cart-sibling {
   width: calc(100% - 12px);
   margin-left: 12px;
+}
+
+/* Older versions collapse behind the head card via the same grid
+   1fr -> 0fr row trick as .shelf-tools (see below), so height animates
+   without a hard-coded max-height. Only one family's .expanded at a
+   time — enforced in app.js, not CSS. */
+.cart-family-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 12px;
+  padding: 3px 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 10.5px;
+  color: var(--accent2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cart-family-toggle:hover {
+  color: var(--accent);
+}
+
+.cart-family-toggle-arrow {
+  display: inline-block;
+  transition: transform 0.2s ease;
+  transform: rotate(-90deg);
+}
+
+.cart-family-toggle[aria-expanded="true"] .cart-family-toggle-arrow {
+  transform: rotate(0deg);
+}
+
+.cart-family-children {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.25s ease;
+}
+
+.cart-family-children.expanded {
+  grid-template-rows: 1fr;
+}
+
+.cart-family-children-inner {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
 }
 
 .cart:hover {

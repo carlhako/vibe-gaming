@@ -134,9 +134,11 @@ def _group_and_sort_games(games: list[dict], sort: str) -> list[dict]:
     forks) so they sit adjacent on the shelf instead of being scattered by
     rating, and annotate each with the fields the sidebar needs to render
     that grouping: base_title/version_label (the '(vN)' suffix pulled out
-    so it can't be truncated away), family_size/family_index (position
-    within its family), and family_hue (shared spine color). Works fine
-    when some family members are hidden — grouping is keyed on
+    so it can't be truncated away), family_size/family_index/family_last
+    (position within its family — index 0 is the newest version, shown
+    as the head card; the rest are older versions nested in the shelf's
+    per-family accordion), and family_hue (shared spine color). Works
+    fine when some family members are hidden — grouping is keyed on
     root_game_id, not on any particular member being present."""
     families: dict[str, list[dict]] = {}
     for g in games:
@@ -149,7 +151,10 @@ def _group_and_sort_games(games: list[dict], sort: str) -> list[dict]:
     ranked_families = []
     for family_key, keyed_members in families.items():
         members = [g for _, g in keyed_members]
-        members.sort(key=lambda m: (m.get("created_at") or "", m["title"].casefold()))
+        # Newest first: index 0 is the family "head" card shown on the
+        # shelf, everything else is an older version tucked in the
+        # per-family accordion.
+        members.sort(key=lambda m: (m.get("created_at") or "", m["title"].casefold()), reverse=True)
         if len(members) > 1:
             for m in members:
                 if m["version_label"] is None:
@@ -158,20 +163,29 @@ def _group_and_sort_games(games: list[dict], sort: str) -> list[dict]:
         for idx, m in enumerate(members):
             m["family_size"] = len(members)
             m["family_index"] = idx
+            m["family_last"] = idx == len(members) - 1
             m["family_hue"] = hue
 
         base_for_sort = members[0]["base_title"].casefold()
+        latest_created = max(m.get("created_at") or "" for m in members)
         if sort == "rating":
             best_score = max(m["thumbs_up"] - m["thumbs_down"] for m in members)
             best_up = max(m["thumbs_up"] for m in members)
             rank_key = (-best_score, -best_up, base_for_sort)
         else:
             rank_key = (base_for_sort,)
-        ranked_families.append((rank_key, members))
+        ranked_families.append((rank_key, latest_created, members))
 
-    ranked_families.sort(key=lambda item: item[0])
+    if sort == "date":
+        # Stable two-pass sort: alpha tie-break first (ascending), then
+        # the primary date key (descending, newest family first) — sort's
+        # stability preserves the tie-break order within equal dates.
+        ranked_families.sort(key=lambda item: item[0])
+        ranked_families.sort(key=lambda item: item[1], reverse=True)
+    else:
+        ranked_families.sort(key=lambda item: item[0])
     result = []
-    for _, members in ranked_families:
+    for _, _, members in ranked_families:
         result.extend(members)
     return result
 
@@ -305,9 +319,9 @@ def create_app(games_dir=None) -> Flask:
 
     @app.get("/")
     def index():
-        sort = request.args.get("sort", "rating")
-        if sort not in ("alpha", "rating"):
-            sort = "rating"
+        sort = request.args.get("sort", "date")
+        if sort not in ("alpha", "rating", "date"):
+            sort = "date"
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
         user = db.get_user(vg_uid) if vg_uid else None
         return render_template(
@@ -317,9 +331,9 @@ def create_app(games_dir=None) -> Flask:
 
     @app.get("/api/games")
     def api_games():
-        sort = request.args.get("sort", "rating")
-        if sort not in ("alpha", "rating"):
-            sort = "rating"
+        sort = request.args.get("sort", "date")
+        if sort not in ("alpha", "rating", "date"):
+            sort = "date"
         return jsonify(get_games(sort))
 
     @app.get("/api/games/<game_id>/info")
