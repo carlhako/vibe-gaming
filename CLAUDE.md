@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude Code (or any AI assistant) picking up this repo cold.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What this is
 
@@ -21,6 +21,22 @@ other games. That sandbox is the primary security boundary; the safety
 scanner and smoke test below are defense-in-depth on top of it, not the
 main line of defense.
 
+## Commands
+
+```bash
+source venv/bin/activate
+pytest                                              # full suite
+pytest tests/test_db.py                             # one file
+pytest tests/test_db.py::test_record_rating_blocks_duplicate_cookie  # one test
+pytest -k fork_linkage                               # by keyword
+python3 app.py                                       # run dev server on :8600
+```
+
+Tests mock the DeepSeek client and Playwright smoke test and use an
+isolated temp SQLite DB (`tests/conftest.py`'s `isolated_db` fixture) —
+no network calls or browser needed. There is no linter/formatter
+configured in this repo.
+
 ## Current state — what's wired up
 
 Everything described below is implemented and tested (see `tests/`), not
@@ -34,6 +50,28 @@ aspirational:
   which polls `/api/status/<job_id>` (`static/status.js`) until the job
   hits `success`/`failed`. No blocking HTTP request ever waits on a
   DeepSeek call.
+- **Idea Forge**: `/games/new/idea-forge` and
+  `/games/<game_id>/enhance/idea-forge` let a user flesh out a rough idea
+  before submitting it for real generation/enhancement.
+  `prompt_helper.expand_prompt()` makes one plain `ai_client.ask()` call
+  (not the tool-calling submit loop below) that folds a genre checklist
+  (`genre_checklists.yaml` — FPS, racing, platformer, etc.; hand-edited,
+  no code change needed to add a genre) into the system prompt, so
+  genre conventions the user didn't think to mention (FPS lighting/
+  crosshair/viewmodel, racing camera/perspective) still make it into the
+  brief. Runs through the same `generation_requests`/`job_runner` async
+  queue as real generation — a third kind, `"prompt_help"` — and reuses
+  the `/status/<job_id>` polling page rather than a new endpoint, so this
+  stays consistent with the "no blocking request waits on DeepSeek" rule
+  above. The model replies with JSON (`detected_genre`/`confidence`/
+  `expanded_prompt`), parsed with a fallback to treating the whole reply
+  as plain text if it isn't valid JSON; `detected_genre` is persisted on
+  the `generation_requests` row (for future analytics, e.g. "which
+  genres fail most often"), not just used in-flight. Configured
+  independently via the `ideaforge:` block in `config.yaml`. The user
+  reviews/edits the expanded brief on the status page, then a
+  "Continue →" button forwards it into the real `/games/new` or
+  `/games/<id>/enhance` submission.
 - **Background job runner** (`job_runner.py`): DB-polling worker
   threads — no in-memory queue, no Redis — so it stays correct under
   multiple gunicorn worker processes. Every job is claimed via an atomic
@@ -60,6 +98,12 @@ aspirational:
   `GET /admin/stats?token=...` (or `Authorization: Bearer ...`), gated by
   the `ADMIN_TOKEN` env var, shows hit counts, daily traffic, and top
   games by plays/rating.
+- **Game downloads**: `GET /games/<game_id>/download` serves a single
+  game's `index.html` as an attachment named
+  `<slugified-title>-v<version>.html`. `GET /admin/games/download`
+  (behind `require_admin_token`) zips every game directory's
+  `index.html` + `meta.json` into one `vibegames-games-<date>.zip` for
+  backup.
 - **Audit trail**: every generation/enhancement attempt (not just the
   final outcome) is logged to `generation_attempts` — retries included —
   keyed on `generation_requests.job_id`.
@@ -75,13 +119,25 @@ aspirational:
   durable `users` row. `/u/<uid>` is the resulting bookmarkable sign-in
   link: visiting it on any browser/device sets that `vg_uid` cookie,
   making the identity portable. `/account` lets a signed-up visitor set a
-  unique username and see the games they've created. Every game/fork
+  unique username and see their sign-in link/token; `/signin` is the
+  form for pasting that token back in on a new device. Every game/fork
   created through the web UI is tagged with `web_games.creator_uid`
   (the requester's `vg_uid`), shown as a "by &lt;creator&gt;" caption on
   every card and surfaced in the info modal. Ratings were already keyed
   by the full `vg_uid` before this existed, so signing up doesn't change
   vote-uniqueness — it just attaches a durable, cross-device identity to
   a cookie value that was already the enforcement key.
+- **Profile page**: `/profile` is the signed-up user's own dashboard —
+  every game they created (including ones they've hidden), a public/hide
+  toggle per game (`POST /profile/games/<game_id>/hidden`, ownership
+  checked against `creator_uid` — reuses the same `web_games.hidden`
+  column the admin hide control writes), totals (game count, plays,
+  thumbs up/down) from `db.get_user_stats()`, and their last 20 plays
+  across those games from `db.get_user_play_history()`. Separate from
+  `/account`, which stays focused on identity (username, sign-in link).
+  The username link in the sidebar points here once a user is signed in.
+  `/leaderboard` is the public, all-users view of the same thumbs-up
+  totals (`db.get_user_leaderboard()`), unauthenticated.
 - `safety.py` — regex blocklist + CDN allowlist, scans generated HTML
   before it's ever written to disk.
 - `smoke_test.py` — headless Playwright load of generated HTML, fails the
@@ -142,6 +198,13 @@ Neither function is called directly from a request handler — `app.py`'s
 `/games/new` and `/games/<game_id>/enhance` POST routes just insert a
 `generation_requests` row (`status='queued'`) and redirect to the status
 page; `job_runner.py`'s poll loop is what actually calls them.
+
+`prompt_helper.py`'s `expand_prompt()` (Idea Forge) is a lighter sibling
+dispatched by the same `job_runner.py`, via a third `generation_requests`
+kind, `"prompt_help"` — but it's a single plain `ai_client.ask()` call,
+not the tool-calling submit/retry loop above, and never writes game files
+itself. Its result (`result_text`/`detected_genre`) is written straight to
+the `generation_requests` row rather than to `web_games`.
 
 `config` is a plain dict matching `config.yaml.example` — pass
 `yaml.safe_load(open("config.yaml"))` in. `newaiwebgame:` /
@@ -206,32 +269,46 @@ disk-sync register it.
 
 ```
 app.py                 Flask site: menu, /games/new, /games/<id>/enhance,
-                        /status/<job_id>, /api/games (sort), /api/games/<id>/info
-                        (prompt/model/tokens/lineage), rate endpoint, /signup,
-                        /u/<uid> (sign-in link), /account, access-log
-                        middleware, /admin/stats
+                        /games/new/idea-forge, /games/<id>/enhance/idea-forge,
+                        /games/<id>/download, /status/<job_id>, /api/games
+                        (sort), /api/games/<id>/info (prompt/model/tokens/
+                        lineage), rate endpoint, /signup, /u/<uid> (sign-in
+                        link), /signin, /account, /profile, /leaderboard,
+                        access-log middleware, /admin/stats,
+                        /admin/games/download
 job_runner.py           DB-polling background worker: claims generation_requests,
-                        dispatches to game_generator/game_enhancer
+                        dispatches to game_generator/game_enhancer/prompt_helper
 game_generator.py       generate_game() + shared run_generation_attempts() retry loop
 game_enhancer.py        enhance_game(): forks a new game_id/slug, links parent/root
+prompt_helper.py        Idea Forge: expand_prompt(), one plain ai_client.ask()
+                        call, genre-aware via genre_checklists.yaml
+genre_checklists.yaml   genre -> checklist data for prompt_helper.py; hand-edited,
+                        no code change needed to add/tune a genre
 safety.py               regex blocklist + CDN allowlist for generated HTML
 smoke_test.py           headless Playwright load, fails on JS errors
 ai_client.py            DeepSeek Chat Completions client (swap point for other providers)
 db.py                   SQLite: web_games, generation_requests, generation_attempts,
-                        ratings, access_log, users; sync_games_from_disk() startup backfill
+                        ratings, plays, access_log, users; sync_games_from_disk()
+                        startup backfill
 gunicorn.conf.py        post_fork hook starts job_runner workers per worker process
 templates/index.html    menu shell: sidebar (sort toggle, rate/enhance controls) + iframe
 templates/new_game.html  "Create New Game" prompt form
 templates/enhance.html  enhancement prompt + optional new-title form
-templates/status.html   job status page (polls static/status.js)
-templates/account.html  set username, show /u/<uid> sign-in link + your games
+templates/idea_forge.html  rough-idea input for both create/enhance modes
+templates/status.html   job status page (polls static/status.js), incl. the
+                        expanded-brief review/"Continue" step for prompt_help jobs
+templates/account.html  set username, show /u/<uid> sign-in link + token
+templates/signin.html   paste-a-token form (alternative to the /u/<uid> link)
+templates/profile.html  own games w/ hide toggle, play/like stats, recent plays
+templates/leaderboard.html  public all-users ranking by total thumbs_up
 templates/admin_stats.html  access-log/usage dashboard, behind ADMIN_TOKEN
 static/style.css        arcade-cabinet styling
 static/app.js           play-on-click, thumbs-vote, sort toggle behavior
 static/status.js        polls /api/status/<job_id> until success/failed
 games/block-dodge/      bundled game (game_id committed in meta.json)
 games/connect-4-4/      bundled game (game_id committed in meta.json)
-tests/                  pytest suite: db.py, startup disk-sync, fork linkage
+tests/                  pytest suite: db.py, startup disk-sync, fork linkage,
+                        prompt_helper
 config.yaml.example     copy to config.yaml
 .env.example            copy to .env: DEEPSEEK_API_KEY, ADMIN_TOKEN
 ```
