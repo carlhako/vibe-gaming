@@ -3,12 +3,13 @@ game_enhancer — the engine behind AI game enhancement.
 
 Given the game_id of an existing game and a natural-language enhancement/fix
 request, drives DeepSeek (via ai_client) to produce a revised
-self-contained index.html, following the same generate -> validate ->
-verify -> retry shape as game_generator.py (the reply uses the identical
-GAME_FILE/META/NOTES marker protocol, parsed with
-game_generator.parse_generation_response, validated statically (safety.py),
+self-contained index.html, following the same submit -> validate ->
+verify -> retry shape as game_generator.py (the model hands work over via
+the identical submit_game function tool, validated statically (safety.py),
 and only kept if a headless-browser smoke test (smoke_test.py) passes) —
-via the shared game_generator.run_generation_attempts() retry loop.
+via the shared game_generator.run_generation_attempts() conversation loop,
+where a rejected submission gets the concrete failure back as its
+tool-call result and the model patches the code it already has in context.
 
 Enhancing a game forks it: a brand-new game_id/slug/games/<slug>/ directory
 is written, linked to its source via parent_game_id (the immediate source)
@@ -107,27 +108,13 @@ def _build_system_prompt(source_title: str, existing_game_html: str) -> str:
         "play afterward, with clear feedback and an obvious way to restart.\n\n"
         "## Current game\n"
         f"```html\n{existing_game_html}\n```\n\n"
-        "## Reply format\n"
-        "Reply in EXACTLY this format, with nothing outside the markers:\n\n"
-        f"{gg._MARKERS[0]}\n```html\n<the complete updated index.html source>\n```\n"
-        f"{gg._MARKERS[1]}\n```json\n"
-        '{"title": "<short game title>", "description": "<one-sentence description>"}\n'
-        "```\n"
-        f"{gg._MARKERS[2]}\n<one or two sentences summarizing what changed, "
-        'or the literal word "None">\n\n'
-        "The NOTES section is advisory only. It is the last section — "
-        "nothing should follow it."
+        + gg.SUBMIT_TOOL_INSTRUCTIONS
+        + "\nUse `notes` for one or two sentences summarizing what changed."
     )
 
 
-def _build_user_prompt(description: str, attempt: int, previous_failure: str | None) -> str:
-    if attempt == 1 or previous_failure is None:
-        return f"Enhance/fix this game per this request: {description}"
-    return (
-        f"Attempt {attempt}: your previous attempt failed because: "
-        f"{previous_failure}\n\nFix it and resubmit the game in the required "
-        f"format. Original request: {description}"
-    )
+def _build_user_prompt(description: str) -> str:
+    return f"Enhance/fix this game per this request: {description}"
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +184,7 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
 
     outcome = gg.run_generation_attempts(
         description=description, requested_by=requested_by, system_prompt=system_prompt,
-        user_prompt_builder=lambda attempt, prev: _build_user_prompt(description, attempt, prev),
+        initial_user_prompt=_build_user_prompt(description),
         cfg=cfg, games_dir=games_dir, job_id=job_id, db_conn=db_conn,
         parent_game_id=source_row["game_id"], root_game_id=source_row["root_game_id"],
         title_override=title_override,

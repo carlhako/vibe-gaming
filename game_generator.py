@@ -2,11 +2,19 @@
 game_generator — the engine behind AI game generation.
 
 Given a natural-language description, drives DeepSeek (via `ai_client`) to
-produce a single self-contained `index.html` browser game: validated
-statically (safety.py), written to its real final location
+produce a single self-contained `index.html` browser game. The model
+submits its work by calling the `submit_game` function tool (title,
+description, html, notes) — no free-text format to parse. Each submission
+is validated statically (safety.py), written to its real final location
 (games/<slug>/), and only kept if a headless-browser smoke test
-(smoke_test.py) actually passes. Up to `max_attempts` retries are made, each
-one feeding the previous concrete failure back to the model.
+(smoke_test.py) actually passes.
+
+Retries are a single multi-turn conversation, not fresh one-shot prompts:
+a rejected submission gets the concrete failure (safety violation, smoke
+test console errors, malformed arguments) back as the tool-call result,
+so the model patches its previous code — which is still in its context —
+rather than regenerating from scratch. Up to `max_attempts` submissions
+are accepted before giving up.
 
 There is no Switchboard/reload step to trigger: app.py rebuilds its game
 manifest on every request via an mtime-based cache key, so a newly written
@@ -20,11 +28,12 @@ game directory is live the moment write_game_files() returns.
 #     via db.make_slug() so duplicate titles never collide. job_id, when given,
 #     tags each retry attempt in generation_attempts for audit/status purposes)
 #   run_generation_attempts(...) -> dict
-#     (shared ask/parse/safety-scan/write/smoke-test retry loop, reused by
-#     game_enhancer.enhance_game() for fork-on-enhance; see docstring)
+#     (shared submit -> safety-scan -> write -> smoke-test conversation loop,
+#     reused by game_enhancer.enhance_game() for fork-on-enhance; see docstring)
+#   SUBMIT_GAME_TOOL, SUBMIT_TOOL_INSTRUCTIONS  (shared with game_enhancer)
 #   slugify(title) -> str
 #   check_slug_collision(slug, games_dir) -> str | None
-#   parse_generation_response(text) -> dict
+#   parse_submission(arguments_json) -> dict
 #   write_game_files(slug, game_html, meta, games_dir) -> Path
 #   rollback_game_files(game_dir) -> None
 #   build_play_url(slug, config) -> str
@@ -53,70 +62,99 @@ import smoke_test
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
 RESERVED_SLUGS = {"backups"}
 
-_CODE_FENCE_RE = re.compile(r"```(?:\w+)?\s*\n(.*?)```", re.DOTALL)
-
 GAMES_DIR = Path(__file__).resolve().parent / "games"
 
 
 class GameGenerationError(Exception):
     """Recoverable failure in the generation pipeline. str(exc) is fed back
-    into the next retry's prompt as the concrete failure reason."""
+    to the model as the tool-call result so the next submission can fix it."""
 
 
 # ---------------------------------------------------------------------------
-# Response parsing
+# The submit_game tool — how the model hands its work back
 # ---------------------------------------------------------------------------
 
-_MARKERS = ("===GAME_FILE===", "===META===", "===NOTES===")
+SUBMIT_GAME_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "submit_game",
+        "description": (
+            "Submit the finished single-file HTML5 game. Always submit the "
+            "complete index.html source, never a diff or fragment. If the "
+            "submission is rejected, the tool result explains exactly why — "
+            "fix the problem and call submit_game again with the complete "
+            "corrected file."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Short game title.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "One-sentence description of the game.",
+                },
+                "html": {
+                    "type": "string",
+                    "description": "The complete index.html source, everything inline.",
+                },
+                "notes": {
+                    "type": "string",
+                    "description": "Optional: one or two sentences of notes for the requester.",
+                },
+            },
+            "required": ["title", "description", "html"],
+        },
+    },
+}
+
+# Forcing the named tool means the model can never reply with prose instead
+# of a submission — every turn either submits a game or errors.
+SUBMIT_TOOL_CHOICE = {"type": "function", "function": {"name": "submit_game"}}
+
+# Shared tail for both the generate and enhance system prompts.
+SUBMIT_TOOL_INSTRUCTIONS = (
+    "## Submitting\n"
+    "Hand the finished game over by calling the submit_game tool with the "
+    "COMPLETE index.html source in `html`, plus `title`, `description`, and "
+    "optionally `notes`. If the submission is rejected, the tool result "
+    "tells you exactly what failed (safety scan, runtime errors from a "
+    "headless-browser smoke test, etc.) — fix your code and call "
+    "submit_game again with the complete corrected file, never a diff or "
+    "fragment."
+)
 
 
-def parse_generation_response(text: str) -> dict:
-    """Split the model's reply into game_html / title / description / notes
-    using the required sentinel markers. Raises GameGenerationError on any
-    missing or out-of-order marker, a missing fenced code block, or META that
-    isn't valid JSON with non-empty 'title' and 'description' strings.
-
-    There is deliberately no required closing marker after NOTES: models
-    reliably omit a trailing sentinel that has nothing following it, so the
-    NOTES section simply runs to the end of the text."""
-    positions = []
-    for marker in _MARKERS:
-        idx = text.find(marker)
-        if idx == -1:
-            raise GameGenerationError(f"malformed response: missing marker '{marker}'")
-        positions.append(idx)
-
-    if positions != sorted(positions):
-        raise GameGenerationError("malformed response: markers are out of order")
-
-    game_idx, meta_idx, notes_idx = positions
-    game_section = text[game_idx + len(_MARKERS[0]):meta_idx]
-    meta_section = text[meta_idx + len(_MARKERS[1]):notes_idx]
-    notes_section = text[notes_idx + len(_MARKERS[2]):].strip()
-
-    game_match = _CODE_FENCE_RE.search(game_section)
-    if not game_match:
-        raise GameGenerationError("malformed response: missing code fence in GAME_FILE section")
-    meta_match = _CODE_FENCE_RE.search(meta_section)
-    if not meta_match:
-        raise GameGenerationError("malformed response: missing code fence in META section")
-
+def parse_submission(arguments_json: str) -> dict:
+    """Validate a submit_game tool call's raw JSON arguments into
+    game_html / title / description / notes. Raises GameGenerationError
+    (with a model-facing message) on invalid JSON or missing/empty fields."""
     try:
-        meta = json.loads(meta_match.group(1))
+        args = json.loads(arguments_json)
     except json.JSONDecodeError as exc:
-        raise GameGenerationError(f"malformed response: META is not valid JSON: {exc}")
+        raise GameGenerationError(f"malformed submission: arguments are not valid JSON: {exc}")
+    if not isinstance(args, dict):
+        raise GameGenerationError("malformed submission: arguments must be a JSON object")
 
-    title = meta.get("title") if isinstance(meta, dict) else None
-    description = meta.get("description") if isinstance(meta, dict) else None
+    title = args.get("title")
+    description = args.get("description")
+    html = args.get("html")
     if not isinstance(title, str) or not title.strip():
-        raise GameGenerationError("malformed response: META is missing a non-empty 'title'")
+        raise GameGenerationError("malformed submission: missing a non-empty 'title'")
     if not isinstance(description, str) or not description.strip():
-        raise GameGenerationError("malformed response: META is missing a non-empty 'description'")
+        raise GameGenerationError("malformed submission: missing a non-empty 'description'")
+    if not isinstance(html, str) or not html.strip():
+        raise GameGenerationError("malformed submission: missing a non-empty 'html'")
 
-    notes = "" if notes_section.lower() in ("", "none") else notes_section
+    notes = args.get("notes")
+    notes = notes.strip() if isinstance(notes, str) else ""
+    if notes.lower() == "none":
+        notes = ""
 
     return {
-        "game_html": game_match.group(1),
+        "game_html": html,
         "title": title.strip(),
         "description": description.strip(),
         "notes": notes,
@@ -221,27 +259,12 @@ def _build_system_prompt() -> str:
         "and an obvious way to restart without reloading the page. A small, "
         "focused game that fully works and feels polished beats an "
         "ambitious one that's half-finished.\n\n"
-        "## Reply format\n"
-        "Reply in EXACTLY this format, with nothing outside the markers:\n\n"
-        f"{_MARKERS[0]}\n```html\n<the complete index.html source>\n```\n"
-        f"{_MARKERS[1]}\n```json\n"
-        '{"title": "<short game title>", "description": "<one-sentence description>"}\n'
-        "```\n"
-        f"{_MARKERS[2]}\n<one or two sentences of notes, or the literal word "
-        '"None">\n\n'
-        "The NOTES section is advisory only. It is the last section — "
-        "nothing should follow it."
+        + SUBMIT_TOOL_INSTRUCTIONS
     )
 
 
-def _build_user_prompt(description: str, attempt: int, previous_failure: str | None) -> str:
-    if attempt == 1 or previous_failure is None:
-        return f"Generate a browser game for this request: {description}"
-    return (
-        f"Attempt {attempt}: your previous attempt failed because: "
-        f"{previous_failure}\n\nFix it and resubmit the game in the required "
-        f"format. Original request: {description}"
-    )
+def _build_user_prompt(description: str) -> str:
+    return f"Generate a browser game for this request: {description}"
 
 
 # ---------------------------------------------------------------------------
@@ -268,21 +291,24 @@ def format_report(result: dict) -> str:
 # Shared retry loop (used by generate_game() and game_enhancer.enhance_game())
 # ---------------------------------------------------------------------------
 
-def _redact_raw_response(raw_response: dict, game_html: str | None) -> str:
+def _redact_raw_response(raw_response: dict) -> str:
     """JSON-serialize ai_client's raw API response for the generation_attempts
-    audit trail, with the generated game source blanked out — it's already
-    on disk (or, on a failed attempt, already discarded), so keeping a second
-    copy in every attempt row would make the table balloon for no benefit.
-    Everything else (ids, timestamps, finish_reason, usage, reasoning_content
-    if thinking mode was on) is kept as-is."""
+    audit trail, with each submit_game call's arguments blanked out — the
+    game source in there is already on disk (or, on a failed attempt,
+    already discarded), so keeping a second copy in every attempt row would
+    make the table balloon for no benefit. Everything else (ids, timestamps,
+    finish_reason, usage, reasoning_content if thinking mode was on) is
+    kept as-is."""
     redacted = copy.deepcopy(raw_response)
-    if game_html:
-        placeholder = f"<stripped {len(game_html)} chars of game source>"
-        for choice in redacted.get("choices") or []:
-            message = choice.get("message") or {}
-            content = message.get("content")
-            if isinstance(content, str) and game_html in content:
-                message["content"] = content.replace(game_html, placeholder)
+    for choice in redacted.get("choices") or []:
+        message = choice.get("message") or {}
+        for tool_call in message.get("tool_calls") or []:
+            function = tool_call.get("function") or {}
+            arguments = function.get("arguments")
+            if isinstance(arguments, str):
+                function["arguments"] = (
+                    f"<stripped {len(arguments)} chars of submit_game arguments>"
+                )
     return json.dumps(redacted, default=str)
 
 
@@ -292,16 +318,19 @@ def _redact_raw_response(raw_response: dict, game_html: str | None) -> str:
 # LANGSMITH_TRACING is enabled in the environment.
 @traceable(name="run_generation_attempts")
 def run_generation_attempts(*, description: str, requested_by: str, system_prompt: str,
-                             user_prompt_builder, cfg: dict, games_dir: Path,
+                             initial_user_prompt: str, cfg: dict, games_dir: Path,
                              job_id: str | None = None, db_conn=None,
                              parent_game_id: str | None = None,
                              root_game_id: str | None = None,
                              title_override: str | None = None) -> dict:
-    """Drive the ask -> parse -> safety-scan -> mint id/slug -> write ->
-    smoke-test retry loop shared by a brand-new game and an enhancement
-    fork. Every successful or failed attempt is written to the real final
-    games/<slug>/ location (never a temp/staging dir) and rolled back on
-    failure, so a caller never has to reconcile a half-written directory.
+    """Drive the submit -> safety-scan -> mint id/slug -> write ->
+    smoke-test loop shared by a brand-new game and an enhancement fork,
+    as ONE multi-turn conversation: each rejected submit_game call gets
+    the concrete failure back as its tool result, so the model fixes the
+    code it already has in context instead of regenerating from scratch.
+    Every submission is written to the real final games/<slug>/ location
+    (never a temp/staging dir) and rolled back on failure, so a caller
+    never has to reconcile a half-written directory.
 
     `title_override`, when given, replaces the model's own title in the
     written meta.json/slug/result — used by enhance_game() to apply its
@@ -323,6 +352,11 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
     ai_timeout = cfg.get("timeout_seconds", 120)
     smoke_timeout = cfg.get("smoke_test_timeout_seconds", 20)
 
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": initial_user_prompt},
+    ]
+
     total_tokens = 0
     last_model = model or "default"
     last_effort = effort
@@ -334,33 +368,77 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
     notes = ""
     attempt = 0
 
+    def record_attempt(attempt, outcome, *, detail=None, tokens_used=None,
+                        duration_seconds=None, raw_response=None):
+        if job_id is not None:
+            db.add_generation_attempt(
+                job_id, attempt, outcome, detail=detail, tokens_used=tokens_used,
+                duration_seconds=duration_seconds, raw_response=raw_response,
+                conn=db_conn,
+            )
+
+    def reject(tool_call_id, reason):
+        """Feed a failure back to the model as the tool-call result."""
+        messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": (
+                f"REJECTED: {reason}\n\nFix the problem and call submit_game "
+                "again with the complete corrected index.html source."
+            ),
+        })
+
     for attempt in range(1, max_attempts + 1):
         attempt_t0 = time.monotonic()
-        user_prompt = user_prompt_builder(attempt, previous_failure)
         try:
-            ask_result = ai.ask(
-                user_prompt,
-                system_prompt=system_prompt,
+            ask_result = ai.ask_with_tools(
+                messages,
+                tools=[SUBMIT_GAME_TOOL],
+                tool_choice=SUBMIT_TOOL_CHOICE,
                 model=model,
                 effort=effort,
                 timeout=ai_timeout,
             )
         except ai.AIError as exc:
+            # Transport/API failure: nothing to append, same conversation
+            # state is retried on the next attempt.
             previous_failure = f"AI error: {exc}"
-            if job_id is not None:
-                db.add_generation_attempt(
-                    job_id, attempt, "ai_error", detail=previous_failure,
-                    duration_seconds=time.monotonic() - attempt_t0, conn=db_conn,
-                )
+            record_attempt(attempt, "ai_error", detail=previous_failure,
+                           duration_seconds=time.monotonic() - attempt_t0)
             continue
 
         total_tokens += ask_result.output_tokens
         last_model = ask_result.model or "default"
         last_effort = ask_result.effort
+        redacted = _redact_raw_response(ask_result.raw_response)
+        messages.append(ask_result.message)
 
-        parsed = None
+        if not ask_result.tool_calls:
+            previous_failure = "malformed submission: no submit_game tool call in reply"
+            messages.append({
+                "role": "user",
+                "content": "You must call the submit_game tool to hand the game over. "
+                           "Call it now with the complete index.html source.",
+            })
+            record_attempt(attempt, "ai_error", detail=previous_failure,
+                           tokens_used=ask_result.output_tokens,
+                           duration_seconds=time.monotonic() - attempt_t0,
+                           raw_response=redacted)
+            continue
+
+        # Every tool_call_id needs a tool reply before the next model turn;
+        # only the first submission is evaluated.
+        submission, extras = ask_result.tool_calls[0], ask_result.tool_calls[1:]
+        for extra in extras:
+            messages.append({
+                "role": "tool",
+                "tool_call_id": extra.id,
+                "content": "Ignored: submit one game per turn. Only the first "
+                           "submit_game call was evaluated.",
+            })
+
         try:
-            parsed = parse_generation_response(ask_result.text)
+            parsed = parse_submission(submission.arguments)
 
             violations = safety.scan(parsed["game_html"])
             if violations:
@@ -396,34 +474,24 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
             title = final_title
             description_out = parsed["description"]
             notes = parsed["notes"]
-            if job_id is not None:
-                db.add_generation_attempt(
-                    job_id, attempt, "success", tokens_used=ask_result.output_tokens,
-                    duration_seconds=time.monotonic() - attempt_t0,
-                    raw_response=_redact_raw_response(ask_result.raw_response, parsed["game_html"]),
-                    conn=db_conn,
-                )
+            record_attempt(attempt, "success", tokens_used=ask_result.output_tokens,
+                           duration_seconds=time.monotonic() - attempt_t0,
+                           raw_response=redacted)
             break
 
         except GameGenerationError as exc:
             previous_failure = str(exc)
-            if job_id is not None:
-                msg = str(exc)
-                if msg.startswith("safety violation"):
-                    outcome = "safety_violation"
-                elif msg.startswith("smoke test failed"):
-                    outcome = "smoke_test_failed"
-                else:
-                    outcome = "ai_error"
-                db.add_generation_attempt(
-                    job_id, attempt, outcome, detail=msg,
-                    tokens_used=ask_result.output_tokens,
-                    duration_seconds=time.monotonic() - attempt_t0,
-                    raw_response=_redact_raw_response(
-                        ask_result.raw_response, parsed["game_html"] if parsed else None
-                    ),
-                    conn=db_conn,
-                )
+            reject(submission.id, previous_failure)
+            if previous_failure.startswith("safety violation"):
+                outcome = "safety_violation"
+            elif previous_failure.startswith("smoke test failed"):
+                outcome = "smoke_test_failed"
+            else:
+                outcome = "ai_error"
+            record_attempt(attempt, outcome, detail=previous_failure,
+                           tokens_used=ask_result.output_tokens,
+                           duration_seconds=time.monotonic() - attempt_t0,
+                           raw_response=redacted)
             continue
 
     return {
@@ -451,7 +519,7 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
     t0 = time.monotonic()
     outcome = run_generation_attempts(
         description=description, requested_by=requested_by, system_prompt=system_prompt,
-        user_prompt_builder=lambda attempt, prev: _build_user_prompt(description, attempt, prev),
+        initial_user_prompt=_build_user_prompt(description),
         cfg=cfg, games_dir=games_dir, job_id=job_id, db_conn=db_conn,
     )
     duration = time.monotonic() - t0

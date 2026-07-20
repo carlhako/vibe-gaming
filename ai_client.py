@@ -4,6 +4,10 @@ ai_client — prompt DeepSeek from anywhere in this project.
     import ai_client as ai
     answer = ai.ask("what is the capital of France?").text
 
+`ask()` is the one-shot text API; `ask_with_tools()` is the multi-turn
+function-calling API used by the game-generation loop (caller owns the
+message list and appends tool results between calls).
+
 Drop-in replacement for home-net's `irc_bot.libs.ai` (same `ask()` shape:
 `AskResult(text, output_tokens, model, effort)`, `AIError`) so
 game_generator.py / game_enhancer.py needed near-zero changes when ported
@@ -56,6 +60,24 @@ class AIError(Exception):
 @dataclass
 class AskResult:
     text: str
+    output_tokens: int
+    model: str
+    effort: str
+    raw_response: dict
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: str  # raw JSON string, exactly as the model produced it
+
+
+@dataclass
+class ToolAskResult:
+    message: dict         # assistant message dict, ready to append to the conversation
+    tool_calls: list[ToolCall]
+    text: str             # any plain-text content alongside/instead of tool calls
     output_tokens: int
     model: str
     effort: str
@@ -139,6 +161,74 @@ def ask(
     output_tokens = response.usage.completion_tokens if response.usage else 0
 
     return AskResult(
+        text=text,
+        output_tokens=output_tokens,
+        model=resolved_model,
+        effort=resolved_effort,
+        raw_response=response.model_dump(),
+    )
+
+
+def ask_with_tools(
+    messages: list[dict],
+    *,
+    tools: list[dict],
+    tool_choice: dict | str | None = "auto",
+    model: str | None = None,
+    effort: str | None = None,
+    temperature: float | None = None,
+    timeout: int | None = 120,
+) -> ToolAskResult:
+    """One turn of a multi-turn, function-calling conversation. The caller
+    owns the message list: append the returned `.message`, then one
+    {"role": "tool", "tool_call_id": ..., "content": ...} reply per tool
+    call, and call again. Raises AIError.
+
+    `reasoning_content` (present when thinking mode is on) is stripped from
+    the returned `.message` — DeepSeek rejects requests that echo it back.
+    """
+    resolved_model = _resolve_model(model)
+    extra_body, resolved_effort, resolved_temperature = _resolve_thinking(effort, temperature)
+
+    client = _client()
+    create_kwargs = dict(
+        model=resolved_model,
+        messages=messages,
+        tools=tools,
+        timeout=timeout,
+        extra_body=extra_body,
+    )
+    if tool_choice is not None:
+        create_kwargs["tool_choice"] = tool_choice
+    if resolved_temperature is not None:
+        create_kwargs["temperature"] = resolved_temperature
+
+    try:
+        response = client.chat.completions.create(**create_kwargs)
+    except APITimeoutError:
+        raise AIError(f"Error: timed out after {timeout}s")
+    except APIError as exc:
+        raise AIError(f"Error: {exc}")
+    except Exception as exc:
+        raise AIError(f"Error: {exc}")
+
+    choice = response.choices[0] if response.choices else None
+    if choice is None:
+        raise AIError("Error: response contained no choices")
+
+    message_dict = choice.message.model_dump(exclude_none=True)
+    message_dict.pop("reasoning_content", None)
+
+    tool_calls = [
+        ToolCall(id=tc.id, name=tc.function.name, arguments=tc.function.arguments)
+        for tc in (choice.message.tool_calls or [])
+    ]
+    text = (choice.message.content or "").strip()
+    output_tokens = response.usage.completion_tokens if response.usage else 0
+
+    return ToolAskResult(
+        message=message_dict,
+        tool_calls=tool_calls,
         text=text,
         output_tokens=output_tokens,
         model=resolved_model,

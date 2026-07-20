@@ -119,16 +119,24 @@ db_conn=None, games_dir=None, job_id=None)` and
 config, db_conn=None, games_dir=None, job_id=None, new_title=None)` both
 return a result dict with a `message` key (human-readable report) and
 `success`/`url`/`error`/`game_id` etc. They share one retry loop —
-`game_generator.run_generation_attempts()` — covering: build a prompt →
-call `ai_client.ask()` → parse the reply against a strict
-`===GAME_FILE===` / `===META===` / `===NOTES===` marker format
-(`parse_generation_response`) → run `safety.scan()` on the HTML → mint a
+`game_generator.run_generation_attempts()` — covering: build the prompts →
+call `ai_client.ask_with_tools()` → validate the `submit_game` tool call's
+arguments (`parse_submission`) → run `safety.scan()` on the HTML → mint a
 `game_id`/slug and write `games/<slug>/{index.html,meta.json}` →
 `smoke_test.run_smoke_test()` → on any failure, delete the half-written
-directory and retry with the concrete failure fed back into the next
-prompt, up to `max_attempts`. On success, `db.register_web_game()` inserts
-the registry row (`enhance_game` sets `parent_game_id`/`root_game_id`;
-`generate_game` leaves them as a fresh original).
+directory and retry, up to `max_attempts` submissions. On success,
+`db.register_web_game()` inserts the registry row (`enhance_game` sets
+`parent_game_id`/`root_game_id`; `generate_game` leaves them as a fresh
+original).
+
+The loop is one multi-turn, function-calling conversation per job: the
+model returns work by calling a `submit_game(title, description, html,
+notes)` tool (`tool_choice` forced, so it can't reply with prose), and a
+rejected submission gets the concrete failure back as that tool call's
+result — the model then patches the code it already has in context
+rather than regenerating from scratch. There is no free-text reply format
+to parse anymore; `parse_submission()` just validates the tool-call JSON
+arguments.
 
 Neither function is called directly from a request handler — `app.py`'s
 `/games/new` and `/games/<game_id>/enhance` POST routes just insert a
@@ -154,6 +162,14 @@ temperature pinned to 0.0 (DeepSeek's documented recommendation for
 code/math) unless overridden. The old `deepseek-chat`/`deepseek-reasoner`
 names retire 2026-07-24 — don't reintroduce them. Requires
 `DEEPSEEK_API_KEY` in the environment (`.env`, loaded via python-dotenv).
+
+`ai_client.ask_with_tools(messages, tools=..., tool_choice=..., ...)` is
+the multi-turn function-calling entry point the generation loop uses; the
+caller owns the message list and appends tool results between calls. It
+strips `reasoning_content` from returned messages (DeepSeek rejects
+requests that echo it back). If DeepSeek's thinking mode ever rejects the
+`tools` parameter, drop `effort` below "high" in config.yaml for the
+generation/enhancement blocks rather than changing the loop.
 
 Observability: the OpenAI client is wrapped with LangSmith's
 `wrap_openai`, and `run_generation_attempts()` is `@traceable`, so with
