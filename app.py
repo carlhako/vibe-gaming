@@ -203,13 +203,18 @@ def create_app(games_dir=None) -> Flask:
         static_folder=str(_BASE_DIR / "static"),
     )
 
+    # Bundled games ship their game_id in meta.json but vibegames.db is
+    # gitignored, so a fresh clone has no web_games rows for them until
+    # this backfills one per game. No-op on every start after the first.
+    db.sync_games_from_disk(games_dir)
+
     cache_lock = threading.Lock()
     cache = {"key": None, "games": []}
 
     def get_games(sort: str = "alpha", include_hidden: bool = False) -> list[dict]:
         """The disk-scanned manifest (cached, mtime-keyed) stays the source
-        of truth for *which* games exist — including hand-written games
-        like sample-game that were never registered in web_games — but
+        of truth for *which* games exist — including hand-dropped games
+        with no game_id that were never registered in web_games — but
         rating tallies live in the DB and can change without any meta.json
         rewrite, so they're merged in fresh on every call rather than
         folded into the manifest cache."""

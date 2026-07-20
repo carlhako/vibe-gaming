@@ -21,7 +21,10 @@ If you're moving from an existing machine instead of a fresh clone, copy
 the whole `vibegames/` directory over (including `games/` and, if you want
 to keep history, `vibegames.db`) rather than starting from git alone —
 `vibegames.db` and any generated games under `games/` are gitignored and
-won't come from `git clone`.
+won't come from `git clone`. The copied `vibegames.db` must already be on
+the current GUID schema (`game_id`-keyed `web_games`); the one-off
+migration script for pre-GUID databases has been removed, so a DB from
+the old platform can't be upgraded from here.
 
 ## 3. Python environment
 
@@ -61,43 +64,19 @@ Edit `.env` and set:
 `game_web.base_url` so generated "play it" links point at the public URL
 instead of `localhost`.
 
-## 6. Migrate/register existing games
+## 6. Database and bundled games — nothing to do
 
-**Run this even on a first-ever install** — it's what creates
-`vibegames.db` and its schema in the first place, and it's always safe to
-re-run (idempotent).
+There's no migration or seeding step. On first start the app creates
+`vibegames.db` with the current schema and registers the two bundled
+games (Block Dodge and Connect 4×4) from their committed `meta.json`
+`game_id`s, so they arrive with working rate/Enhance controls. This
+disk-sync runs on every start and is a no-op once the rows exist.
 
-```bash
-python3 migrate_to_guid_schema.py
-```
-
-What this does, and why it matters beyond a fresh install:
-
-- Creates `vibegames.db` with the current schema if it doesn't exist yet.
-- If you copied over an **older** `vibegames.db` (pre-GUID schema, `slug`
-  as the primary key), rebuilds `web_games` into the current `game_id`-keyed
-  schema, preserving every row's data.
-- If you copied over games under `games/` that were never registered in
-  the DB at all — most notably the bundled `games/sample-game/`, which is
-  hand-written and has no `game_id` in its `meta.json` — this mints a
-  `game_id` for each one, writes it into `meta.json`, and inserts the
-  corresponding `web_games` row. **Without this step, such games still
-  list and play fine, but show no Enhance link and can't be rated** (both
-  require a `game_id`).
-- Backs up `vibegames.db` to `vibegames.db.bak` before touching anything.
-
-You'll see output like:
-
-```
-web_games table does not exist yet; creating current schema.
-Registered previously-unregistered game 'sample-game' -> game_id=1474f6d8...
-  updated games/sample-game/meta.json
-Synced 1 previously-unregistered game(s) from disk into the DB.
-```
-
-If you ever drop a *new* hand-written game directory straight into
-`games/` (skipping the web UI), re-run this script afterward to give it a
-`game_id` too.
+If you ever drop a hand-written game directory straight into `games/`
+(skipping the web UI), it lists and plays as-is. To also give it
+rate/Enhance controls, add a `game_id` (any fresh uuid4 hex, e.g. from
+`python3 -c "import uuid; print(uuid.uuid4().hex)"`) to its `meta.json`
+and restart — the startup sync registers it.
 
 ## 7. Run it
 
@@ -162,8 +141,8 @@ since it depends on your proxy setup; see the comments near
 
 ## 9. Verify
 
-- `http://<vm-ip>:8600/` — sidebar should show your games (including
-  Sample Snake with a working Enhance button if you ran step 6).
+- `http://<vm-ip>:8600/` — sidebar should show Block Dodge and
+  Connect 4×4, each with working rate and Enhance controls.
 - `http://<vm-ip>:8600/games/new` — submit a prompt, confirm it reaches
   `success` on the status page.
 - `http://<vm-ip>:8600/admin/stats?token=<your ADMIN_TOKEN>` — should

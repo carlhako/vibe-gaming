@@ -23,10 +23,11 @@ source venv/bin/activate
 pip install -r requirements.txt
 playwright install chromium   # one-time, needed by the smoke test
 
-python3 migrate_to_guid_schema.py   # creates vibegames.db and registers games/sample-game
-
 python3 app.py                 # serves on http://localhost:8600
 ```
+
+First start creates `vibegames.db` and registers the two bundled games
+(Block Dodge and Connect 4×4) automatically — no migration step.
 
 That's it — `python3 app.py` starts both the Flask app and the background
 job-runner worker thread(s) that actually talk to DeepSeek.
@@ -77,8 +78,9 @@ pytest
 ```
 
 The suite covers `db.py` (schema, upsert semantics, race-safe job
-claiming, rating uniqueness enforcement), migration idempotency, and
-fork-on-enhance linkage across a multi-generation chain. Tests use an
+claiming, rating uniqueness enforcement), the startup disk-sync that
+registers bundled games on a fresh clone, and fork-on-enhance linkage
+across a multi-generation chain. Tests use an
 isolated temp SQLite DB and mock both the DeepSeek client and the
 Playwright smoke test — no network calls or browser required.
 

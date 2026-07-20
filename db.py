@@ -11,10 +11,12 @@ All functions accept an optional `conn` parameter for dependency injection
 (useful in tests with in-memory databases).
 """
 
+import json
 import re
 import sqlite3
 import datetime
 import uuid
+from pathlib import Path
 
 DB_PATH = "vibegames.db"
 
@@ -223,6 +225,59 @@ def register_web_game(game_id, slug, title, description, requested_by, status, a
     c.commit()
 
 
+def sync_games_from_disk(games_dir, conn=None) -> int:
+    """Insert a web_games row for any games/<slug>/ directory whose
+    meta.json carries a game_id that has no row yet.
+
+    vibegames.db is gitignored, so on a fresh clone the bundled games
+    (whose game_ids ARE committed, in their meta.json) have no rows —
+    without one a game still lists and plays off the disk scan, but can't
+    be rated or enhanced. Called at app startup; INSERT OR IGNORE keyed on
+    game_id makes it a no-op on every start after the first and safe under
+    multiple gunicorn workers. Never writes to disk: a directory with no
+    game_id in its meta.json is left alone (add one — any uuid4 hex — to
+    opt a hand-dropped game into ratings/enhancement).
+
+    Returns the number of rows inserted."""
+    games_dir = Path(games_dir)
+    if not games_dir.exists():
+        return 0
+    c = _c(conn)
+    now = _now()
+    inserted = 0
+    for entry in sorted(games_dir.iterdir()):
+        if not entry.is_dir() or not (entry / "index.html").exists():
+            continue
+        meta_path = entry / "meta.json"
+        if not meta_path.exists():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        game_id = meta.get("game_id")
+        if not game_id:
+            continue
+        cur = c.execute(
+            """
+            INSERT OR IGNORE INTO web_games
+                (game_id, slug, title, description, requested_by, status, attempts,
+                 version, parent_game_id, root_game_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'success', 1, ?, ?, ?, ?, ?)
+            """,
+            (
+                game_id, entry.name, meta.get("title", entry.name),
+                meta.get("description", ""), meta.get("requested_by") or "system",
+                meta.get("version", 1), meta.get("parent_game_id"),
+                meta.get("root_game_id") or game_id,
+                meta.get("created_at") or now, now,
+            ),
+        )
+        inserted += cur.rowcount
+    c.commit()
+    return inserted
+
+
 def get_web_game(game_id, conn=None):
     c = _c(conn)
     row = c.execute("SELECT * FROM web_games WHERE game_id=?", (game_id,)).fetchone()
@@ -373,7 +428,7 @@ def rename_game(game_id, title, conn=None) -> bool:
 
 def set_game_hidden(game_id, hidden: bool, conn=None) -> bool:
     """Returns False if game_id has no web_games row (nothing to update —
-    e.g. a hand-written game like sample-game that was never registered)."""
+    e.g. a hand-dropped game with no game_id that was never registered)."""
     c = _c(conn)
     cur = c.execute(
         "UPDATE web_games SET hidden=?, updated_at=? WHERE game_id=?",

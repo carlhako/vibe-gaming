@@ -4,5 +4,8 @@
   "requested_by": "thelounge20",
   "created_at": "2026-07-17T08:45:17.169613Z",
   "version": 1,
-  "prompt": "make a connect 4x4 game that you play with the mouse, create a easy and hard ai."
+  "prompt": "make a connect 4x4 game that you play with the mouse, create a easy and hard ai.",
+  "game_id": "5f206c361f0a484383cd8c60a05456e7",
+  "parent_game_id": null,
+  "root_game_id": "5f206c361f0a484383cd8c60a05456e7"
 }

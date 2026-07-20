@@ -88,11 +88,13 @@ aspirational:
   attempt on any uncaught JS exception or `console.error`.
 - `ai_client.py` — DeepSeek client (Chat Completions API via the `openai`
   SDK pointed at DeepSeek's base URL).
-- `games/sample-game/` — a hand-written placeholder (Snake) proving the
-  serving path works without spending an API call; note it predates the
-  GUID schema and has no `game_id` in its `meta.json`, so it has no
-  Enhance/rate controls in the sidebar (both require a `game_id`) — it
-  still lists and plays fine.
+- **Bundled games**: `games/block-dodge/` and `games/connect-4-4/` ship
+  in git with a `game_id` committed in their `meta.json`.
+  `db.sync_games_from_disk()` (called at app startup) backfills a
+  `web_games` row for any such game that has none — `vibegames.db` is
+  gitignored, so this is what gives the bundled games working rate/Enhance
+  controls on a fresh clone. A game directory with no `game_id` still
+  lists and plays off the disk scan, but can't be rated or enhanced.
 
 ## Not done / explicitly out of scope
 
@@ -171,8 +173,9 @@ python3 app.py                 # serves on :8600, starts job_runner workers too
 directory dropped in with a valid `index.html` (+ optional `meta.json`)
 shows up immediately — useful for testing without going through the
 generation pipeline at all. Ratings, however, live in the DB keyed by
-`game_id`, so a game with no `game_id` in its `meta.json` (like
-`sample-game`) can't be rated or enhanced.
+`game_id`, so a game with no `game_id` in its `meta.json` can't be rated
+or enhanced; give it one (any uuid4 hex) and restart to have the startup
+disk-sync register it.
 
 ## File map
 
@@ -190,8 +193,7 @@ safety.py               regex blocklist + CDN allowlist for generated HTML
 smoke_test.py           headless Playwright load, fails on JS errors
 ai_client.py            DeepSeek Chat Completions client (swap point for other providers)
 db.py                   SQLite: web_games, generation_requests, generation_attempts,
-                        ratings, access_log, users
-migrate_to_guid_schema.py  one-time migration from the pre-GUID schema (idempotent)
+                        ratings, access_log, users; sync_games_from_disk() startup backfill
 gunicorn.conf.py        post_fork hook starts job_runner workers per worker process
 templates/index.html    menu shell: sidebar (sort toggle, rate/enhance controls) + iframe
 templates/new_game.html  "Create New Game" prompt form
@@ -202,8 +204,9 @@ templates/admin_stats.html  access-log/usage dashboard, behind ADMIN_TOKEN
 static/style.css        arcade-cabinet styling
 static/app.js           play-on-click, thumbs-vote, sort toggle behavior
 static/status.js        polls /api/status/<job_id> until success/failed
-games/sample-game/      hand-written placeholder game (no game_id; proves serving path)
-tests/                  pytest suite: db.py, migration idempotency, fork linkage
+games/block-dodge/      bundled game (game_id committed in meta.json)
+games/connect-4-4/      bundled game (game_id committed in meta.json)
+tests/                  pytest suite: db.py, startup disk-sync, fork linkage
 config.yaml.example     copy to config.yaml
 .env.example            copy to .env: DEEPSEEK_API_KEY, ADMIN_TOKEN
 ```
