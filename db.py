@@ -145,7 +145,10 @@ _ADDED_COLUMNS = {
         ("tokens_used", "INTEGER"), ("creator_uid", "TEXT"),
         ("hidden", "INTEGER NOT NULL DEFAULT 0"),
     ],
-    "generation_requests": [("tokens_used", "INTEGER"), ("creator_uid", "TEXT")],
+    "generation_requests": [
+        ("tokens_used", "INTEGER"), ("creator_uid", "TEXT"),
+        ("result_text", "TEXT"), ("detected_genre", "TEXT"),
+    ],
     "generation_attempts": [("duration_seconds", "REAL"), ("raw_response", "TEXT")],
 }
 
@@ -564,7 +567,7 @@ def get_web_games(sort="alpha", conn=None):
 
 def create_generation_request(job_id, kind, prompt, requested_by, source_game_id=None,
                                new_title=None, creator_uid=None, conn=None):
-    """Insert a new queued job. kind is 'create' or 'enhance'."""
+    """Insert a new queued job. kind is 'create', 'enhance', or 'prompt_help'."""
     c = _c(conn)
     now = _now()
     c.execute(
@@ -587,7 +590,8 @@ def get_generation_request(job_id, conn=None):
     return dict(row) if row else None
 
 
-def update_generation_request(job_id, status=None, result_game_id=None, attempts=None,
+def update_generation_request(job_id, status=None, result_game_id=None, result_text=None,
+                               detected_genre=None, attempts=None,
                                model=None, effort=None, duration_seconds=None,
                                tokens_used=None, error=None, conn=None):
     """Sparse update: only columns explicitly passed (non-None) are touched,
@@ -599,6 +603,10 @@ def update_generation_request(job_id, status=None, result_game_id=None, attempts
         fields["status"] = status
     if result_game_id is not None:
         fields["result_game_id"] = result_game_id
+    if result_text is not None:
+        fields["result_text"] = result_text
+    if detected_genre is not None:
+        fields["detected_genre"] = detected_genre
     if attempts is not None:
         fields["attempts"] = attempts
     if model is not None:

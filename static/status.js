@@ -8,6 +8,9 @@
   const statsEl = document.getElementById("status-stats");
   const actions = document.getElementById("status-actions");
   const powerLight = document.getElementById("power-light");
+  const promptResult = document.getElementById("status-prompt-result");
+  const genreHint = document.getElementById("status-genre-hint");
+  const promptTextarea = document.getElementById("prompt-result-text");
 
   const LABELS = {
     queued: "Queued…",
@@ -19,7 +22,16 @@
   const KIND_VERB = {
     create: "Builds",
     enhance: "Enhancements",
+    prompt_help: "Prompt expansions",
   };
+
+  function appendHidden(form, name, value) {
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = name;
+    input.value = value;
+    form.appendChild(input);
+  }
 
   let pollTimer = null;
   let tickTimer = null;
@@ -100,18 +112,48 @@
     eta.textContent = "";
 
     if (job.status === "success") {
-      detail.textContent = `"${job.result_title}" is ready.`;
       const stats = [
         job.duration_seconds != null ? `Took ${formatDuration(job.duration_seconds)}` : null,
         job.tokens_used != null ? `${job.tokens_used} tokens` : null,
       ].filter(Boolean).join(" · ");
       statsEl.textContent = stats;
-      const link = document.createElement("a");
-      link.className = "play-link";
-      link.href = "/play/" + encodeURIComponent(job.result_slug);
-      link.textContent = "Play now →";
-      actions.appendChild(link);
-      actions.hidden = false;
+
+      if (job.kind === "prompt_help") {
+        detail.textContent = "Your expanded brief is ready — review and edit it below.";
+        genreHint.textContent = job.detected_genre
+          ? `Detected genre: ${job.detected_genre} — checklist applied.`
+          : "";
+        promptTextarea.value = job.result_text || "";
+        promptResult.hidden = false;
+
+        const continueBtn = document.createElement("button");
+        continueBtn.type = "button";
+        continueBtn.className = "play-link";
+        continueBtn.textContent = "Continue →";
+        continueBtn.addEventListener("click", () => {
+          const form = document.createElement("form");
+          form.method = "post";
+          if (job.source_game_id) {
+            form.action = "/games/" + encodeURIComponent(job.source_game_id) + "/enhance";
+            appendHidden(form, "description", promptTextarea.value);
+          } else {
+            form.action = "/games/new";
+            appendHidden(form, "prompt", promptTextarea.value);
+          }
+          document.body.appendChild(form);
+          form.submit();
+        });
+        actions.appendChild(continueBtn);
+        actions.hidden = false;
+      } else {
+        detail.textContent = `"${job.result_title}" is ready.`;
+        const link = document.createElement("a");
+        link.className = "play-link";
+        link.href = "/play/" + encodeURIComponent(job.result_slug);
+        link.textContent = "Play now →";
+        actions.appendChild(link);
+        actions.hidden = false;
+      }
     } else if (job.status === "failed") {
       detail.textContent = job.error || "Something went wrong.";
     }

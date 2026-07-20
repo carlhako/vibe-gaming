@@ -527,6 +527,93 @@ def create_app(games_dir=None) -> Flask:
             )
         return resp
 
+    @app.get("/games/new/idea-forge")
+    def idea_forge_new_form():
+        vg_uid = request.cookies.get(_VG_UID_COOKIE)
+        user = db.get_user(vg_uid) if vg_uid else None
+        prefill = request.args.get("prompt", "")
+        return render_template(
+            "idea_forge.html", mode="create", game=None, user=user, prefill=prefill
+        )
+
+    @app.post("/games/new/idea-forge")
+    def idea_forge_new_submit():
+        rough = (request.form.get("rough_prompt") or "").strip()
+        if not rough:
+            return render_template(
+                "idea_forge.html", mode="create", game=None,
+                error="Please describe your rough idea first.",
+            ), 400
+
+        vg_uid = request.cookies.get(_VG_UID_COOKIE)
+        set_cookie = vg_uid is None
+        if vg_uid is None:
+            vg_uid = uuid.uuid4().hex
+
+        requested_by = "web:" + vg_uid[:12]
+        job_id = uuid.uuid4().hex
+        db.create_generation_request(
+            job_id=job_id, kind="prompt_help", prompt=rough, requested_by=requested_by,
+            creator_uid=vg_uid,
+        )
+
+        resp = redirect(url_for("job_status_page", job_id=job_id))
+        if set_cookie:
+            resp.set_cookie(
+                _VG_UID_COOKIE, vg_uid, max_age=_VG_UID_MAX_AGE,
+                httponly=False, samesite="Lax",
+            )
+        return resp
+
+    @app.get("/games/<game_id>/enhance/idea-forge")
+    def idea_forge_enhance_form(game_id):
+        if not _GAME_ID_RE.match(game_id):
+            abort(404)
+        game = db.get_web_game(game_id)
+        if game is None:
+            abort(404)
+        vg_uid = request.cookies.get(_VG_UID_COOKIE)
+        user = db.get_user(vg_uid) if vg_uid else None
+        prefill = request.args.get("description", "")
+        return render_template(
+            "idea_forge.html", mode="enhance", game=game, user=user, prefill=prefill
+        )
+
+    @app.post("/games/<game_id>/enhance/idea-forge")
+    def idea_forge_enhance_submit(game_id):
+        if not _GAME_ID_RE.match(game_id):
+            abort(404)
+        game = db.get_web_game(game_id)
+        if game is None:
+            abort(404)
+
+        rough = (request.form.get("rough_prompt") or "").strip()
+        if not rough:
+            return render_template(
+                "idea_forge.html", mode="enhance", game=game,
+                error="Please describe your rough idea first.",
+            ), 400
+
+        vg_uid = request.cookies.get(_VG_UID_COOKIE)
+        set_cookie = vg_uid is None
+        if vg_uid is None:
+            vg_uid = uuid.uuid4().hex
+
+        requested_by = "web:" + vg_uid[:12]
+        job_id = uuid.uuid4().hex
+        db.create_generation_request(
+            job_id=job_id, kind="prompt_help", prompt=rough, requested_by=requested_by,
+            source_game_id=game_id, creator_uid=vg_uid,
+        )
+
+        resp = redirect(url_for("job_status_page", job_id=job_id))
+        if set_cookie:
+            resp.set_cookie(
+                _VG_UID_COOKIE, vg_uid, max_age=_VG_UID_MAX_AGE,
+                httponly=False, samesite="Lax",
+            )
+        return resp
+
     @app.post("/signup")
     def signup():
         """No input needed — signing up just upgrades whatever vg_uid the
@@ -690,6 +777,9 @@ def create_app(games_dir=None) -> Flask:
             "generating_started_at": job["updated_at"] if job["status"] == "generating" else None,
             "tokens_used": job["tokens_used"],
             "duration_seconds": job["duration_seconds"],
+            "source_game_id": job["source_game_id"],
+            "result_text": job.get("result_text"),
+            "detected_genre": job.get("detected_genre"),
         })
 
     @app.before_request

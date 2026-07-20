@@ -1,0 +1,73 @@
+# Genre checklists for Idea Forge (prompt_helper.py).
+#
+# Each entry is a genre key -> {label, checklist}. The checklist bullets get
+# concatenated into the DeepSeek system prompt on every Idea Forge call, so
+# keep each bullet short, concrete, and checkable — this is a token cost on
+# every request, not free documentation.
+#
+# To add or tune a genre, just edit this file — no code change needed.
+# Picked up on process restart (this file is loaded once at import time,
+# same as config.yaml elsewhere in this app; there's no hot-reload).
+
+fps:
+  label: "First-person shooter"
+  checklist:
+    - "Real lighting/shading on walls and floors, not flat/blank color fills"
+    - "Textured or pattern-varied surfaces, not blank walls"
+    - "A visible crosshair/reticle in the center of the screen"
+    - "A visible weapon viewmodel (hands/gun) in the lower part of the screen"
+    - "Clear hit feedback (flash, sound, damage indicator) on hits and on being hit"
+    - "Mouse-look camera with pointer lock, WASD movement"
+
+racing:
+  label: "Racing / driving"
+  checklist:
+    - "Explicitly state whether the game is 2D top-down/isometric or 3D with a chase/cockpit camera — never leave the perspective unstated"
+    - "If 3D: a chase camera following behind the vehicle, with the track receding into the distance, not a flat 2D track"
+    - "Vehicle physics: acceleration, braking, and weighted steering/turning, not instant snapping"
+    - "A clearly rendered track/road with visible edges or boundaries"
+    - "Lap counting or another explicit race-progress/finish condition"
+
+platformer:
+  label: "Platformer"
+  checklist:
+    - "Gravity and a jump arc that feels responsive; forgiving jump timing (coyote time) if feasible"
+    - "Solid ground/platform collision that's visually distinct from the background"
+    - "A defined hazard/fail condition (falling, spikes, enemies) with a recovery path (respawn/checkpoint)"
+    - "A side-scrolling camera that follows the player smoothly"
+
+top_down_shooter:
+  label: "Top-down shooter"
+  checklist:
+    - "Camera directly overhead or angled top-down, showing the player and surroundings clearly"
+    - "Clear indication of aim direction (rotation toward the cursor, or similar)"
+    - "Visible feedback for shooting and for being hit"
+    - "Enemy spawn/wave logic or another explicit objective"
+
+puzzle:
+  label: "Puzzle"
+  checklist:
+    - "A clearly defined win condition/goal state, visible or explainable at a glance"
+    - "Clear visual feedback distinguishing valid from invalid moves"
+    - "Some progress structure (move counter, level number, timer), not a single unbounded board"
+
+tower_defense:
+  label: "Tower defense"
+  checklist:
+    - "A visible path enemies follow, and clearly placeable tower/defense positions"
+    - "Resource/currency tracking (gold, mana) for placing or upgrading towers"
+    - "Wave structure with escalating difficulty and a lose condition (enemies reaching the end)"
+
+endless_runner:
+  label: "Endless runner"
+  checklist:
+    - "Continuously scrolling world with procedurally increasing difficulty/speed over time"
+    - "A single clear primary action (jump/duck/dodge) that's easy to read at speed"
+    - "A visible score or distance counter, and an immediate restart on fail"
+
+fighting:
+  label: "Fighting / one-on-one combat"
+  checklist:
+    - "Two clearly readable characters with distinct hit/hurt boxes"
+    - "Visible health bars for both sides"
+    - "Clear attack/block/hit feedback (flash, knockback, or similar) on every exchange"

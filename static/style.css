@@ -788,6 +788,13 @@ body {
   margin-top: 6px;
 }
 
+.status-prompt-result {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .play-link {
   display: inline-block;
   background: var(--accent2);

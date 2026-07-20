@@ -47,13 +47,24 @@
         <p class="form-error">{{ error }}</p>
         {% endif %}
         <form method="post" action="{{ url_for('enhance_game_submit', game_id=game.game_id) }}">
-          <textarea name="description" rows="6" placeholder="e.g. Add a second enemy type that moves faster, and speed up the whole game slightly after each level." required>{{ request.form.get('description', '') }}</textarea>
+          <textarea name="description" id="description-field" rows="6" placeholder="e.g. Add a second enemy type that moves faster, and speed up the whole game slightly after each level." required>{{ request.form.get('description', '') }}</textarea>
           <label class="field-label" for="new_title">New title (optional)</label>
           <input type="text" id="new_title" name="new_title" placeholder="Leave blank to auto-name it &quot;{{ game.title }} (vN)&quot;" value="{{ request.form.get('new_title', '') }}">
           <button type="submit">Generate enhanced version</button>
         </form>
+        <p class="form-hint">
+          Not sure how to phrase it? <a href="{{ url_for('idea_forge_enhance_form', game_id=game.game_id) }}" id="idea-forge-link">Flesh out your idea with Idea Forge first</a>.
+        </p>
       </div>
     </main>
   </div>
+  <script>
+    document.getElementById("idea-forge-link").addEventListener("click", function (e) {
+      var val = document.getElementById("description-field").value;
+      if (val) {
+        e.currentTarget.href = "{{ url_for('idea_forge_enhance_form', game_id=game.game_id) }}?description=" + encodeURIComponent(val);
+      }
+    });
+  </script>
 </body>
 </html>

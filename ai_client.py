@@ -122,9 +122,19 @@ def ask(
     effort: str | None = None,
     temperature: float | None = None,
     timeout: int | None = 120,
+    response_format: dict | None = None,
     **_ignored,
 ) -> AskResult:
     """Run a one-shot DeepSeek prompt and return the result. Raises AIError.
+
+    `response_format` (e.g. {"type": "json_object"}) is passed straight
+    through to the API when given. DeepSeek's JSON mode is "designed to,"
+    not guaranteed to, return valid JSON, so callers requesting it should
+    still parse defensively. Unverified whether thinking mode rejects a
+    forced response_format the way it rejects a forced tool_choice (see
+    _resolve_tool_choice) — nothing here downgrades it automatically, so
+    check empirically before combining response_format with effort
+    "high"/"max".
 
     `**_ignored` absorbs kwargs from the home-net `ai.ask()` interface that
     have no DeepSeek equivalent (e.g. web_search) so callers ported over
@@ -146,6 +156,8 @@ def ask(
     )
     if resolved_temperature is not None:
         create_kwargs["temperature"] = resolved_temperature
+    if response_format is not None:
+        create_kwargs["response_format"] = response_format
 
     try:
         response = client.chat.completions.create(**create_kwargs)

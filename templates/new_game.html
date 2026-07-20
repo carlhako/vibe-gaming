@@ -48,11 +48,22 @@
         <p class="form-error">{{ error }}</p>
         {% endif %}
         <form method="post" action="{{ url_for('new_game_submit') }}">
-          <textarea name="prompt" rows="6" placeholder="e.g. A top-down maze game where you collect gems while avoiding patrolling guards, with a timer and increasing difficulty each level." required>{{ request.form.get('prompt', '') }}</textarea>
+          <textarea name="prompt" id="prompt-field" rows="6" placeholder="e.g. A top-down maze game where you collect gems while avoiding patrolling guards, with a timer and increasing difficulty each level." required>{{ request.form.get('prompt', '') }}</textarea>
           <button type="submit">Generate game</button>
         </form>
+        <p class="form-hint">
+          Not sure how to phrase it? <a href="{{ url_for('idea_forge_new_form') }}" id="idea-forge-link">Flesh out your idea with Idea Forge first</a>.
+        </p>
       </div>
     </main>
   </div>
+  <script>
+    document.getElementById("idea-forge-link").addEventListener("click", function (e) {
+      var val = document.getElementById("prompt-field").value;
+      if (val) {
+        e.currentTarget.href = "{{ url_for('idea_forge_new_form') }}?prompt=" + encodeURIComponent(val);
+      }
+    });
+  </script>
 </body>
 </html>

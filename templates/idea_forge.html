@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Idea Forge{% if mode == 'enhance' %} — {{ game.title }}{% endif %} — The Vibe Arcade</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="shell">
+    <main class="cabinet form-page">
+      <div class="cabinet-plate">
+        <span class="power-light on"></span>
+        <span class="now-playing">IDEA FORGE</span>
+      </div>
+      <div class="form-panel">
+        {% if mode == 'enhance' %}
+        <a class="back-link" href="{{ url_for('enhance_game_form', game_id=game.game_id) }}">&larr; back to enhance form</a>
+        <h1>Idea Forge — &ldquo;{{ game.title }}&rdquo;</h1>
+        <p class="form-hint">
+          Describe your change in a few rough words. DeepSeek will flesh it
+          out into a fuller, clearer brief — grounded in what
+          &ldquo;{{ game.title }}&rdquo; actually does today — before you
+          submit it as a real enhancement.
+        </p>
+        {% else %}
+        <a class="back-link" href="{{ url_for('new_game_form') }}">&larr; back to new game form</a>
+        <h1>Idea Forge</h1>
+        <p class="form-hint">
+          Describe your game idea in a few rough words. DeepSeek will flesh
+          it out into a fuller, clearer brief — filling in genre-specific
+          details you might not think to mention — before you submit it as
+          a real game request.
+        </p>
+        {% endif %}
+        <p class="form-hint">
+          This runs as a background job just like generation itself: you'll
+          be taken to a status page, and once the expanded brief is ready
+          you can review and edit it before continuing.
+        </p>
+        {% if not user %}
+        <div class="form-note">
+          You're not signed in — this request will be credited to
+          &ldquo;anonymous&rdquo;. Sign up first if you want it tagged as
+          yours:
+          <form class="inline-form" method="post" action="{{ url_for('signup') }}">
+            <button type="submit">Create User</button>
+          </form>
+        </div>
+        {% endif %}
+        {% if error %}
+        <p class="form-error">{{ error }}</p>
+        {% endif %}
+        {% if mode == 'enhance' %}
+        <form method="post" action="{{ url_for('idea_forge_enhance_submit', game_id=game.game_id) }}">
+          <textarea name="rough_prompt" rows="6" placeholder="e.g. add a gun" required>{{ prefill }}</textarea>
+          <button type="submit">Flesh out my idea</button>
+        </form>
+        {% else %}
+        <form method="post" action="{{ url_for('idea_forge_new_submit') }}">
+          <textarea name="rough_prompt" rows="6" placeholder="e.g. a first person shooter" required>{{ prefill }}</textarea>
+          <button type="submit">Flesh out my idea</button>
+        </form>
+        {% endif %}
+      </div>
+    </main>
+  </div>
+</body>
+</html>
