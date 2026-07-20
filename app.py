@@ -13,6 +13,7 @@ of this process.
 
 import functools
 import hmac
+import io
 import json
 import logging
 import math
@@ -21,15 +22,17 @@ import re
 import threading
 import time
 import uuid
+import zipfile
 from pathlib import Path
 
 from dotenv import load_dotenv
 from flask import (
     Flask, abort, g, jsonify, redirect, render_template, request,
-    send_from_directory, url_for,
+    send_file, send_from_directory, url_for,
 )
 
 import db
+import game_generator
 
 load_dotenv()  # so ADMIN_TOKEN (and anything else in .env) is set before any request
 
@@ -428,6 +431,22 @@ def create_app(games_dir=None) -> Flask:
             )
         return send_from_directory(game_dir, "index.html")
 
+    @app.get("/games/<game_id>/download")
+    def download_game(game_id):
+        if not _GAME_ID_RE.match(game_id):
+            abort(404)
+        game = db.get_web_game(game_id)
+        if game is None:
+            abort(404)
+        game_dir = games_dir / game["slug"]
+        if not (game_dir / "index.html").exists():
+            abort(404)
+        safe_title = game_generator.slugify(game["title"]) or "game"
+        filename = f"{safe_title}-v{game['version'] or 1}.html"
+        return send_from_directory(
+            game_dir, "index.html", as_attachment=True, download_name=filename,
+        )
+
     @app.get("/games/new")
     def new_game_form():
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
@@ -794,6 +813,25 @@ def create_app(games_dir=None) -> Flask:
             plays_rows=plays_rows, plays_pager=plays_pager,
             page_sizes=_ADMIN_PAGE_SIZES,
         )
+
+    @app.get("/admin/games/download")
+    @require_admin_token
+    def admin_download_games():
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for entry in sorted(games_dir.iterdir()):
+                if not entry.is_dir() or entry.name == "backups":
+                    continue
+                if not (entry / "index.html").exists():
+                    continue
+                zf.write(entry / "index.html", arcname=f"{entry.name}/index.html")
+                meta_path = entry / "meta.json"
+                if meta_path.exists():
+                    zf.write(meta_path, arcname=f"{entry.name}/meta.json")
+        buf.seek(0)
+        filename = f"vibegames-games-{db.now_iso()[:10]}.zip"
+        return send_file(buf, mimetype="application/zip",
+                          as_attachment=True, download_name=filename)
 
     @app.post("/admin/games/<game_id>/hidden")
     @require_admin_token

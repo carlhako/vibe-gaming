@@ -151,6 +151,8 @@ async function openInfoModal(gameId) {
       data.duration_seconds != null ? `${formatDuration(data.duration_seconds)} to generate` : null,
     ].filter(Boolean).join(" · ");
     document.getElementById("info-modal-meta").textContent = meta;
+    document.getElementById("info-modal-download").href =
+      `/games/${encodeURIComponent(gameId)}/download`;
     document.getElementById("info-modal-prompt").textContent =
       data.prompt || "(no prompt recorded)";
 

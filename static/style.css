@@ -1382,6 +1382,18 @@ body {
   margin-bottom: 14px;
 }
 
+.modal-download {
+  display: inline-block;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 12px;
+  margin-bottom: 14px;
+}
+
+.modal-download:hover {
+  text-decoration: underline;
+}
+
 .modal-prompt {
   color: var(--ink);
   font-size: 13px;

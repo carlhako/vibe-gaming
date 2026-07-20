@@ -105,6 +105,17 @@
           <p class="form-hint">No votes recorded yet.</p>
           {% endif %}
 
+          <p>
+            <a class="game-row-play-link" href="{{ url_for('admin_download_games', token=admin_token) }}">
+              Download all games (.zip) &#8595;
+            </a>
+          </p>
+          <p class="form-hint">
+            To restore: unzip into <code>games/</code> and restart the app —
+            any game whose <code>meta.json</code> has a <code>game_id</code>
+            is picked up automatically on startup.
+          </p>
+
           <h2>All games</h2>
           {% if all_games %}
           <p class="form-hint">
