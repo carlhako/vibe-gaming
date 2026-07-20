@@ -167,3 +167,20 @@ def test_parse_submission_valid():
 def test_parse_submission_rejects(arguments):
     with pytest.raises(gg.GameGenerationError):
         gg.parse_submission(arguments)
+
+
+# ---------------------------------------------------------------------------
+# ai_client._resolve_tool_choice (DeepSeek thinking-mode quirk)
+# ---------------------------------------------------------------------------
+
+def test_forcing_tool_choice_downgraded_only_in_thinking_mode():
+    forced = {"type": "function", "function": {"name": "submit_game"}}
+    thinking = {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
+    non_thinking = {"thinking": {"type": "disabled"}}
+
+    assert ai._resolve_tool_choice(forced, thinking) == "auto"
+    assert ai._resolve_tool_choice("required", thinking) == "auto"
+    assert ai._resolve_tool_choice("auto", thinking) == "auto"
+    assert ai._resolve_tool_choice(None, thinking) is None
+    assert ai._resolve_tool_choice(forced, non_thinking) == forced
+    assert ai._resolve_tool_choice("required", non_thinking) == "required"

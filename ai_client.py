@@ -169,6 +169,19 @@ def ask(
     )
 
 
+def _resolve_tool_choice(tool_choice, extra_body: dict):
+    """DeepSeek's thinking mode (verified live, 2026-07-20) accepts `tools`
+    but 400s on any forcing tool_choice — both "required" and a named
+    {"type": "function", ...} — while accepting "auto"/"none"/omitted.
+    Downgrade a forcing choice to "auto" when thinking is enabled so
+    callers can always request the forced behavior and still run at
+    effort "high"/"max"."""
+    thinking_on = (extra_body.get("thinking") or {}).get("type") == "enabled"
+    if thinking_on and tool_choice not in (None, "auto", "none"):
+        return "auto"
+    return tool_choice
+
+
 def ask_with_tools(
     messages: list[dict],
     *,
@@ -186,9 +199,14 @@ def ask_with_tools(
 
     `reasoning_content` (present when thinking mode is on) is stripped from
     the returned `.message` — DeepSeek rejects requests that echo it back.
+    A forcing `tool_choice` (named function or "required") is silently
+    downgraded to "auto" when `effort` enables thinking mode — see
+    _resolve_tool_choice; callers must tolerate an occasional reply with
+    no tool call on that path.
     """
     resolved_model = _resolve_model(model)
     extra_body, resolved_effort, resolved_temperature = _resolve_thinking(effort, temperature)
+    tool_choice = _resolve_tool_choice(tool_choice, extra_body)
 
     client = _client()
     create_kwargs = dict(

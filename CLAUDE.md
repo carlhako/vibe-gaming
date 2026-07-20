@@ -167,9 +167,12 @@ names retire 2026-07-24 — don't reintroduce them. Requires
 the multi-turn function-calling entry point the generation loop uses; the
 caller owns the message list and appends tool results between calls. It
 strips `reasoning_content` from returned messages (DeepSeek rejects
-requests that echo it back). If DeepSeek's thinking mode ever rejects the
-`tools` parameter, drop `effort` below "high" in config.yaml for the
-generation/enhancement blocks rather than changing the loop.
+requests that echo it back). Verified live (2026-07-20): thinking mode
+accepts `tools` but 400s on any *forcing* `tool_choice` (named function
+or `"required"`), so `_resolve_tool_choice()` silently downgrades those
+to `"auto"` when thinking is enabled — the generation loop always asks
+for the forced choice and tolerates the occasional no-tool-call reply
+with a nudge. Non-thinking mode honors the forced choice.
 
 Observability: the OpenAI client is wrapped with LangSmith's
 `wrap_openai`, and `run_generation_attempts()` is `@traceable`, so with
