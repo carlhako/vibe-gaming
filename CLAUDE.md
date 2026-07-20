@@ -155,6 +155,12 @@ code/math) unless overridden. The old `deepseek-chat`/`deepseek-reasoner`
 names retire 2026-07-24 — don't reintroduce them. Requires
 `DEEPSEEK_API_KEY` in the environment (`.env`, loaded via python-dotenv).
 
+Observability: the OpenAI client is wrapped with LangSmith's
+`wrap_openai`, and `run_generation_attempts()` is `@traceable`, so with
+`LANGSMITH_TRACING=true` (+ `LANGSMITH_API_KEY`) each job becomes one
+LangSmith trace with every retry's DeepSeek call nested under it. With
+tracing unset both are pass-through no-ops.
+
 ## Running locally
 
 See `README.md` for the full quickstart (including `ADMIN_TOKEN` and the

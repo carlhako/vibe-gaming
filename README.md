@@ -52,6 +52,11 @@ existing `games/` directory or an older `vibegames.db`.
 - `DEEPSEEK_API_KEY` — required, from DeepSeek's platform.
 - `ADMIN_TOKEN` — required to view `/admin/stats`
   (`?token=...` or `Authorization: Bearer ...`).
+- `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` —
+  optional LangSmith tracing of every generation/enhancement job (full
+  prompts, per-attempt retry tree, token usage). Off unless
+  `LANGSMITH_TRACING=true`; note traces upload prompts and generated HTML
+  to LangSmith's cloud.
 
 ## Running in production
 
