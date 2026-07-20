@@ -1,8 +1,0 @@
-{
-  "title": "Moon Buggy",
-  "description": "Drive your lunar rover across the moon, jumping over craters and blasting rocks and UFOs with your twin cannons.",
-  "requested_by": "thelounge20",
-  "created_at": "2026-07-17T07:40:00.581327Z",
-  "version": 1,
-  "prompt": "make a moonbuggy game similar to the linux console one here https://github.com/seehuhn/moon-buggy"
-}

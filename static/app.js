@@ -21,6 +21,29 @@ document.querySelectorAll(".cart-select").forEach((btn) => {
   });
 });
 
+// ---- Shelf tools collapse ----
+// The arrow in the shelf header folds the tools block (marquee, account
+// links, New Game) away so the game list gets the vertical space back.
+const shelfCollapseBtn = document.getElementById("shelf-collapse");
+const shelfTools = document.getElementById("shelf-tools");
+if (shelfCollapseBtn && shelfTools) {
+  const COLLAPSED_KEY = "vg_shelf_collapsed";
+
+  function setShelfCollapsed(collapsed) {
+    shelfTools.classList.toggle("collapsed", collapsed);
+    shelfCollapseBtn.classList.toggle("flipped", collapsed);
+    shelfCollapseBtn.setAttribute("aria-expanded", String(!collapsed));
+    shelfCollapseBtn.title = collapsed ? "Expand menu" : "Collapse menu";
+  }
+
+  setShelfCollapsed(localStorage.getItem(COLLAPSED_KEY) === "1");
+  shelfCollapseBtn.addEventListener("click", () => {
+    const collapsed = !shelfTools.classList.contains("collapsed");
+    setShelfCollapsed(collapsed);
+    localStorage.setItem(COLLAPSED_KEY, collapsed ? "1" : "0");
+  });
+}
+
 // ---- Ratings ----
 // Real enforcement is server-side (409 on a repeat cookie/IP vote); the
 // "voted" localStorage flag here only saves a round trip by pre-disabling

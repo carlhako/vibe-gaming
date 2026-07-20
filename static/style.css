@@ -50,35 +50,121 @@ body {
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  padding: 20px 14px;
-  gap: 16px;
+  padding: 16px 14px;
+  gap: 12px;
+}
+
+.shelf-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wordmark-logo {
+  width: 20px;
+  height: 26px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 5px rgba(255, 180, 0, 0.45));
 }
 
 .wordmark {
   font-family: 'Press Start 2P', monospace;
-  font-size: 11px;
-  line-height: 1.6;
+  font-size: 12px;
+  line-height: 1;
   color: var(--accent);
-  letter-spacing: 0.03em;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
-.wordmark-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent2);
-  margin-right: 6px;
-  box-shadow: 0 0 8px var(--accent2);
+/* Collapse arrow for the tools block: frees vertical space for the list. */
+.shelf-collapse {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 0.25s ease;
+}
+
+.shelf-collapse:hover {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+
+.shelf-collapse.flipped {
+  transform: rotate(-90deg);
+}
+
+/* Collapsible via the grid 1fr -> 0fr trick so height animates without a
+   hard-coded max-height. The collapsed block still sits in .shelf's flex
+   gap, so pull one gap's worth back with a negative margin. */
+.shelf-tools {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.25s ease;
+}
+
+.shelf-tools.collapsed {
+  grid-template-rows: 0fr;
+  margin-top: -12px;
+}
+
+.shelf-tools-inner {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.tool-row {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tool-row .account-form {
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+}
+
+.tool-row .account-link {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  font-size: 11px;
+  padding: 7px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shelf-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 10px;
 }
 
 .shelf-count {
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 12px;
+  white-space: nowrap;
 }
 
 .cart-list {
@@ -160,9 +246,16 @@ body {
   background: var(--spine, var(--accent));
 }
 
-.cart-select {
+.cart-main {
   flex: 1;
+  min-width: 0;
   display: flex;
+  flex-direction: column;
+}
+
+.cart-select {
+  display: flex;
+  width: 100%;
   min-width: 0;
   background: none;
   border: none;
@@ -197,38 +290,37 @@ body {
   white-space: nowrap;
 }
 
+/* Slim action bar along the bottom of a cart: rate, plays, info, enhance.
+   Keeping controls here (not a side column) leaves the full cart width to
+   the title/description above. */
+.cart-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-top: 1px solid var(--line);
+  padding: 2px 6px 2px 8px;
+}
+
+.cart-info,
 .cart-enhance {
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  border-left: 1px solid var(--line);
-  color: var(--muted);
-  text-decoration: none;
-  font-size: 14px;
-}
-
-.cart-enhance:hover {
-  color: var(--accent);
-  background: rgba(255, 180, 0, 0.08);
-}
-
-.cart-info {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  border-left: 1px solid var(--line);
+  width: 24px;
+  height: 22px;
+  border: none;
+  border-radius: 3px;
   background: none;
   color: var(--muted);
+  text-decoration: none;
   font-family: inherit;
-  font-size: 14px;
+  font-size: 12px;
   cursor: pointer;
 }
 
-.cart-info:hover {
+.cart-info:hover,
+.cart-enhance:hover {
   color: var(--accent);
   background: rgba(255, 180, 0, 0.08);
 }
@@ -396,7 +488,8 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .power-light.on { animation: none; }
-  .wordmark, .wordmark-dot, .pac-top, .pac-bottom,
+  .shelf-tools, .shelf-collapse { transition: none; }
+  .wordmark, .pac-top, .pac-bottom,
   .cart.active .cart-spine, .cart:hover .cart-select::after,
   .splash-cab, .splash-cab *, .splash-backdrop { animation: none !important; }
   .pacman { display: none; }
@@ -448,10 +541,11 @@ body {
 .sort-btn {
   flex: 1;
   text-align: center;
-  padding: 6px 8px;
-  font-size: 11px;
+  padding: 5px 8px;
+  font-size: 10.5px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
   color: var(--muted);
   text-decoration: none;
   border: 1px solid var(--line);
@@ -471,17 +565,6 @@ body {
 /* ---- Ratings ---- */
 
 .cart-rate {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  padding: 6px 8px;
-  border-left: 1px solid var(--line);
-}
-
-.rate-buttons {
   display: flex;
   align-items: center;
   gap: 2px;
@@ -490,13 +573,13 @@ body {
 .rate-btn {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   background: none;
   border: none;
   color: var(--muted);
   font-family: inherit;
   font-size: 10.5px;
-  padding: 3px 6px;
+  padding: 2px 5px;
   border-radius: 3px;
   cursor: pointer;
 }
@@ -515,13 +598,14 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* margin-left:auto pushes info/enhance to the bar's right edge. */
 .cart-play-count {
-  flex-shrink: 0;
-  text-align: center;
   color: var(--muted);
   font-size: 9.5px;
   font-variant-numeric: tabular-nums;
-  padding: 1px 8px;
+  white-space: nowrap;
+  margin-left: auto;
+  padding-right: 2px;
 }
 
 /* ---- Form pages (new game / status) ---- */
@@ -1421,10 +1505,6 @@ body {
 
 .wordmark {
   animation: wordmark-glow 4s ease-in-out infinite alternate;
-}
-
-.wordmark-dot {
-  animation: blink 2.4s ease-in-out infinite;
 }
 
 @keyframes wordmark-glow {
