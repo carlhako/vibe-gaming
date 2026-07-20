@@ -45,14 +45,10 @@
                  value="{{ user.username if user and user.username else '' }}" placeholder="anonymous">
           <button type="submit">Save</button>
         </form>
-        {% if my_games %}
-        <h2>Your games</h2>
-        <ul class="account-games-list">
-          {% for g in my_games %}
-          <li><a href="{{ url_for('index') }}" data-slug="{{ g.slug }}">{{ g.title }}</a></li>
-          {% endfor %}
-        </ul>
-        {% endif %}
+        <p class="form-hint">
+          <a href="{{ url_for('profile_page') }}">View your profile &rarr;</a>
+          — your games, stats, and recent plays.
+        </p>
         {% else %}
         <p class="form-hint">Nothing to show yet — <a href="{{ url_for('index') }}">back to the shelf</a>.</p>
         {% endif %}

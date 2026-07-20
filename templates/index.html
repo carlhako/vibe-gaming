@@ -67,7 +67,7 @@
             {% elif not user.username %}
             <a class="account-link" href="{{ url_for('account_page') }}">Set a username &rarr;</a>
             {% else %}
-            <a class="account-link" href="{{ url_for('account_page') }}">{{ user.username }}</a>
+            <a class="account-link" href="{{ url_for('profile_page') }}">{{ user.username }}</a>
             {% endif %}
             <a class="account-link" href="{{ url_for('leaderboard') }}">&#127942; Leaderboard</a>
           </div>

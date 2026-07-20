@@ -544,8 +544,7 @@ def create_app(games_dir=None) -> Flask:
     def account_page():
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
         user = db.get_user(vg_uid) if vg_uid else None
-        my_games = [g for g in get_games() if g.get("creator_uid") == vg_uid] if vg_uid else []
-        return render_template("account.html", uid=vg_uid, user=user, my_games=my_games)
+        return render_template("account.html", uid=vg_uid, user=user)
 
     @app.post("/account")
     def account_update():
@@ -557,13 +556,12 @@ def create_app(games_dir=None) -> Flask:
         username = (request.form.get("username") or "").strip()[:40] or None
         ok = db.set_username(vg_uid, username)
         user = db.get_user(vg_uid)
-        my_games = [g for g in get_games() if g.get("creator_uid") == vg_uid]
         if ok:
             resp = redirect(url_for("account_page"))
         else:
             resp = app.make_response((
                 render_template(
-                    "account.html", uid=vg_uid, user=user, my_games=my_games,
+                    "account.html", uid=vg_uid, user=user,
                     error="That username is already taken.",
                 ),
                 400,
@@ -574,6 +572,32 @@ def create_app(games_dir=None) -> Flask:
                 httponly=False, samesite="Lax",
             )
         return resp
+
+    @app.get("/profile")
+    def profile_page():
+        vg_uid = request.cookies.get(_VG_UID_COOKIE)
+        if not vg_uid or db.get_user(vg_uid) is None:
+            return redirect(url_for("account_page"))
+        user = db.get_user(vg_uid)
+        my_games = [g for g in get_games(include_hidden=True) if g.get("creator_uid") == vg_uid]
+        stats = db.get_user_stats(vg_uid)
+        recent_plays = db.get_user_play_history(vg_uid, limit=20)
+        return render_template(
+            "profile.html", uid=vg_uid, user=user, my_games=my_games,
+            stats=stats, recent_plays=recent_plays,
+        )
+
+    @app.post("/profile/games/<game_id>/hidden")
+    def profile_set_game_hidden(game_id):
+        if not _GAME_ID_RE.match(game_id):
+            abort(404)
+        vg_uid = request.cookies.get(_VG_UID_COOKIE)
+        game = db.get_web_game(game_id)
+        if game is None or not vg_uid or game.get("creator_uid") != vg_uid:
+            abort(404)
+        hidden = request.form.get("hidden") == "1"
+        db.set_game_hidden(game_id, hidden)
+        return redirect(url_for("profile_page"))
 
     @app.get("/leaderboard")
     def leaderboard():

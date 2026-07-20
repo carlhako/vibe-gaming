@@ -415,6 +415,46 @@ def get_play_history(limit=20, offset=0, conn=None):
     return [dict(r) for r in rows]
 
 
+def get_user_play_history(creator_uid, limit=20, conn=None):
+    """Last `limit` plays across every game this uid created, newest first.
+    Mirrors get_play_history() but scoped to one creator's games."""
+    c = _c(conn)
+    rows = c.execute(
+        """
+        SELECT p.played_at, p.client_uid, p.ip_address,
+               wg.title AS game_title, wg.slug AS game_slug
+        FROM plays p
+        JOIN web_games wg ON wg.game_id = p.game_id
+        WHERE wg.creator_uid = ?
+        ORDER BY p.id DESC
+        LIMIT ?
+        """,
+        (creator_uid, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_user_stats(creator_uid, conn=None):
+    """Totals across every game this uid created: game count, plays,
+    thumbs up/down. Hidden games count toward these totals same as
+    get_user_leaderboard()'s total_likes does."""
+    c = _c(conn)
+    row = c.execute(
+        """
+        SELECT COUNT(DISTINCT wg.game_id) AS game_count,
+               COALESCE(SUM(wg.thumbs_up), 0) AS total_likes,
+               COALESCE(SUM(wg.thumbs_down), 0) AS total_dislikes,
+               (SELECT COUNT(*) FROM plays p
+                JOIN web_games wg2 ON wg2.game_id = p.game_id
+                WHERE wg2.creator_uid = ?) AS total_plays
+        FROM web_games wg
+        WHERE wg.creator_uid = ?
+        """,
+        (creator_uid, creator_uid),
+    ).fetchone()
+    return dict(row)
+
+
 def rename_game(game_id, title, conn=None) -> bool:
     """Returns False if game_id has no web_games row (nothing to update)."""
     c = _c(conn)

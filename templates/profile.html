@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Profile — The Vibe Arcade</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="shell">
+    <main class="cabinet form-page">
+      <div class="cabinet-plate">
+        <span class="power-light on"></span>
+        <span class="now-playing">PROFILE</span>
+      </div>
+      <div class="form-panel">
+        <a class="back-link" href="{{ url_for('index') }}">&larr; back to the shelf</a>
+        <h1>{{ user.username or "anonymous-" + uid[:8] }}</h1>
+        <p class="form-hint">
+          <a href="{{ url_for('account_page') }}">Account settings</a>
+        </p>
+
+        <div class="profile-stats">
+          <div class="profile-stat">
+            <span class="profile-stat-value">{{ stats.game_count }}</span>
+            <span class="profile-stat-label">games</span>
+          </div>
+          <div class="profile-stat">
+            <span class="profile-stat-value">{{ stats.total_plays }}</span>
+            <span class="profile-stat-label">total plays</span>
+          </div>
+          <div class="profile-stat">
+            <span class="profile-stat-value">&#128077; {{ stats.total_likes }}</span>
+            <span class="profile-stat-label">likes</span>
+          </div>
+          <div class="profile-stat">
+            <span class="profile-stat-value">&#128078; {{ stats.total_dislikes }}</span>
+            <span class="profile-stat-label">dislikes</span>
+          </div>
+        </div>
+
+        <h2>Your games</h2>
+        {% if my_games %}
+        <ul class="profile-games-list">
+          {% for g in my_games %}
+          <li class="profile-game-row">
+            <div class="profile-game-info">
+              <a class="game-row-play-link" href="{{ url_for('play', slug=g.slug) }}" target="_blank" rel="noopener">{{ g.title }} &#8599;</a>
+              <span class="profile-game-meta">&#128077; {{ g.thumbs_up }} &middot; {{ g.play_count }} plays</span>
+            </div>
+            <form method="post" action="{{ url_for('profile_set_game_hidden', game_id=g.game_id) }}">
+              {% if g.hidden %}
+              <input type="hidden" name="hidden" value="0">
+              <button type="submit" class="profile-visibility-btn is-hidden">Hidden — make public</button>
+              {% else %}
+              <input type="hidden" name="hidden" value="1">
+              <button type="submit" class="profile-visibility-btn is-public">Public — hide</button>
+              {% endif %}
+            </form>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="form-hint">You haven't created any games yet — <a href="{{ url_for('new_game_form') }}">make one</a>.</p>
+        {% endif %}
+
+        <h2>Recent plays</h2>
+        {% if recent_plays %}
+        <ul class="profile-plays-list">
+          {% for p in recent_plays %}
+          <li><span class="profile-play-title">{{ p.game_title }}</span><span class="profile-play-time">{{ p.played_at }}</span></li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="form-hint">No plays yet.</p>
+        {% endif %}
+      </div>
+    </main>
+  </div>
+</body>
+</html>
