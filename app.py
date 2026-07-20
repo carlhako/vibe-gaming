@@ -596,6 +596,17 @@ def create_app(games_dir=None) -> Flask:
             if game:
                 result_slug = game["slug"]
                 result_title = game["title"]
+
+        queue_position = None
+        eta_seconds = None
+        avg_duration_seconds = db.get_average_duration(kind=job["kind"])
+        if job["status"] == "queued":
+            queue_position = db.get_queue_position(job_id)
+            blended_avg = db.get_average_duration(kind=None)
+            if blended_avg is not None:
+                jobs_ahead = queue_position + (1 if db.count_generating() else 0)
+                eta_seconds = blended_avg * jobs_ahead
+
         return jsonify({
             "status": job["status"],
             "kind": job["kind"],
@@ -603,6 +614,9 @@ def create_app(games_dir=None) -> Flask:
             "result_slug": result_slug,
             "result_title": result_title,
             "error": job["error"],
+            "queue_position": queue_position,
+            "eta_seconds": eta_seconds,
+            "avg_duration_seconds": avg_duration_seconds,
         })
 
     @app.before_request

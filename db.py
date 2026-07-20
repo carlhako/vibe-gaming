@@ -541,11 +541,63 @@ def claim_next_queued_request(conn=None) -> str | None:
     job_id = row["job_id"]
     cur = c.execute(
         "UPDATE generation_requests SET status='generating', updated_at=? "
-        "WHERE job_id=? AND status='queued'",
+        "WHERE job_id=? AND status='queued' "
+        "AND NOT EXISTS (SELECT 1 FROM generation_requests WHERE status='generating')",
         (now, job_id),
     )
     c.commit()
     return job_id if cur.rowcount == 1 else None
+
+
+def get_average_duration(kind=None, limit=20, conn=None) -> float | None:
+    """Average duration_seconds of the most recent `limit` successful jobs,
+    optionally filtered by kind ('create'/'enhance'). Recency-limited so the
+    estimate tracks current model/effort config rather than old runs. None
+    if no completed jobs match yet."""
+    c = _c(conn)
+    query = (
+        "SELECT duration_seconds FROM generation_requests "
+        "WHERE status='success' AND duration_seconds IS NOT NULL"
+    )
+    params: list = []
+    if kind is not None:
+        query += " AND kind=?"
+        params.append(kind)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    rows = c.execute(query, params).fetchall()
+    if not rows:
+        return None
+    durations = [r["duration_seconds"] for r in rows]
+    return sum(durations) / len(durations)
+
+
+def get_queue_position(job_id, conn=None) -> int:
+    """Count of queued jobs ahead of this one, ordered by created_at (the
+    same order claim_next_queued_request claims in). Meaningful only while
+    the job itself is still 'queued'; returns 0 if the job doesn't exist."""
+    c = _c(conn)
+    row = c.execute(
+        "SELECT created_at FROM generation_requests WHERE job_id=?", (job_id,)
+    ).fetchone()
+    if row is None:
+        return 0
+    count_row = c.execute(
+        "SELECT COUNT(*) AS n FROM generation_requests "
+        "WHERE status='queued' AND created_at < ?",
+        (row["created_at"],),
+    ).fetchone()
+    return count_row["n"]
+
+
+def count_generating(conn=None) -> int:
+    """0 or 1 in practice under the one-at-a-time claim guard, but written
+    as a count for robustness."""
+    c = _c(conn)
+    row = c.execute(
+        "SELECT COUNT(*) AS n FROM generation_requests WHERE status='generating'"
+    ).fetchone()
+    return row["n"]
 
 
 def sweep_orphaned_requests(conn=None) -> int:

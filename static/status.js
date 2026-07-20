@@ -3,6 +3,7 @@
   const jobId = panel.dataset.jobId;
   const heading = document.getElementById("status-heading");
   const detail = document.getElementById("status-detail");
+  const eta = document.getElementById("status-eta");
   const actions = document.getElementById("status-actions");
   const powerLight = document.getElementById("power-light");
 
@@ -13,20 +14,42 @@
     failed: "Failed",
   };
 
+  const KIND_VERB = {
+    create: "Builds",
+    enhance: "Enhancements",
+  };
+
   let timer = null;
+
+  function formatMinutes(seconds) {
+    const minutes = Math.round(seconds / 60);
+    return minutes < 1 ? "under a minute" : `about ${minutes} min`;
+  }
 
   function render(job) {
     heading.textContent = LABELS[job.status] || job.status;
 
     if (job.status === "queued" || job.status === "generating") {
-      detail.textContent = job.status === "queued"
-        ? "Waiting for a worker to pick this up."
-        : "DeepSeek is writing the game and running the safety/smoke checks now.";
+      if (job.status === "queued") {
+        detail.textContent = job.queue_position > 0
+          ? `Position ${job.queue_position + 1} in queue.`
+          : "You're next in line.";
+        eta.textContent = job.eta_seconds != null
+          ? `Approx ${formatMinutes(job.eta_seconds)} until your turn.`
+          : "We don't have a time estimate yet.";
+      } else {
+        detail.textContent = "DeepSeek is writing the game and running the safety/smoke checks now.";
+        const verb = KIND_VERB[job.kind] || "Jobs";
+        eta.textContent = job.avg_duration_seconds != null
+          ? `${verb} like this usually take ${formatMinutes(job.avg_duration_seconds)}.`
+          : "";
+      }
       return;
     }
 
     powerLight.classList.remove("on");
     clearInterval(timer);
+    eta.textContent = "";
 
     if (job.status === "success") {
       detail.textContent = `"${job.result_title}" is ready.`;

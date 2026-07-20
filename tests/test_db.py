@@ -3,6 +3,8 @@ claiming, and rating anti-abuse enforcement."""
 
 import threading
 
+import pytest
+
 import db
 
 
@@ -80,12 +82,70 @@ def test_claim_next_queued_request_race_safety(isolated_db):
     assert row["status"] == "generating"
 
 
+def test_claim_next_queued_request_one_at_a_time(isolated_db):
+    """While one job is 'generating', a second queued job must not be
+    claimable — this is what caps the whole system to one running job."""
+    conn = db.get_connection()
+    db.create_generation_request(job_id="j1", kind="create", prompt="p", requested_by="web:x")
+    db.create_generation_request(job_id="j2", kind="create", prompt="p", requested_by="web:x")
+
+    assert db.claim_next_queued_request(conn=conn) == "j1"
+    assert db.get_generation_request("j1", conn=conn)["status"] == "generating"
+
+    assert db.claim_next_queued_request(conn=conn) is None
+    assert db.get_generation_request("j2", conn=conn)["status"] == "queued"
+
+    db.update_generation_request("j1", status="success", conn=conn)
+    assert db.claim_next_queued_request(conn=conn) == "j2"
+
+
 def test_claim_next_queued_request_ignores_non_queued(isolated_db):
     db.create_generation_request(
         job_id="already-done", kind="create", prompt="p", requested_by="web:x",
     )
     db.update_generation_request("already-done", status="success")
     assert db.claim_next_queued_request() is None
+
+
+def test_get_average_duration_empty(isolated_db):
+    assert db.get_average_duration() is None
+    assert db.get_average_duration(kind="create") is None
+
+
+def test_get_average_duration_filters_by_kind_and_success(isolated_db):
+    db.create_generation_request(job_id="c1", kind="create", prompt="p", requested_by="web:x")
+    db.update_generation_request("c1", status="success", duration_seconds=100)
+    db.create_generation_request(job_id="c2", kind="create", prompt="p", requested_by="web:x")
+    db.update_generation_request("c2", status="success", duration_seconds=200)
+    db.create_generation_request(job_id="e1", kind="enhance", prompt="p", requested_by="web:x")
+    db.update_generation_request("e1", status="success", duration_seconds=50)
+    db.create_generation_request(job_id="c3", kind="create", prompt="p", requested_by="web:x")
+    db.update_generation_request("c3", status="failed", duration_seconds=999)
+
+    assert db.get_average_duration(kind="create") == 150
+    assert db.get_average_duration(kind="enhance") == 50
+    assert db.get_average_duration(kind=None) == pytest.approx((100 + 200 + 50) / 3)
+
+
+def test_get_queue_position(isolated_db):
+    db.create_generation_request(job_id="q1", kind="create", prompt="p", requested_by="web:x")
+    db.create_generation_request(job_id="q2", kind="create", prompt="p", requested_by="web:x")
+    db.create_generation_request(job_id="q3", kind="create", prompt="p", requested_by="web:x")
+
+    assert db.get_queue_position("q1") == 0
+    assert db.get_queue_position("q2") == 1
+    assert db.get_queue_position("q3") == 2
+
+    db.claim_next_queued_request()
+    assert db.get_queue_position("q2") == 0
+    assert db.get_queue_position("q3") == 1
+
+
+def test_count_generating(isolated_db):
+    db.create_generation_request(job_id="g1", kind="create", prompt="p", requested_by="web:x")
+    assert db.count_generating() == 0
+    db.claim_next_queued_request()
+    assert db.count_generating() == 1
 
 
 def test_sweep_orphaned_requests(isolated_db):
