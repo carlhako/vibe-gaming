@@ -43,8 +43,14 @@ body {
 
 /* ---- Shelf (sidebar) ---- */
 
+/* The shelf is a slide-in drawer that overlays the cabinet rather than
+   sharing the flex row with it, so the game area always gets the full
+   viewport width - important on narrower displays (e.g. a Mac mini's
+   1280px-ish screen) where a permanently docked 510px sidebar left too
+   little room for the iframe and made in-game layouts wrap awkwardly. */
 .shelf {
   width: 510px;
+  max-width: 88vw;
   flex-shrink: 0;
   background: var(--panel);
   border-right: 1px solid var(--line);
@@ -52,6 +58,89 @@ body {
   flex-direction: column;
   padding: 16px 14px;
   gap: 12px;
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 100vh;
+  z-index: 40;
+  transform: translateX(0);
+  transition: transform 0.28s ease;
+  box-shadow: 8px 0 32px rgba(0, 0, 0, 0.5);
+}
+
+.shelf.drawer-closed {
+  transform: translateX(-100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shelf { transition: none; }
+}
+
+/* Floating button that opens the drawer; hidden (via JS) while the
+   drawer is already open, since the shelf gets its own close button. */
+.shelf-toggle {
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  z-index: 41;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.shelf-toggle:hover {
+  border-color: var(--accent-dim);
+}
+
+.shelf-toggle[hidden] {
+  display: none;
+}
+
+.shelf-close {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.shelf-close:hover {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+
+/* Dims/blocks the cabinet while the drawer is open so a click anywhere
+   outside the shelf closes it, like a standard off-canvas nav. */
+.shelf-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 4, 8, 0.55);
+  z-index: 39;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.28s ease;
+}
+
+.shelf-backdrop.visible {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .shelf-head {
@@ -177,9 +266,8 @@ body {
 }
 
 /* Dark themed scrollbar for the shelf, so it doesn't default to the
-   browser's light system scrollbar against this dark panel. Also applied
-   to .shelf itself since the narrow-viewport breakpoint makes the whole
-   shelf scroll instead of just .cart-list (see the 860px media query). */
+   browser's light system scrollbar against this dark panel. Applied to
+   .shelf too in case its own content ever overflows the drawer height. */
 .cart-list,
 .shelf {
   scrollbar-width: thin;
@@ -548,20 +636,9 @@ body {
   #starfield { display: none; }
 }
 
-@media (max-width: 860px) {
-  .shell { flex-direction: column; }
-  .shelf {
-    width: 100%;
-    border-right: none;
-    border-bottom: 1px solid var(--line);
-    max-height: 40vh;
-    overflow-y: auto;
-  }
-  /* On the narrow layout the shelf's header controls alone can exceed the
-     40vh cap, so the whole shelf scrolls as one unit instead of trying to
-     carve out space for just the game list. */
-  .cart-list { flex: none; overflow-y: visible; min-height: auto; }
-  .cabinet { padding: 16px; }
+@media (max-width: 640px) {
+  .shelf { width: 100%; max-width: 100%; border-right: none; }
+  .cabinet { padding: 12px; }
 }
 
 /* ---- New Game button ---- */

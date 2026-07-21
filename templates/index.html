@@ -36,8 +36,12 @@
       document.getElementById("intro-splash").hidden = true;
     }
   </script>
+  <button class="shelf-toggle" id="shelf-toggle" type="button"
+          aria-expanded="false" aria-controls="shelf"
+          title="Open menu">&#9776;</button>
+
   <div class="shell shell-arcade">
-    <aside class="shelf">
+    <aside class="shelf" id="shelf">
       <div class="shelf-head">
         <svg class="wordmark-logo" viewBox="0 0 20 26" aria-hidden="true">
           <path d="M2 0h16l-1.5 5h-13z" fill="var(--accent)"/>
@@ -52,6 +56,8 @@
         <button class="shelf-collapse" id="shelf-collapse" type="button"
                 aria-expanded="true" aria-controls="shelf-tools"
                 title="Collapse menu">&#9662;</button>
+        <button class="shelf-close" id="shelf-close" type="button"
+                title="Close menu" aria-label="Close menu">&times;</button>
       </div>
       <div class="shelf-tools" id="shelf-tools">
         <div class="shelf-tools-inner">
@@ -138,6 +144,8 @@
         {% endfor %}
       </nav>
     </aside>
+
+    <div class="shelf-backdrop" id="shelf-backdrop"></div>
 
     <main class="cabinet">
       <div class="cabinet-plate">

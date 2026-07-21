@@ -35,6 +35,51 @@ document.querySelectorAll(".cart-select").forEach((btn) => {
   });
 });
 
+// ---- Shelf drawer (slide in/out) ----
+// The shelf overlays the cabinet instead of sharing its flex row, so the
+// game gets the full viewport width; this block just tracks open/closed
+// state and remembers the user's choice across visits.
+const shelfDrawer = document.getElementById("shelf");
+const shelfToggleBtn = document.getElementById("shelf-toggle");
+const shelfCloseBtn = document.getElementById("shelf-close");
+const shelfBackdrop = document.getElementById("shelf-backdrop");
+if (shelfDrawer && shelfToggleBtn && shelfCloseBtn && shelfBackdrop) {
+  const DRAWER_KEY = "vg_shelf_drawer_open";
+
+  function setDrawerOpen(open) {
+    shelfDrawer.classList.toggle("drawer-closed", !open);
+    shelfBackdrop.classList.toggle("visible", open);
+    shelfToggleBtn.hidden = open;
+    shelfToggleBtn.setAttribute("aria-expanded", String(open));
+  }
+
+  const stored = localStorage.getItem(DRAWER_KEY);
+  const defaultOpen = matchMedia("(min-width: 1400px)").matches;
+  setDrawerOpen(stored === null ? defaultOpen : stored === "1");
+
+  function openDrawer() {
+    setDrawerOpen(true);
+    localStorage.setItem(DRAWER_KEY, "1");
+  }
+
+  function closeDrawer() {
+    setDrawerOpen(false);
+    localStorage.setItem(DRAWER_KEY, "0");
+  }
+
+  shelfToggleBtn.addEventListener("click", openDrawer);
+  shelfCloseBtn.addEventListener("click", closeDrawer);
+  shelfBackdrop.addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !shelfDrawer.classList.contains("drawer-closed")) closeDrawer();
+  });
+  // Picking a game is the whole point of opening the drawer - close it
+  // afterward so the newly-loaded game gets the full screen.
+  document.querySelectorAll(".cart-select").forEach((btn) => {
+    btn.addEventListener("click", closeDrawer);
+  });
+}
+
 // ---- Fork family accordion ----
 // Each family's "N earlier versions" row expands its older versions in
 // place; only one family stays open at a time, so opening one collapses
