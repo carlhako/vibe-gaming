@@ -27,8 +27,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from flask import (
-    Flask, abort, g, jsonify, redirect, render_template, request,
-    send_file, send_from_directory, url_for,
+    Flask, abort, g, jsonify, make_response, redirect, render_template,
+    request, send_file, send_from_directory, url_for,
 )
 
 import db
@@ -508,6 +508,39 @@ def create_app(games_dir=None) -> Flask:
             )
         return resp
 
+    def _enhance_lock_context(game_id, vg_uid):
+        """Build the template context describing whether game_id's enhance
+        form is available to vg_uid right now.
+
+        Phase B (a generation_requests row already generating/queued for
+        this game) always wins and blocks everyone, including the
+        submitter's own other tabs — only one enhance in flight per game.
+        Otherwise phase A (enhance_locks) is checked/acquired: acquiring
+        always succeeds for the uid that already holds it (a reload just
+        renews the 10 minutes) and otherwise only for whoever's request
+        wins the race in db.acquire_enhance_lock."""
+        job = db.get_active_enhance_job(game_id, conn=get_db())
+        if job is not None:
+            return {
+                "locked": True,
+                "lock_phase": "job",
+                "lock_held_by_me": job.get("creator_uid") == vg_uid,
+                "job_status": job["status"],
+                "job_started_at": job["updated_at"] if job["status"] == "generating" else None,
+                "lock_token": None,
+                "lock_expires_at": None,
+            }
+        won, lock = db.acquire_enhance_lock(game_id, vg_uid, conn=get_db())
+        return {
+            "locked": not won,
+            "lock_phase": "form",
+            "lock_held_by_me": won,
+            "job_status": None,
+            "job_started_at": None,
+            "lock_token": lock["lock_token"] if won else None,
+            "lock_expires_at": lock["expires_at"],
+        }
+
     @app.get("/games/<game_id>/enhance")
     def enhance_game_form(game_id):
         if not _GAME_ID_RE.match(game_id):
@@ -515,9 +548,21 @@ def create_app(games_dir=None) -> Flask:
         game = db.get_web_game(game_id, conn=get_db())
         if game is None:
             abort(404)
+
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
-        user = db.get_user(vg_uid, conn=get_db()) if vg_uid else None
-        return render_template("enhance.html", game=game, user=user)
+        set_cookie = vg_uid is None
+        if vg_uid is None:
+            vg_uid = uuid.uuid4().hex
+        user = db.get_user(vg_uid, conn=get_db())
+
+        lock_ctx = _enhance_lock_context(game_id, vg_uid)
+        resp = make_response(render_template("enhance.html", game=game, user=user, **lock_ctx))
+        if set_cookie:
+            resp.set_cookie(
+                _VG_UID_COOKIE, vg_uid, max_age=_VG_UID_MAX_AGE,
+                httponly=False, samesite="Lax",
+            )
+        return resp
 
     @app.post("/games/<game_id>/enhance")
     def enhance_game_submit(game_id):
@@ -529,15 +574,27 @@ def create_app(games_dir=None) -> Flask:
 
         description = (request.form.get("description") or "").strip()
         new_title = (request.form.get("new_title") or "").strip() or None
-        if not description:
-            return render_template(
-                "enhance.html", game=game, error="Please describe the change you want."
-            ), 400
+        lock_token = request.form.get("lock_token") or ""
 
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
         set_cookie = vg_uid is None
         if vg_uid is None:
             vg_uid = uuid.uuid4().hex
+
+        error = None
+        status = 400
+        if not description:
+            error = "Please describe the change you want."
+        elif db.get_active_enhance_job(game_id, conn=get_db()) is not None:
+            error = "Someone already started an enhancement for this game — wait for it to finish."
+            status = 409
+        elif not db.heartbeat_enhance_lock(game_id, lock_token, conn=get_db()):
+            error = "Your lock on this game expired. Reopen this page to try again."
+            status = 409
+
+        if error:
+            lock_ctx = _enhance_lock_context(game_id, vg_uid)
+            return render_template("enhance.html", game=game, error=error, **lock_ctx), status
 
         requested_by = "web:" + vg_uid[:12]
         job_id = uuid.uuid4().hex
@@ -545,6 +602,7 @@ def create_app(games_dir=None) -> Flask:
             job_id=job_id, kind="enhance", prompt=description, requested_by=requested_by,
             source_game_id=game_id, new_title=new_title, creator_uid=vg_uid, conn=get_db(),
         )
+        db.release_enhance_lock(game_id, lock_token, conn=get_db())
 
         resp = redirect(url_for("job_status_page", job_id=job_id))
         if set_cookie:
@@ -553,6 +611,27 @@ def create_app(games_dir=None) -> Flask:
                 httponly=False, samesite="Lax",
             )
         return resp
+
+    @app.post("/games/<game_id>/enhance/lock/ping")
+    def enhance_lock_ping(game_id):
+        if not _GAME_ID_RE.match(game_id):
+            abort(404)
+        lock_token = request.form.get("lock_token") or ""
+        ok = bool(lock_token) and db.heartbeat_enhance_lock(game_id, lock_token, conn=get_db())
+        expires_at = None
+        if ok:
+            lock = db.get_active_enhance_lock(game_id, conn=get_db())
+            expires_at = lock["expires_at"] if lock else None
+        return jsonify(ok=ok, expires_at=expires_at)
+
+    @app.post("/games/<game_id>/enhance/lock/release")
+    def enhance_lock_release(game_id):
+        if not _GAME_ID_RE.match(game_id):
+            abort(404)
+        lock_token = request.form.get("lock_token") or ""
+        if lock_token:
+            db.release_enhance_lock(game_id, lock_token, conn=get_db())
+        return "", 204
 
     @app.get("/games/new/idea-forge")
     def idea_forge_new_form():

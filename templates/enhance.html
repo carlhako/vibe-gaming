@@ -15,8 +15,22 @@
       <div class="cabinet-plate">
         <span class="power-light on"></span>
         <span class="now-playing">ENHANCE CARTRIDGE</span>
+        <span class="lock-plate" id="lock-plate" hidden>
+          <span class="lock-light" id="lock-light"></span>
+          <span class="lock-label" id="lock-label"></span>
+        </span>
       </div>
-      <div class="form-panel">
+      <div class="form-panel"
+           id="enhance-panel"
+           data-locked="{{ 'true' if locked else 'false' }}"
+           data-held-by-me="{{ 'true' if lock_held_by_me else 'false' }}"
+           data-lock-phase="{{ lock_phase }}"
+           data-job-status="{{ job_status or '' }}"
+           data-job-started-at="{{ job_started_at or '' }}"
+           data-lock-expires-at="{{ lock_expires_at or '' }}"
+           data-lock-token="{{ lock_token or '' }}"
+           data-ping-url="{{ url_for('enhance_lock_ping', game_id=game.game_id) }}"
+           data-release-url="{{ url_for('enhance_lock_release', game_id=game.game_id) }}">
         <a class="back-link" href="{{ url_for('index') }}">&larr; back to the shelf</a>
         <h1>Enhance &ldquo;{{ game.title }}&rdquo;</h1>
         <p class="form-hint">
@@ -42,14 +56,16 @@
           </form>
         </div>
         {% endif %}
+        <div class="lock-banner" id="lock-banner" hidden></div>
         {% if error %}
         <p class="form-error">{{ error }}</p>
         {% endif %}
-        <form method="post" action="{{ url_for('enhance_game_submit', game_id=game.game_id) }}">
-          <textarea name="description" id="description-field" rows="6" placeholder="e.g. Add a second enemy type that moves faster, and speed up the whole game slightly after each level." required>{{ request.form.get('description', '') }}</textarea>
+        <form method="post" action="{{ url_for('enhance_game_submit', game_id=game.game_id) }}" id="enhance-form">
+          <input type="hidden" name="lock_token" id="lock-token-field" value="{{ lock_token or '' }}">
+          <textarea name="description" id="description-field" rows="6" placeholder="e.g. Add a second enemy type that moves faster, and speed up the whole game slightly after each level." required {{ 'disabled' if locked else '' }}>{{ request.form.get('description', '') }}</textarea>
           <label class="field-label" for="new_title">New title (optional)</label>
-          <input type="text" id="new_title" name="new_title" placeholder="Leave blank to auto-name it &quot;{{ game.title }} (vN)&quot;" value="{{ request.form.get('new_title', '') }}">
-          <button type="submit">Generate enhanced version</button>
+          <input type="text" id="new_title" name="new_title" placeholder="Leave blank to auto-name it &quot;{{ game.title }} (vN)&quot;" value="{{ request.form.get('new_title', '') }}" {{ 'disabled' if locked else '' }}>
+          <button type="submit" id="enhance-submit" {{ 'disabled' if locked else '' }}>Generate enhanced version</button>
         </form>
         <p class="form-hint">
           Not sure how to phrase it? <a href="{{ url_for('idea_forge_enhance_form', game_id=game.game_id) }}" id="idea-forge-link">Flesh out your idea with Idea Forge first</a>.
@@ -65,5 +81,6 @@
       }
     });
   </script>
+  <script src="{{ url_for('static', filename='enhance-lock.js') }}"></script>
 </body>
 </html>

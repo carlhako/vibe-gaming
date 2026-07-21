@@ -20,6 +20,13 @@ from pathlib import Path
 
 DB_PATH = "vibegames.db"
 
+# Enhance-form lock (see acquire_enhance_lock): absolute cap on how long one
+# visitor can sit on the enhance form before it's up for grabs again, and how
+# long the server tolerates a gap between heartbeat pings before treating the
+# tab as gone.
+ENHANCE_LOCK_TTL_SECONDS = 600
+ENHANCE_LOCK_IDLE_TIMEOUT_SECONDS = 30
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS web_games (
     game_id          TEXT PRIMARY KEY,
@@ -119,6 +126,15 @@ CREATE TABLE IF NOT EXISTS users (
     uid        TEXT PRIMARY KEY,
     username   TEXT UNIQUE,
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS enhance_locks (
+    game_id       TEXT PRIMARY KEY REFERENCES web_games(game_id),
+    locked_by_uid TEXT NOT NULL,
+    lock_token    TEXT NOT NULL,
+    acquired_at   TEXT NOT NULL,
+    last_ping_at  TEXT NOT NULL,
+    expires_at    TEXT NOT NULL
 );
 """
 
@@ -750,3 +766,133 @@ def add_generation_attempt(job_id, attempt_number, outcome, detail=None,
          raw_response, _now()),
     )
     c.commit()
+
+
+# ---------------------------------------------------------------------------
+# enhance_locks (phase A: "form open" lock — see acquire_enhance_lock)
+#
+# Prevents two visitors from filling out the enhance form for the same game
+# at once. Once a submission succeeds, this lock is released and a
+# generation_requests row with status IN ('queued', 'generating') takes over
+# as the "phase B" lock (see get_active_enhance_job) — no separate table
+# needed for that half, since generation_requests already carries it.
+# ---------------------------------------------------------------------------
+
+def _iso_add_seconds(iso_ts: str, seconds: float) -> str:
+    dt = datetime.datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+    return (dt + datetime.timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
+
+
+def get_active_enhance_lock(game_id, conn=None):
+    """Current enhance_locks row for game_id, or None.
+
+    Lazily deletes the row first if it's gone stale (past its absolute TTL,
+    or the holder's heartbeat has gone quiet past
+    ENHANCE_LOCK_IDLE_TIMEOUT_SECONDS) — same on-read cleanup style as the
+    games/ mtime cache and sweep_orphaned_requests, rather than a background
+    sweep thread."""
+    c = _c(conn)
+    row = c.execute(
+        "SELECT * FROM enhance_locks WHERE game_id=?", (game_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    now = _now()
+    if row["expires_at"] <= now or row["last_ping_at"] <= _iso_add_seconds(
+        now, -ENHANCE_LOCK_IDLE_TIMEOUT_SECONDS
+    ):
+        c.execute("DELETE FROM enhance_locks WHERE game_id=? AND lock_token=?",
+                   (game_id, row["lock_token"]))
+        c.commit()
+        return None
+    return dict(row)
+
+
+def acquire_enhance_lock(game_id, vg_uid, conn=None):
+    """Try to take (or renew) the phase-A lock on game_id for vg_uid.
+
+    Returns (acquired: bool, lock: dict) — lock is always the current row
+    after the attempt, whether or not the caller is the one who now holds
+    it, so a caller who lost the race can show "locked by someone else
+    until <expires_at>". Same atomic UPDATE-then-INSERT-on-failure shape as
+    claim_next_queued_request: the UPDATE's WHERE clause only matches a
+    row that's unheld or gone stale, so at most one caller's UPDATE (or
+    subsequent INSERT, guarded by the PRIMARY KEY) can win a given race.
+    Re-acquiring your own still-active lock (e.g. revisiting the page)
+    always succeeds and issues a fresh token + a full new 10 minutes."""
+    c = _c(conn)
+    now = _now()
+    token = uuid.uuid4().hex
+    expires_at = _iso_add_seconds(now, ENHANCE_LOCK_TTL_SECONDS)
+    stale_cutoff = _iso_add_seconds(now, -ENHANCE_LOCK_IDLE_TIMEOUT_SECONDS)
+
+    cur = c.execute(
+        """
+        UPDATE enhance_locks
+        SET locked_by_uid=?, lock_token=?, acquired_at=?, last_ping_at=?, expires_at=?
+        WHERE game_id=?
+          AND (expires_at<=? OR last_ping_at<=? OR locked_by_uid=?)
+        """,
+        (vg_uid, token, now, now, expires_at, game_id, now, stale_cutoff, vg_uid),
+    )
+    if cur.rowcount == 0:
+        try:
+            c.execute(
+                "INSERT INTO enhance_locks "
+                "(game_id, locked_by_uid, lock_token, acquired_at, last_ping_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (game_id, vg_uid, token, now, now, expires_at),
+            )
+        except sqlite3.IntegrityError:
+            c.rollback()
+            row = c.execute(
+                "SELECT * FROM enhance_locks WHERE game_id=?", (game_id,)
+            ).fetchone()
+            return False, dict(row)
+    c.commit()
+    row = c.execute("SELECT * FROM enhance_locks WHERE game_id=?", (game_id,)).fetchone()
+    won = row["lock_token"] == token
+    return won, dict(row)
+
+
+def heartbeat_enhance_lock(game_id, lock_token, conn=None) -> bool:
+    """Bump last_ping_at to prove the holder's tab is still open. Returns
+    False if lock_token no longer matches the current row (lock expired,
+    was reclaimed, or was released) — the caller (a periodic ping, or an
+    immediate check on tab-refocus) uses that to tell its user they've
+    lost the lock."""
+    c = _c(conn)
+    cur = c.execute(
+        "UPDATE enhance_locks SET last_ping_at=? WHERE game_id=? AND lock_token=?",
+        (_now(), game_id, lock_token),
+    )
+    c.commit()
+    return cur.rowcount > 0
+
+
+def release_enhance_lock(game_id, lock_token, conn=None) -> bool:
+    """Delete the lock if lock_token still matches — called on a clean tab
+    close (sendBeacon) and right after a successful submission, once
+    generation_requests takes over as the phase-B lock."""
+    c = _c(conn)
+    cur = c.execute(
+        "DELETE FROM enhance_locks WHERE game_id=? AND lock_token=?",
+        (game_id, lock_token),
+    )
+    c.commit()
+    return cur.rowcount > 0
+
+
+def get_active_enhance_job(source_game_id, conn=None):
+    """The in-flight enhance job for source_game_id, if any (phase B lock —
+    the game is being generated, regardless of whether the submitter's tab
+    is still open). None if no enhance job is currently queued/generating
+    for this game."""
+    c = _c(conn)
+    row = c.execute(
+        "SELECT * FROM generation_requests "
+        "WHERE kind='enhance' AND source_game_id=? AND status IN ('queued', 'generating') "
+        "ORDER BY created_at DESC LIMIT 1",
+        (source_game_id,),
+    ).fetchone()
+    return dict(row) if row else None

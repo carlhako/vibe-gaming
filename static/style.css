@@ -568,6 +568,64 @@ body {
   text-overflow: ellipsis;
 }
 
+/* ---- Enhance-form lock indicator (cabinet-plate's second "light") ---- */
+
+.lock-plate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+}
+
+.lock-light {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #3a2400;
+  flex-shrink: 0;
+}
+
+.lock-light.on {
+  animation: blink 2.4s ease-in-out infinite;
+}
+
+.lock-light.locked-mine {
+  background: var(--accent2);
+  box-shadow: 0 0 10px var(--accent2);
+}
+
+.lock-light.locked-other,
+.lock-light.locked-job {
+  background: var(--hue-2);
+  box-shadow: 0 0 10px var(--hue-2);
+}
+
+.lock-label {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.lock-banner {
+  background: rgba(255, 107, 107, 0.08);
+  border: 1px solid var(--hue-2);
+  border-radius: 4px;
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.6;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+}
+
+#enhance-panel[data-held-by-me="true"] .lock-banner {
+  background: rgba(87, 227, 137, 0.07);
+  border-color: var(--accent2);
+}
+
 .screen {
   position: relative;
   flex: 1;
@@ -859,6 +917,14 @@ body {
 
 .form-panel button:hover {
   filter: brightness(1.08);
+}
+
+.form-panel textarea:disabled,
+.form-panel input[type="text"]:disabled,
+.form-panel button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: none;
 }
 
 .status-actions {
