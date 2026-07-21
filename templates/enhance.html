@@ -62,7 +62,7 @@
         {% endif %}
         <form method="post" action="{{ url_for('enhance_game_submit', game_id=game.game_id) }}" id="enhance-form">
           <input type="hidden" name="lock_token" id="lock-token-field" value="{{ lock_token or '' }}">
-          <textarea name="description" id="description-field" rows="6" placeholder="e.g. Add a second enemy type that moves faster, and speed up the whole game slightly after each level." required {{ 'disabled' if locked else '' }}>{{ request.form.get('description', '') }}</textarea>
+          <textarea name="description" id="description-field" rows="6" placeholder="e.g. Add a second enemy type that moves faster, and speed up the whole game slightly after each level." required {{ 'disabled' if locked else '' }}>{{ request.form.get('description', request.args.get('description', '')) }}</textarea>
           <label class="field-label" for="new_title">New title (optional)</label>
           <input type="text" id="new_title" name="new_title" placeholder="Leave blank to auto-name it &quot;{{ game.title }} (vN)&quot;" value="{{ request.form.get('new_title', '') }}" {{ 'disabled' if locked else '' }}>
           <button type="submit" id="enhance-submit" {{ 'disabled' if locked else '' }}>Generate enhanced version</button>

@@ -580,6 +580,7 @@ def create_app(games_dir=None) -> Flask:
         set_cookie = vg_uid is None
         if vg_uid is None:
             vg_uid = uuid.uuid4().hex
+        user = db.get_user(vg_uid, conn=get_db())
 
         error = None
         status = 400
@@ -594,7 +595,7 @@ def create_app(games_dir=None) -> Flask:
 
         if error:
             lock_ctx = _enhance_lock_context(game_id, vg_uid)
-            return render_template("enhance.html", game=game, error=error, **lock_ctx), status
+            return render_template("enhance.html", game=game, user=user, error=error, **lock_ctx), status
 
         requested_by = "web:" + vg_uid[:12]
         job_id = uuid.uuid4().hex

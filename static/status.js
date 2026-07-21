@@ -131,17 +131,23 @@
         continueBtn.className = "play-link";
         continueBtn.textContent = "Continue →";
         continueBtn.addEventListener("click", () => {
-          const form = document.createElement("form");
-          form.method = "post";
           if (job.source_game_id) {
-            form.action = "/games/" + encodeURIComponent(job.source_game_id) + "/enhance";
-            appendHidden(form, "description", promptTextarea.value);
+            // Don't POST straight to /enhance — that route requires a
+            // lock_token from the enhance form's own phase-A lock, which
+            // this page never acquired (and the enhance page's lock, if
+            // any, was already released when the browser navigated away
+            // to Idea Forge). Send the user back to a fresh GET instead,
+            // which acquires a real lock and pre-fills the textarea.
+            window.location.href = "/games/" + encodeURIComponent(job.source_game_id) +
+              "/enhance?description=" + encodeURIComponent(promptTextarea.value);
           } else {
+            const form = document.createElement("form");
+            form.method = "post";
             form.action = "/games/new";
             appendHidden(form, "prompt", promptTextarea.value);
+            document.body.appendChild(form);
+            form.submit();
           }
-          document.body.appendChild(form);
-          form.submit();
         });
         actions.appendChild(continueBtn);
         actions.hidden = false;
