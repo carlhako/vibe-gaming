@@ -1,3 +1,16 @@
+function bumpPlayCount(cartSelectBtn) {
+  // The server increments the real count as a side effect of the iframe's
+  // GET /play/<slug> request, which we have no response payload from (it's
+  // a navigation, not a fetch) - so bump the visible count optimistically
+  // rather than leaving it stale until the next full page load.
+  const countEl = cartSelectBtn.closest(".cart")?.querySelector(".cart-play-count");
+  if (!countEl) return;
+  const n = parseInt(countEl.textContent, 10);
+  if (Number.isNaN(n)) return;
+  const next = n + 1;
+  countEl.textContent = `${next} play${next === 1 ? "" : "s"}`;
+}
+
 function playSlug(slug, title) {
   document.querySelectorAll(".cart").forEach((c) => c.classList.remove("active"));
   const cart = document.querySelector(`.cart-select[data-slug="${CSS.escape(slug)}"]`);
@@ -18,6 +31,7 @@ function playSlug(slug, title) {
 document.querySelectorAll(".cart-select").forEach((btn) => {
   btn.addEventListener("click", () => {
     playSlug(btn.dataset.slug, btn.dataset.title);
+    bumpPlayCount(btn);
   });
 });
 
@@ -239,4 +253,6 @@ document.getElementById("info-modal-lineage").addEventListener("click", (evt) =>
   evt.preventDefault();
   closeInfoModal();
   playSlug(a.dataset.slug, a.dataset.title || a.textContent);
+  const cartSelectBtn = document.querySelector(`.cart-select[data-slug="${CSS.escape(a.dataset.slug)}"]`);
+  if (cartSelectBtn) bumpPlayCount(cartSelectBtn);
 });

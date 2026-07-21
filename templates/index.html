@@ -91,7 +91,7 @@
         <div class="cart {{ 'cart-sibling' if g.family_index > 0 else '' }}" style="--spine: var(--hue-{{ g.family_hue }})">
           <span class="cart-spine"></span>
           <div class="cart-main">
-            <button class="cart-select" data-slug="{{ g.slug }}" data-title="{{ g.title }}" title="{{ g.title }}">
+            <button class="cart-select" data-slug="{{ g.slug }}" data-title="{{ g.title }}" data-game-id="{{ g.game_id or '' }}" title="{{ g.title }}">
               <span class="cart-body">
                 <span class="cart-title-row">
                   <span class="cart-title">{{ g.base_title }}</span>
