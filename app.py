@@ -46,6 +46,17 @@ _ADMIN_PAGE_SIZES = (20, 50, 100, 1000)
 _logger = logging.getLogger(__name__)
 
 
+def get_db():
+    """One SQLite connection per request, reused by every db.* call in that
+    request and closed in teardown — instead of each call opening (and
+    never closing) its own connection, which under sustained/concurrent
+    traffic multiplies both open-file-descriptor usage and lock contention
+    on the single on-disk vibegames.db."""
+    if "db_conn" not in g:
+        g.db_conn = db.get_connection()
+    return g.db_conn
+
+
 def require_admin_token(view):
     """Gate a view behind the ADMIN_TOKEN env var, checked as a `token`
     query param or a `Bearer` Authorization header. 403 on missing/wrong
@@ -245,9 +256,8 @@ def create_app(games_dir=None) -> Flask:
         game_ids = [g["game_id"] for g in games if g["game_id"]]
         by_id = {}
         play_counts = {}
-        conn = None
+        conn = get_db()
         if game_ids:
-            conn = db.get_connection()
             placeholders = ",".join("?" * len(game_ids))
             rows = conn.execute(
                 f"SELECT game_id, thumbs_up, thumbs_down, model, effort, tokens_used, "
@@ -277,7 +287,6 @@ def create_app(games_dir=None) -> Flask:
         creator_uids = {g["creator_uid"] for g in games if g.get("creator_uid")}
         usernames_by_uid = {}
         if creator_uids:
-            conn = conn or db.get_connection()
             placeholders = ",".join("?" * len(creator_uids))
             rows = conn.execute(
                 f"SELECT uid, username FROM users WHERE uid IN ({placeholders})",
@@ -328,7 +337,7 @@ def create_app(games_dir=None) -> Flask:
         if sort not in ("alpha", "rating", "date"):
             sort = "date"
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
-        user = db.get_user(vg_uid) if vg_uid else None
+        user = db.get_user(vg_uid, conn=get_db()) if vg_uid else None
         return render_template(
             "index.html", games=get_games(sort), sort=sort,
             user=user, signed_in=request.args.get("signed_in") == "1",
@@ -363,8 +372,8 @@ def create_app(games_dir=None) -> Flask:
             "created_at": game.get("created_at"),
             "version": game.get("version"),
             "creator": game.get("creator_name", "anonymous"),
-            "play_count": db.get_play_count(game_id),
-            "recent_plays": db.get_recent_plays(game_id, limit=20),
+            "play_count": db.get_play_count(game_id, conn=get_db()),
+            "recent_plays": db.get_recent_plays(game_id, limit=20, conn=get_db()),
             "ancestors": [
                 {"slug": g["slug"], "title": g["title"], "hidden": g.get("hidden", False)}
                 for g in lineage["ancestors"]
@@ -379,7 +388,8 @@ def create_app(games_dir=None) -> Flask:
     def rate_game(game_id):
         if not _GAME_ID_RE.match(game_id):
             abort(404)
-        game = db.get_web_game(game_id)
+        conn = get_db()
+        game = db.get_web_game(game_id, conn=conn)
         if game is None:
             abort(404)
 
@@ -399,8 +409,9 @@ def create_app(games_dir=None) -> Flask:
         # coming from the proxy's IP, collapsing the per-IP constraint.
         ok = db.record_rating(
             game_id, vote, client_uid=vg_uid, ip_address=request.remote_addr or "unknown",
+            conn=conn,
         )
-        updated = db.get_web_game(game_id)
+        updated = db.get_web_game(game_id, conn=conn)
         body = {
             "ok": ok, "thumbs_up": updated["thumbs_up"], "thumbs_down": updated["thumbs_down"],
         }
@@ -437,11 +448,13 @@ def create_app(games_dir=None) -> Flask:
                 game_id = json.loads(meta_path.read_text(encoding="utf-8")).get("game_id")
             except (json.JSONDecodeError, OSError):
                 game_id = None
-        if game_id and db.get_web_game(game_id):
+        conn = get_db()
+        if game_id and db.get_web_game(game_id, conn=conn):
             db.record_play(
                 game_id,
                 client_uid=request.cookies.get(_VG_UID_COOKIE),
                 ip_address=request.remote_addr or "unknown",
+                conn=conn,
             )
         return send_from_directory(game_dir, "index.html")
 
@@ -449,7 +462,7 @@ def create_app(games_dir=None) -> Flask:
     def download_game(game_id):
         if not _GAME_ID_RE.match(game_id):
             abort(404)
-        game = db.get_web_game(game_id)
+        game = db.get_web_game(game_id, conn=get_db())
         if game is None:
             abort(404)
         game_dir = games_dir / game["slug"]
@@ -464,7 +477,7 @@ def create_app(games_dir=None) -> Flask:
     @app.get("/games/new")
     def new_game_form():
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
-        user = db.get_user(vg_uid) if vg_uid else None
+        user = db.get_user(vg_uid, conn=get_db()) if vg_uid else None
         return render_template("new_game.html", user=user)
 
     @app.post("/games/new")
@@ -484,7 +497,7 @@ def create_app(games_dir=None) -> Flask:
         job_id = uuid.uuid4().hex
         db.create_generation_request(
             job_id=job_id, kind="create", prompt=prompt, requested_by=requested_by,
-            creator_uid=vg_uid,
+            creator_uid=vg_uid, conn=get_db(),
         )
 
         resp = redirect(url_for("job_status_page", job_id=job_id))
@@ -499,18 +512,18 @@ def create_app(games_dir=None) -> Flask:
     def enhance_game_form(game_id):
         if not _GAME_ID_RE.match(game_id):
             abort(404)
-        game = db.get_web_game(game_id)
+        game = db.get_web_game(game_id, conn=get_db())
         if game is None:
             abort(404)
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
-        user = db.get_user(vg_uid) if vg_uid else None
+        user = db.get_user(vg_uid, conn=get_db()) if vg_uid else None
         return render_template("enhance.html", game=game, user=user)
 
     @app.post("/games/<game_id>/enhance")
     def enhance_game_submit(game_id):
         if not _GAME_ID_RE.match(game_id):
             abort(404)
-        game = db.get_web_game(game_id)
+        game = db.get_web_game(game_id, conn=get_db())
         if game is None:
             abort(404)
 
@@ -530,7 +543,7 @@ def create_app(games_dir=None) -> Flask:
         job_id = uuid.uuid4().hex
         db.create_generation_request(
             job_id=job_id, kind="enhance", prompt=description, requested_by=requested_by,
-            source_game_id=game_id, new_title=new_title, creator_uid=vg_uid,
+            source_game_id=game_id, new_title=new_title, creator_uid=vg_uid, conn=get_db(),
         )
 
         resp = redirect(url_for("job_status_page", job_id=job_id))
@@ -544,7 +557,7 @@ def create_app(games_dir=None) -> Flask:
     @app.get("/games/new/idea-forge")
     def idea_forge_new_form():
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
-        user = db.get_user(vg_uid) if vg_uid else None
+        user = db.get_user(vg_uid, conn=get_db()) if vg_uid else None
         prefill = request.args.get("prompt", "")
         return render_template(
             "idea_forge.html", mode="create", game=None, user=user, prefill=prefill
@@ -568,7 +581,7 @@ def create_app(games_dir=None) -> Flask:
         job_id = uuid.uuid4().hex
         db.create_generation_request(
             job_id=job_id, kind="prompt_help", prompt=rough, requested_by=requested_by,
-            creator_uid=vg_uid,
+            creator_uid=vg_uid, conn=get_db(),
         )
 
         resp = redirect(url_for("job_status_page", job_id=job_id))
@@ -583,11 +596,11 @@ def create_app(games_dir=None) -> Flask:
     def idea_forge_enhance_form(game_id):
         if not _GAME_ID_RE.match(game_id):
             abort(404)
-        game = db.get_web_game(game_id)
+        game = db.get_web_game(game_id, conn=get_db())
         if game is None:
             abort(404)
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
-        user = db.get_user(vg_uid) if vg_uid else None
+        user = db.get_user(vg_uid, conn=get_db()) if vg_uid else None
         prefill = request.args.get("description", "")
         return render_template(
             "idea_forge.html", mode="enhance", game=game, user=user, prefill=prefill
@@ -597,7 +610,7 @@ def create_app(games_dir=None) -> Flask:
     def idea_forge_enhance_submit(game_id):
         if not _GAME_ID_RE.match(game_id):
             abort(404)
-        game = db.get_web_game(game_id)
+        game = db.get_web_game(game_id, conn=get_db())
         if game is None:
             abort(404)
 
@@ -617,7 +630,7 @@ def create_app(games_dir=None) -> Flask:
         job_id = uuid.uuid4().hex
         db.create_generation_request(
             job_id=job_id, kind="prompt_help", prompt=rough, requested_by=requested_by,
-            source_game_id=game_id, creator_uid=vg_uid,
+            source_game_id=game_id, creator_uid=vg_uid, conn=get_db(),
         )
 
         resp = redirect(url_for("job_status_page", job_id=job_id))
@@ -637,7 +650,7 @@ def create_app(games_dir=None) -> Flask:
         set_cookie = vg_uid is None
         if vg_uid is None:
             vg_uid = uuid.uuid4().hex
-        db.ensure_user(vg_uid)
+        db.ensure_user(vg_uid, conn=get_db())
         resp = redirect(url_for("account_page"))
         if set_cookie:
             resp.set_cookie(
@@ -649,7 +662,7 @@ def create_app(games_dir=None) -> Flask:
     def _do_sign_in(uid):
         """Validate uid format + existence; on success return a redirect
         response with the vg_uid cookie set, else (None, error_message)."""
-        if not _GAME_ID_RE.match(uid) or db.get_user(uid) is None:
+        if not _GAME_ID_RE.match(uid) or db.get_user(uid, conn=get_db()) is None:
             return None, "Token not recognized. Double-check what you pasted."
         resp = redirect(url_for("index", signed_in="1"))
         resp.set_cookie(
@@ -680,19 +693,20 @@ def create_app(games_dir=None) -> Flask:
     @app.get("/account")
     def account_page():
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
-        user = db.get_user(vg_uid) if vg_uid else None
+        user = db.get_user(vg_uid, conn=get_db()) if vg_uid else None
         return render_template("account.html", uid=vg_uid, user=user)
 
     @app.post("/account")
     def account_update():
+        conn = get_db()
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
         set_cookie = vg_uid is None
         if vg_uid is None:
             vg_uid = uuid.uuid4().hex
-        db.ensure_user(vg_uid)
+        db.ensure_user(vg_uid, conn=conn)
         username = (request.form.get("username") or "").strip()[:40] or None
-        ok = db.set_username(vg_uid, username)
-        user = db.get_user(vg_uid)
+        ok = db.set_username(vg_uid, username, conn=conn)
+        user = db.get_user(vg_uid, conn=conn)
         if ok:
             resp = redirect(url_for("account_page"))
         else:
@@ -712,13 +726,14 @@ def create_app(games_dir=None) -> Flask:
 
     @app.get("/profile")
     def profile_page():
+        conn = get_db()
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
-        if not vg_uid or db.get_user(vg_uid) is None:
+        if not vg_uid or db.get_user(vg_uid, conn=conn) is None:
             return redirect(url_for("account_page"))
-        user = db.get_user(vg_uid)
+        user = db.get_user(vg_uid, conn=conn)
         my_games = [g for g in get_games(include_hidden=True) if g.get("creator_uid") == vg_uid]
-        stats = db.get_user_stats(vg_uid)
-        recent_plays = db.get_user_play_history(vg_uid, limit=20)
+        stats = db.get_user_stats(vg_uid, conn=conn)
+        recent_plays = db.get_user_play_history(vg_uid, limit=20, conn=conn)
         return render_template(
             "profile.html", uid=vg_uid, user=user, my_games=my_games,
             stats=stats, recent_plays=recent_plays,
@@ -728,17 +743,18 @@ def create_app(games_dir=None) -> Flask:
     def profile_set_game_hidden(game_id):
         if not _GAME_ID_RE.match(game_id):
             abort(404)
+        conn = get_db()
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
-        game = db.get_web_game(game_id)
+        game = db.get_web_game(game_id, conn=conn)
         if game is None or not vg_uid or game.get("creator_uid") != vg_uid:
             abort(404)
         hidden = request.form.get("hidden") == "1"
-        db.set_game_hidden(game_id, hidden)
+        db.set_game_hidden(game_id, hidden, conn=conn)
         return redirect(url_for("profile_page"))
 
     @app.get("/leaderboard")
     def leaderboard():
-        ranking = db.get_user_leaderboard()
+        ranking = db.get_user_leaderboard(conn=get_db())
         games_by_uid = {}
         for game in get_games():  # default include_hidden=False
             uid = game.get("creator_uid")
@@ -752,25 +768,26 @@ def create_app(games_dir=None) -> Flask:
 
     @app.get("/api/status/<job_id>")
     def api_status(job_id):
-        job = db.get_generation_request(job_id)
+        conn = get_db()
+        job = db.get_generation_request(job_id, conn=conn)
         if job is None:
             abort(404)
         result_slug = None
         result_title = None
         if job["result_game_id"]:
-            game = db.get_web_game(job["result_game_id"])
+            game = db.get_web_game(job["result_game_id"], conn=conn)
             if game:
                 result_slug = game["slug"]
                 result_title = game["title"]
 
         queue_position = None
         eta_seconds = None
-        avg_duration_seconds = db.get_average_duration(kind=job["kind"])
+        avg_duration_seconds = db.get_average_duration(kind=job["kind"], conn=conn)
         if job["status"] == "queued":
-            queue_position = db.get_queue_position(job_id)
-            blended_avg = db.get_average_duration(kind=None)
+            queue_position = db.get_queue_position(job_id, conn=conn)
+            blended_avg = db.get_average_duration(kind=None, conn=conn)
             if blended_avg is not None:
-                jobs_ahead = queue_position + (1 if db.count_generating() else 0)
+                jobs_ahead = queue_position + (1 if db.count_generating(conn=conn) else 0)
                 eta_seconds = blended_avg * jobs_ahead
 
         return jsonify({
@@ -806,7 +823,7 @@ def create_app(games_dir=None) -> Flask:
             return response
         try:
             duration_ms = (time.monotonic() - getattr(g, "_t0", time.monotonic())) * 1000
-            conn = db.get_connection()
+            conn = get_db()
             conn.execute(
                 "INSERT INTO access_log "
                 "(method, path, status_code, ip_address, user_agent, client_uid, "
@@ -833,7 +850,7 @@ def create_app(games_dir=None) -> Flask:
     @app.get("/admin/stats")
     @require_admin_token
     def admin_stats():
-        conn = db.get_connection()
+        conn = get_db()
         total_hits = conn.execute("SELECT COUNT(*) AS n FROM access_log").fetchone()["n"]
         unique_clients = conn.execute(
             "SELECT COUNT(DISTINCT client_uid) AS n FROM access_log WHERE client_uid IS NOT NULL"
@@ -943,7 +960,7 @@ def create_app(games_dir=None) -> Flask:
         if not _GAME_ID_RE.match(game_id):
             abort(404)
         hidden = request.form.get("hidden") == "1"
-        if not db.set_game_hidden(game_id, hidden):
+        if not db.set_game_hidden(game_id, hidden, conn=get_db()):
             abort(404)
         return redirect(url_for("admin_stats", token=request.args.get("token")))
 
@@ -955,10 +972,11 @@ def create_app(games_dir=None) -> Flask:
         new_title = (request.form.get("title") or "").strip()[:120]
         if not new_title:
             abort(400)
-        game = db.get_web_game(game_id)
+        conn = get_db()
+        game = db.get_web_game(game_id, conn=conn)
         if game is None:
             abort(404)
-        db.rename_game(game_id, new_title)
+        db.rename_game(game_id, new_title, conn=conn)
 
         meta_path = games_dir / game["slug"] / "meta.json"
         meta = {}
@@ -971,6 +989,12 @@ def create_app(games_dir=None) -> Flask:
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
         return redirect(url_for("admin_stats", token=request.args.get("token")))
+
+    @app.teardown_appcontext
+    def _close_db(exception=None):
+        conn = g.pop("db_conn", None)
+        if conn is not None:
+            conn.close()
 
     return app
 

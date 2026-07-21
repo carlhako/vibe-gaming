@@ -2,7 +2,10 @@
 .env
 config.yaml
 vibegames.db
+vibegames.db-wal
+vibegames.db-shm
 vibegames.db.bak
+logs/
 __pycache__/
 *.pyc
 venv/

@@ -161,12 +161,27 @@ def _ensure_columns(conn):
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {coltype}")
 
 
+_schema_ready_paths: set[str] = set()
+
+
 def get_connection(check_same_thread=True):
+    """Open a new connection. Schema creation/migration only needs to run
+    once per DB file (it's on-disk state, not per-connection state) — every
+    connection still gets WAL mode + a busy timeout so concurrent readers/
+    writers (gunicorn workers, job_runner threads) block-and-retry instead
+    of raising 'database is locked' under contention. Keyed by DB_PATH
+    rather than a single flag so tests, which point DB_PATH at a fresh
+    tmp file per test (see tests/conftest.py's isolated_db fixture), still
+    get their schema created."""
     conn = sqlite3.connect(DB_PATH, check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
-    conn.executescript(SCHEMA)
-    _ensure_columns(conn)
-    conn.commit()
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    if DB_PATH not in _schema_ready_paths:
+        conn.executescript(SCHEMA)
+        _ensure_columns(conn)
+        conn.commit()
+        _schema_ready_paths.add(DB_PATH)
     return conn
 
 
