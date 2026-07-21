@@ -15,13 +15,24 @@ import yaml
 _BASE_DIR = Path(__file__).parent
 
 
+def _load_config() -> dict:
+    config_path = _BASE_DIR / "config.yaml"
+    if not config_path.exists():
+        return {}
+    with open(config_path) as f:
+        return yaml.safe_load(f) or {}
+
+
+# Bind to the same host/port config.yaml already gives the dev server
+# (`python3 app.py`), so switching to gunicorn doesn't silently move the
+# site to gunicorn's own default of 127.0.0.1:8000.
+_gw_cfg = _load_config().get("game_web", {})
+bind = f"{_gw_cfg.get('host', '0.0.0.0')}:{_gw_cfg.get('port', 8600)}"
+
+
 def post_fork(server, worker):
     import job_runner
 
-    config_path = _BASE_DIR / "config.yaml"
-    config = {}
-    if config_path.exists():
-        with open(config_path) as f:
-            config = yaml.safe_load(f) or {}
+    config = _load_config()
     games_dir = _BASE_DIR / config.get("game_web", {}).get("games_dir", "games")
     job_runner.start_workers(config, games_dir)
