@@ -85,8 +85,17 @@ def test_acquire_enhance_lock_race_safety(isolated_db):
 def test_heartbeat_keeps_lock_alive_and_rejects_wrong_token(isolated_db):
     game_id = "a" * 32
     _, lock = db.acquire_enhance_lock(game_id, "uid-a")
-    assert db.heartbeat_enhance_lock(game_id, lock["lock_token"]) is True
-    assert db.heartbeat_enhance_lock(game_id, "not-the-token") is False
+    assert db.heartbeat_enhance_lock(game_id, lock["lock_token"]) is not None
+    assert db.heartbeat_enhance_lock(game_id, "not-the-token") is None
+
+
+def test_heartbeat_extends_expiry_past_the_original_deadline(isolated_db):
+    game_id = "a" * 32
+    _, lock = db.acquire_enhance_lock(game_id, "uid-a")
+    original_expiry = lock["expires_at"]
+    new_expiry = db.heartbeat_enhance_lock(game_id, lock["lock_token"])
+    assert new_expiry is not None
+    assert new_expiry >= original_expiry
 
 
 def test_release_enhance_lock_frees_it_for_others(isolated_db):

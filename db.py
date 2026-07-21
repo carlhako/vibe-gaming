@@ -20,10 +20,14 @@ from pathlib import Path
 
 DB_PATH = "vibegames.db"
 
-# Enhance-form lock (see acquire_enhance_lock): absolute cap on how long one
-# visitor can sit on the enhance form before it's up for grabs again, and how
-# long the server tolerates a gap between heartbeat pings before treating the
-# tab as gone.
+# Enhance-form lock (see acquire_enhance_lock): how long one visitor can sit
+# on the enhance form before it's up for grabs again, and how long the server
+# tolerates a gap between heartbeat pings before treating the tab as gone.
+# Not an absolute wall-clock deadline from when the form was opened — each
+# successful heartbeat (see heartbeat_enhance_lock) slides expires_at forward
+# by this much again, so an actively-open tab never gets cut off mid-typing;
+# only a tab that stops pinging (closed, backgrounded past the idle timeout,
+# or genuinely abandoned) lets the lock lapse.
 ENHANCE_LOCK_TTL_SECONDS = 600
 ENHANCE_LOCK_IDLE_TIMEOUT_SECONDS = 30
 
@@ -860,19 +864,24 @@ def acquire_enhance_lock(game_id, vg_uid, conn=None):
     return won, dict(row)
 
 
-def heartbeat_enhance_lock(game_id, lock_token, conn=None) -> bool:
-    """Bump last_ping_at to prove the holder's tab is still open. Returns
-    False if lock_token no longer matches the current row (lock expired,
-    was reclaimed, or was released) — the caller (a periodic ping, or an
-    immediate check on tab-refocus) uses that to tell its user they've
-    lost the lock."""
+def heartbeat_enhance_lock(game_id, lock_token, conn=None):
+    """Bump last_ping_at to prove the holder's tab is still open, and slide
+    expires_at forward another ENHANCE_LOCK_TTL_SECONDS from now — a tab
+    that keeps actively pinging never gets cut off by the original
+    absolute deadline just because filling out the form took a while.
+    Returns the new expires_at on success, or None if lock_token no longer
+    matches the current row (lock expired, was reclaimed, or was
+    released) — the caller (a periodic ping, or an immediate check on
+    tab-refocus) uses that to tell its user they've lost the lock."""
     c = _c(conn)
+    now = _now()
+    expires_at = _iso_add_seconds(now, ENHANCE_LOCK_TTL_SECONDS)
     cur = c.execute(
-        "UPDATE enhance_locks SET last_ping_at=? WHERE game_id=? AND lock_token=?",
-        (_now(), game_id, lock_token),
+        "UPDATE enhance_locks SET last_ping_at=?, expires_at=? WHERE game_id=? AND lock_token=?",
+        (now, expires_at, game_id, lock_token),
     )
     c.commit()
-    return cur.rowcount > 0
+    return expires_at if cur.rowcount > 0 else None
 
 
 def release_enhance_lock(game_id, lock_token, conn=None) -> bool:

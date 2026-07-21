@@ -618,12 +618,8 @@ def create_app(games_dir=None) -> Flask:
         if not _GAME_ID_RE.match(game_id):
             abort(404)
         lock_token = request.form.get("lock_token") or ""
-        ok = bool(lock_token) and db.heartbeat_enhance_lock(game_id, lock_token, conn=get_db())
-        expires_at = None
-        if ok:
-            lock = db.get_active_enhance_lock(game_id, conn=get_db())
-            expires_at = lock["expires_at"] if lock else None
-        return jsonify(ok=ok, expires_at=expires_at)
+        expires_at = bool(lock_token) and db.heartbeat_enhance_lock(game_id, lock_token, conn=get_db())
+        return jsonify(ok=bool(expires_at), expires_at=expires_at or None)
 
     @app.post("/games/<game_id>/enhance/lock/release")
     def enhance_lock_release(game_id):
