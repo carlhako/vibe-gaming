@@ -14,5 +14,4 @@ mkdir -p logs
 exec gunicorn --workers 2 -c gunicorn.conf.py \
     --access-logfile logs/gunicorn-access.log \
     --error-logfile logs/gunicorn-error.log \
-    --capture-output \
     app:app
