@@ -143,8 +143,18 @@
       if (document.visibilityState === "visible") ping();
     });
 
+    // Submitting the form navigates the page away, which fires
+    // pagehide/beforeunload just like closing the tab — but here the
+    // server-side POST handler is what owns the lock (it heartbeats it,
+    // creates the job, then releases it). If we also fired the release
+    // beacon it would race the POST and often delete the lock first,
+    // making the submit's heartbeat fail with a bogus "lock expired".
+    // So suppress the unload-release once a real submit is under way.
+    let submitting = false;
+    if (form) form.addEventListener("submit", () => { submitting = true; });
+
     function release() {
-      if (locked) return; // already lost/disabled, server already dropped it
+      if (locked || submitting) return; // lost/disabled, or the POST owns it now
       navigator.sendBeacon(releaseUrl, new URLSearchParams({ lock_token: lockToken }));
     }
     window.addEventListener("pagehide", release);
