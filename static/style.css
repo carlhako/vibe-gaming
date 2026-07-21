@@ -938,6 +938,10 @@ body {
   gap: 6px;
 }
 
+.status-prompt-result[hidden] {
+  display: none;
+}
+
 .play-link {
   display: inline-block;
   background: var(--accent2);
