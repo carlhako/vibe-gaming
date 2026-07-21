@@ -14,6 +14,16 @@ import yaml
 
 _BASE_DIR = Path(__file__).parent
 
+# gthread instead of the default sync worker class: a sync worker blocks its
+# entire process in socket recv() while waiting on a slow/stalled client
+# (e.g. a flaky WAN link that stops sending mid-request), so with only 2
+# worker processes, 2 stalled clients is enough to make the whole site
+# deaf to new connections until gunicorn's --timeout watchdog (30s default)
+# kills and respawns the wedged worker. With threads, a stalled client only
+# ties up one thread — the other threads in that process keep serving.
+worker_class = "gthread"
+threads = 4
+
 
 def _load_config() -> dict:
     config_path = _BASE_DIR / "config.yaml"
