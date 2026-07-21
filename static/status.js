@@ -159,19 +159,38 @@
     }
   }
 
+  let consecutiveErrors = 0;
+  const MAX_CONSECUTIVE_ERRORS = 10;
+
   async function poll() {
     try {
       const res = await fetch(`/api/status/${jobId}`);
-      if (!res.ok) {
+      if (res.status === 404) {
+        // The job genuinely doesn't exist (bad/stale URL) — this is terminal.
         clearInterval(pollTimer);
         stopTicking();
         heading.textContent = "Unknown job";
         detail.textContent = "This status page's job could not be found.";
         return;
       }
+      if (!res.ok) {
+        // A transient server error (e.g. a momentary DB hiccup) — the job
+        // itself is still running, so don't declare it "unknown". Keep
+        // polling; only give up after repeated consecutive failures.
+        throw new Error(`status ${res.status}`);
+      }
+      consecutiveErrors = 0;
       render(await res.json());
     } catch (err) {
-      // transient network error — keep polling
+      consecutiveErrors += 1;
+      console.error("status poll failed", err);
+      if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        clearInterval(pollTimer);
+        stopTicking();
+        heading.textContent = "Lost connection";
+        detail.textContent =
+          "Couldn't reach the server after several attempts. Generation may still be running in the background — reload this page to check.";
+      }
     }
   }
 

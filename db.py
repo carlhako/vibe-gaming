@@ -409,11 +409,16 @@ def get_generation_history(limit=20, offset=0, conn=None):
         """
         SELECT gr.job_id, gr.kind, gr.prompt, gr.new_title, gr.status,
                gr.requested_by, gr.creator_uid, gr.created_at,
+               gr.error, gr.model, gr.effort, gr.attempts,
+               gr.tokens_used, gr.duration_seconds, gr.detected_genre,
+               gr.source_game_id,
                wg.title AS result_title, wg.slug AS result_slug,
-               u.username AS creator_username
+               u.username AS creator_username,
+               src.title AS source_title
         FROM generation_requests gr
         LEFT JOIN web_games wg ON wg.game_id = gr.result_game_id
         LEFT JOIN users u ON u.uid = gr.creator_uid
+        LEFT JOIN web_games src ON src.game_id = gr.source_game_id
         ORDER BY gr.created_at DESC, gr.job_id
         LIMIT ? OFFSET ?
         """,

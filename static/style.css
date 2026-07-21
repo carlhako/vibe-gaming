@@ -1165,6 +1165,50 @@ body {
   width: 100%;
 }
 
+.history-detail-dialog {
+  max-width: 520px;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.history-detail-dialog[open] {
+  display: flex;
+}
+
+.history-detail-dialog h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.history-detail-meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.history-detail-meta dt {
+  color: var(--muted);
+}
+
+.history-detail-meta dd {
+  margin: 0;
+  color: var(--ink);
+}
+
+.history-detail-dialog textarea {
+  width: 100%;
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+
 .rename-dialog::backdrop {
   background: rgba(0, 0, 0, 0.6);
 }

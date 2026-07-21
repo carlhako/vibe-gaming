@@ -188,16 +188,37 @@
           {{ pager(history_pager) }}
           {% if history_rows %}
           <table class="stats-table">
-            <thead><tr><th>When</th><th>Kind</th><th>Title</th><th>Requested by</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>When</th><th>Kind</th><th>Title</th><th>Requested by</th><th>Status</th><th>Attempts</th><th>Model</th><th>Duration</th><th>Tokens</th><th></th><th></th></tr></thead>
             <tbody>
               {% for r in history_rows %}
               <tr class="{{ 'is-hidden-row' if r.status == 'failed' }}">
                 <td>{{ r.created_at[:19].replace('T', ' ') }}</td>
-                <td>{{ 'new' if r.kind == 'create' else r.kind }}</td>
+                <td>{{ 'new' if r.kind == 'create' else r.kind }}{% if r.kind == 'enhance' and r.source_title %} <span class="form-hint">of {{ r.source_title }}</span>{% endif %}</td>
                 <td>{{ r.result_title or r.new_title or (r.prompt[:60] ~ ('…' if r.prompt|length > 60 else '')) }}</td>
                 <td>{{ r.creator_username or (r.creator_uid[:8] ~ '…' if r.creator_uid else r.requested_by) }}</td>
-                <td>{{ r.status }}</td>
+                <td title="{{ r.error or '' }}">{{ r.status }}{% if r.status == 'failed' and r.error %} &#9432;{% endif %}</td>
+                <td>{{ r.attempts or '—' }}</td>
+                <td>{{ r.model or '—' }}{% if r.effort %} <span class="form-hint">({{ r.effort }})</span>{% endif %}</td>
+                <td>{{ '%.1fs'|format(r.duration_seconds) if r.duration_seconds is not none else '—' }}</td>
+                <td>{{ r.tokens_used if r.tokens_used is not none else '—' }}</td>
                 <td>{% if r.result_slug %}<a class="game-row-play-link" href="{{ url_for('play', slug=r.result_slug) }}" target="_blank" rel="noopener">Play &#8599;</a>{% endif %}</td>
+                <td>
+                  <button type="button" class="rename-btn history-detail-btn"
+                    data-job-id="{{ r.job_id }}"
+                    data-kind="{{ r.kind }}"
+                    data-status="{{ r.status }}"
+                    data-created-at="{{ r.created_at }}"
+                    data-requested-by="{{ r.requested_by }}"
+                    data-model="{{ r.model or '' }}"
+                    data-effort="{{ r.effort or '' }}"
+                    data-attempts="{{ r.attempts or '' }}"
+                    data-duration="{{ r.duration_seconds if r.duration_seconds is not none else '' }}"
+                    data-tokens="{{ r.tokens_used if r.tokens_used is not none else '' }}"
+                    data-genre="{{ r.detected_genre or '' }}"
+                    data-error="{{ r.error or '' }}"
+                    data-prompt="{{ r.prompt }}"
+                  >Details</button>
+                </td>
               </tr>
               {% endfor %}
             </tbody>
@@ -243,6 +264,17 @@
     </form>
   </dialog>
 
+  <dialog id="history-detail-dialog" class="rename-dialog history-detail-dialog">
+    <h3 id="history-detail-heading"></h3>
+    <dl class="history-detail-meta" id="history-detail-meta"></dl>
+    <p class="form-hint" id="history-detail-error" hidden></p>
+    <label class="field-label" for="history-detail-prompt">Prompt</label>
+    <textarea id="history-detail-prompt" rows="10" readonly></textarea>
+    <div class="dialog-actions">
+      <button type="button" id="history-detail-close">Close</button>
+    </div>
+  </dialog>
+
   <script>
     const ADMIN_TOKEN = {{ admin_token | tojson }};
     const renameDialog = document.getElementById("rename-dialog");
@@ -259,6 +291,52 @@
     });
 
     document.getElementById("rename-cancel").addEventListener("click", () => renameDialog.close());
+
+    // ---- Generation history detail dialog ----
+    const historyDialog = document.getElementById("history-detail-dialog");
+    const historyHeading = document.getElementById("history-detail-heading");
+    const historyMeta = document.getElementById("history-detail-meta");
+    const historyError = document.getElementById("history-detail-error");
+    const historyPrompt = document.getElementById("history-detail-prompt");
+
+    function metaRow(label, value) {
+      if (!value) return "";
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.textContent = value;
+      return [dt, dd];
+    }
+
+    document.querySelectorAll(".history-detail-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const d = btn.dataset;
+        historyHeading.textContent = `${d.kind === "create" ? "New game" : d.kind} — ${d.status}`;
+        historyMeta.replaceChildren();
+        [
+          ["Requested", d.createdAt ? d.createdAt.replace("T", " ").slice(0, 19) : ""],
+          ["Requested by", d.requestedBy],
+          ["Model", d.effort ? `${d.model} (${d.effort})` : d.model],
+          ["Attempts", d.attempts],
+          ["Duration", d.duration ? `${parseFloat(d.duration).toFixed(1)}s` : ""],
+          ["Tokens used", d.tokens],
+          ["Detected genre", d.genre],
+        ].forEach(([label, value]) => historyMeta.append(...([...metaRow(label, value)])));
+
+        if (d.error) {
+          historyError.hidden = false;
+          historyError.textContent = `Error: ${d.error}`;
+        } else {
+          historyError.hidden = true;
+          historyError.textContent = "";
+        }
+
+        historyPrompt.value = d.prompt || "";
+        historyDialog.showModal();
+      });
+    });
+
+    document.getElementById("history-detail-close").addEventListener("click", () => historyDialog.close());
 
     // ---- Tabs ----
     const tabButtons = document.querySelectorAll(".admin-tab");
