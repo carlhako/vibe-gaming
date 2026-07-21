@@ -422,10 +422,24 @@ def create_app(games_dir=None) -> Flask:
         game_dir = games_dir / slug
         if not (game_dir / "index.html").exists():
             abort(404)
-        game = db.get_web_game_by_slug(slug)
-        if game is not None:
+        # Look up the game_id the same way the rest of the app does - from
+        # meta.json via the disk manifest - rather than a separate
+        # slug-keyed DB query. A VM whose vibegames.db predates a game's
+        # committed meta.json game_id (e.g. connect-4-4, migrated onto the
+        # GUID schema before its game_id existed) can end up with a stale
+        # duplicate web_games row under the same slug but a different
+        # game_id; querying by slug there silently records plays against
+        # the wrong row while the UI displays counts for the meta.json one.
+        meta_path = game_dir / "meta.json"
+        game_id = None
+        if meta_path.exists():
+            try:
+                game_id = json.loads(meta_path.read_text(encoding="utf-8")).get("game_id")
+            except (json.JSONDecodeError, OSError):
+                game_id = None
+        if game_id and db.get_web_game(game_id):
             db.record_play(
-                game["game_id"],
+                game_id,
                 client_uid=request.cookies.get(_VG_UID_COOKIE),
                 ip_address=request.remote_addr or "unknown",
             )
