@@ -48,16 +48,6 @@ enhanceaiwebgame:
   max_attempts: 3            # 1 initial + 2 retries; each failed attempt restores the backup first
   smoke_test_timeout_seconds: 20
 
-ideaforge:
-  model: "deepseek-v4-flash"
-  effort: "low"              # non-thinking/fast on purpose: prompt_help jobs share the
-                             # SAME global one-at-a-time "generating" slot as full
-                             # create/enhance jobs (see db.claim_next_queued_request's
-                             # NOT EXISTS guard) — keeping this fast keeps the queue
-                             # snappy for everyone. Any value other than "high"/"max"
-                             # is equivalent here; "low" is just a readable label.
-  timeout_seconds: 60        # a short prose/JSON brief, not a multi-thousand-token HTML file
-
 job_runner:
   workers: 1                 # poll-loop threads per process (dev) / per gunicorn worker (prod)
   poll_interval_seconds: 1   # how often an idle worker checks for a newly queued job

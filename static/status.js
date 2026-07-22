@@ -8,9 +8,6 @@
   const statsEl = document.getElementById("status-stats");
   const actions = document.getElementById("status-actions");
   const powerLight = document.getElementById("power-light");
-  const promptResult = document.getElementById("status-prompt-result");
-  const genreHint = document.getElementById("status-genre-hint");
-  const promptTextarea = document.getElementById("prompt-result-text");
 
   const LABELS = {
     queued: "Queued…",
@@ -22,16 +19,7 @@
   const KIND_VERB = {
     create: "Builds",
     enhance: "Enhancements",
-    prompt_help: "Prompt expansions",
   };
-
-  function appendHidden(form, name, value) {
-    const input = document.createElement("input");
-    input.type = "hidden";
-    input.name = name;
-    input.value = value;
-    form.appendChild(input);
-  }
 
   let pollTimer = null;
   let tickTimer = null;
@@ -118,48 +106,13 @@
       ].filter(Boolean).join(" · ");
       statsEl.textContent = stats;
 
-      if (job.kind === "prompt_help") {
-        detail.textContent = "Your expanded brief is ready — review and edit it below.";
-        genreHint.textContent = job.detected_genre
-          ? `Detected genre: ${job.detected_genre} — checklist applied.`
-          : "";
-        promptTextarea.value = job.result_text || "";
-        promptResult.hidden = false;
-
-        const continueBtn = document.createElement("button");
-        continueBtn.type = "button";
-        continueBtn.className = "play-link";
-        continueBtn.textContent = "Continue →";
-        continueBtn.addEventListener("click", () => {
-          if (job.source_game_id) {
-            // Don't POST straight to /enhance — that route requires a
-            // lock_token from the enhance form's own phase-A lock, which
-            // this page never acquired (and the enhance page's lock, if
-            // any, was already released when the browser navigated away
-            // to Idea Forge). Send the user back to a fresh GET instead,
-            // which acquires a real lock and pre-fills the textarea.
-            window.location.href = "/games/" + encodeURIComponent(job.source_game_id) +
-              "/enhance?description=" + encodeURIComponent(promptTextarea.value);
-          } else {
-            const form = document.createElement("form");
-            form.method = "post";
-            form.action = "/games/new";
-            appendHidden(form, "prompt", promptTextarea.value);
-            document.body.appendChild(form);
-            form.submit();
-          }
-        });
-        actions.appendChild(continueBtn);
-        actions.hidden = false;
-      } else {
-        detail.textContent = `"${job.result_title}" is ready.`;
-        const link = document.createElement("a");
-        link.className = "play-link";
-        link.href = "/play/" + encodeURIComponent(job.result_slug);
-        link.textContent = "Play now →";
-        actions.appendChild(link);
-        actions.hidden = false;
-      }
+      detail.textContent = `"${job.result_title}" is ready.`;
+      const link = document.createElement("a");
+      link.className = "play-link";
+      link.href = "/play/" + encodeURIComponent(job.result_slug);
+      link.textContent = "Play now →";
+      actions.appendChild(link);
+      actions.hidden = false;
     } else if (job.status === "failed") {
       detail.textContent = job.error || "Something went wrong.";
     }

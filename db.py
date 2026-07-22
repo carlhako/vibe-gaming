@@ -167,7 +167,6 @@ _ADDED_COLUMNS = {
     ],
     "generation_requests": [
         ("tokens_used", "INTEGER"), ("creator_uid", "TEXT"),
-        ("result_text", "TEXT"), ("detected_genre", "TEXT"),
     ],
     "generation_attempts": [("duration_seconds", "REAL"), ("raw_response", "TEXT")],
 }
@@ -414,7 +413,7 @@ def get_generation_history(limit=20, offset=0, conn=None):
         SELECT gr.job_id, gr.kind, gr.prompt, gr.new_title, gr.status,
                gr.requested_by, gr.creator_uid, gr.created_at,
                gr.error, gr.model, gr.effort, gr.attempts,
-               gr.tokens_used, gr.duration_seconds, gr.detected_genre,
+               gr.tokens_used, gr.duration_seconds,
                gr.source_game_id,
                wg.title AS result_title, wg.slug AS result_slug,
                u.username AS creator_username,
@@ -607,7 +606,7 @@ def get_web_games(sort="alpha", conn=None):
 
 def create_generation_request(job_id, kind, prompt, requested_by, source_game_id=None,
                                new_title=None, creator_uid=None, conn=None):
-    """Insert a new queued job. kind is 'create', 'enhance', or 'prompt_help'."""
+    """Insert a new queued job. kind is 'create' or 'enhance'."""
     c = _c(conn)
     now = _now()
     c.execute(
@@ -630,8 +629,7 @@ def get_generation_request(job_id, conn=None):
     return dict(row) if row else None
 
 
-def update_generation_request(job_id, status=None, result_game_id=None, result_text=None,
-                               detected_genre=None, attempts=None,
+def update_generation_request(job_id, status=None, result_game_id=None, attempts=None,
                                model=None, effort=None, duration_seconds=None,
                                tokens_used=None, error=None, conn=None):
     """Sparse update: only columns explicitly passed (non-None) are touched,
@@ -643,10 +641,6 @@ def update_generation_request(job_id, status=None, result_game_id=None, result_t
         fields["status"] = status
     if result_game_id is not None:
         fields["result_game_id"] = result_game_id
-    if result_text is not None:
-        fields["result_text"] = result_text
-    if detected_genre is not None:
-        fields["detected_genre"] = detected_genre
     if attempts is not None:
         fields["attempts"] = attempts
     if model is not None:

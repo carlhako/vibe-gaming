@@ -214,7 +214,6 @@
                     data-attempts="{{ r.attempts or '' }}"
                     data-duration="{{ r.duration_seconds if r.duration_seconds is not none else '' }}"
                     data-tokens="{{ r.tokens_used if r.tokens_used is not none else '' }}"
-                    data-genre="{{ r.detected_genre or '' }}"
                     data-error="{{ r.error or '' }}"
                     data-prompt="{{ r.prompt }}"
                   >Details</button>
@@ -320,7 +319,6 @@
           ["Attempts", d.attempts],
           ["Duration", d.duration ? `${parseFloat(d.duration).toFixed(1)}s` : ""],
           ["Tokens used", d.tokens],
-          ["Detected genre", d.genre],
         ].forEach(([label, value]) => historyMeta.append(...([...metaRow(label, value)])));
 
         if (d.error) {

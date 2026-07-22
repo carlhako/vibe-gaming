@@ -50,28 +50,6 @@ aspirational:
   which polls `/api/status/<job_id>` (`static/status.js`) until the job
   hits `success`/`failed`. No blocking HTTP request ever waits on a
   DeepSeek call.
-- **Idea Forge**: `/games/new/idea-forge` and
-  `/games/<game_id>/enhance/idea-forge` let a user flesh out a rough idea
-  before submitting it for real generation/enhancement.
-  `prompt_helper.expand_prompt()` makes one plain `ai_client.ask()` call
-  (not the tool-calling submit loop below) that folds a genre checklist
-  (`genre_checklists.yaml` — FPS, racing, platformer, etc.; hand-edited,
-  no code change needed to add a genre) into the system prompt, so
-  genre conventions the user didn't think to mention (FPS lighting/
-  crosshair/viewmodel, racing camera/perspective) still make it into the
-  brief. Runs through the same `generation_requests`/`job_runner` async
-  queue as real generation — a third kind, `"prompt_help"` — and reuses
-  the `/status/<job_id>` polling page rather than a new endpoint, so this
-  stays consistent with the "no blocking request waits on DeepSeek" rule
-  above. The model replies with JSON (`detected_genre`/`confidence`/
-  `expanded_prompt`), parsed with a fallback to treating the whole reply
-  as plain text if it isn't valid JSON; `detected_genre` is persisted on
-  the `generation_requests` row (for future analytics, e.g. "which
-  genres fail most often"), not just used in-flight. Configured
-  independently via the `ideaforge:` block in `config.yaml`. The user
-  reviews/edits the expanded brief on the status page, then a
-  "Continue →" button forwards it into the real `/games/new` or
-  `/games/<id>/enhance` submission.
 - **Background job runner** (`job_runner.py`): DB-polling worker
   threads — no in-memory queue, no Redis — so it stays correct under
   multiple gunicorn worker processes. Every job is claimed via an atomic
@@ -199,13 +177,6 @@ Neither function is called directly from a request handler — `app.py`'s
 `generation_requests` row (`status='queued'`) and redirect to the status
 page; `job_runner.py`'s poll loop is what actually calls them.
 
-`prompt_helper.py`'s `expand_prompt()` (Idea Forge) is a lighter sibling
-dispatched by the same `job_runner.py`, via a third `generation_requests`
-kind, `"prompt_help"` — but it's a single plain `ai_client.ask()` call,
-not the tool-calling submit/retry loop above, and never writes game files
-itself. Its result (`result_text`/`detected_genre`) is written straight to
-the `generation_requests` row rather than to `web_games`.
-
 `config` is a plain dict matching `config.yaml.example` — pass
 `yaml.safe_load(open("config.yaml"))` in. `newaiwebgame:` /
 `enhanceaiwebgame:` control model/effort/attempts/timeouts;
@@ -269,7 +240,6 @@ disk-sync register it.
 
 ```
 app.py                 Flask site: menu, /games/new, /games/<id>/enhance,
-                        /games/new/idea-forge, /games/<id>/enhance/idea-forge,
                         /games/<id>/download, /status/<job_id>, /api/games
                         (sort), /api/games/<id>/info (prompt/model/tokens/
                         lineage), rate endpoint, /signup, /u/<uid> (sign-in
@@ -277,13 +247,9 @@ app.py                 Flask site: menu, /games/new, /games/<id>/enhance,
                         access-log middleware, /admin/stats,
                         /admin/games/download
 job_runner.py           DB-polling background worker: claims generation_requests,
-                        dispatches to game_generator/game_enhancer/prompt_helper
+                        dispatches to game_generator/game_enhancer
 game_generator.py       generate_game() + shared run_generation_attempts() retry loop
 game_enhancer.py        enhance_game(): forks a new game_id/slug, links parent/root
-prompt_helper.py        Idea Forge: expand_prompt(), one plain ai_client.ask()
-                        call, genre-aware via genre_checklists.yaml
-genre_checklists.yaml   genre -> checklist data for prompt_helper.py; hand-edited,
-                        no code change needed to add/tune a genre
 safety.py               regex blocklist + CDN allowlist for generated HTML
 smoke_test.py           headless Playwright load, fails on JS errors
 ai_client.py            DeepSeek Chat Completions client (swap point for other providers)
@@ -294,9 +260,7 @@ gunicorn.conf.py        post_fork hook starts job_runner workers per worker proc
 templates/index.html    menu shell: sidebar (sort toggle, rate/enhance controls) + iframe
 templates/new_game.html  "Create New Game" prompt form
 templates/enhance.html  enhancement prompt + optional new-title form
-templates/idea_forge.html  rough-idea input for both create/enhance modes
-templates/status.html   job status page (polls static/status.js), incl. the
-                        expanded-brief review/"Continue" step for prompt_help jobs
+templates/status.html   job status page (polls static/status.js)
 templates/account.html  set username, show /u/<uid> sign-in link + token
 templates/signin.html   paste-a-token form (alternative to the /u/<uid> link)
 templates/profile.html  own games w/ hide toggle, play/like stats, recent plays
@@ -307,8 +271,7 @@ static/app.js           play-on-click, thumbs-vote, sort toggle behavior
 static/status.js        polls /api/status/<job_id> until success/failed
 games/block-dodge/      bundled game (game_id committed in meta.json)
 games/connect-4-4/      bundled game (game_id committed in meta.json)
-tests/                  pytest suite: db.py, startup disk-sync, fork linkage,
-                        prompt_helper
+tests/                  pytest suite: db.py, startup disk-sync, fork linkage
 config.yaml.example     copy to config.yaml
 .env.example            copy to .env: DEEPSEEK_API_KEY, ADMIN_TOKEN
 ```

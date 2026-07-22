@@ -23,7 +23,6 @@ from pathlib import Path
 import db
 import game_enhancer
 import game_generator
-import prompt_helper
 
 
 def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
@@ -42,13 +41,6 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
                 db_conn=conn, games_dir=games_dir, job_id=job_id,
                 new_title=job.get("new_title"), creator_uid=job.get("creator_uid"),
             )
-        elif job["kind"] == "prompt_help":
-            result = prompt_helper.expand_prompt(
-                job["prompt"], job["requested_by"], config,
-                db_conn=conn, games_dir=games_dir, job_id=job_id,
-                source_game_id=job.get("source_game_id"),
-                creator_uid=job.get("creator_uid"),
-            )
         else:
             raise ValueError(f"unknown job kind: {job['kind']!r}")
     except Exception as exc:  # noqa: BLE001 - a job must never take the worker thread down
@@ -66,7 +58,6 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
     if result["success"]:
         db.update_generation_request(
             job_id, status="success", result_game_id=result["game_id"],
-            result_text=result.get("result_text"), detected_genre=result.get("detected_genre"),
             attempts=result["attempts"], model=result["model"], effort=result["effort"],
             duration_seconds=result["duration_seconds"], tokens_used=result["tokens_used"],
             conn=conn,

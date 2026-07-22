@@ -67,20 +67,9 @@
           <input type="text" id="new_title" name="new_title" placeholder="Leave blank to auto-name it &quot;{{ game.title }} (vN)&quot;" value="{{ request.form.get('new_title', '') }}" {{ 'disabled' if locked else '' }}>
           <button type="submit" id="enhance-submit" {{ 'disabled' if locked else '' }}>Generate enhanced version</button>
         </form>
-        <p class="form-hint">
-          Not sure how to phrase it? <a href="{{ url_for('idea_forge_enhance_form', game_id=game.game_id) }}" id="idea-forge-link">Flesh out your idea with Idea Forge first</a>.
-        </p>
       </div>
     </main>
   </div>
-  <script>
-    document.getElementById("idea-forge-link").addEventListener("click", function (e) {
-      var val = document.getElementById("description-field").value;
-      if (val) {
-        e.currentTarget.href = "{{ url_for('idea_forge_enhance_form', game_id=game.game_id) }}?description=" + encodeURIComponent(val);
-      }
-    });
-  </script>
   <script src="{{ url_for('static', filename='enhance-lock.js') }}"></script>
 </body>
 </html>
