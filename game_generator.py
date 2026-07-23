@@ -42,7 +42,6 @@ game directory is live the moment write_game_files() returns.
 
 from __future__ import annotations
 
-import copy
 import datetime
 import json
 import re
@@ -293,23 +292,13 @@ def format_report(result: dict) -> str:
 
 def _redact_raw_response(raw_response: dict) -> str:
     """JSON-serialize ai_client's raw API response for the generation_attempts
-    audit trail, with each submit_game call's arguments blanked out — the
-    game source in there is already on disk (or, on a failed attempt,
-    already discarded), so keeping a second copy in every attempt row would
-    make the table balloon for no benefit. Everything else (ids, timestamps,
-    finish_reason, usage, reasoning_content if thinking mode was on) is
-    kept as-is."""
-    redacted = copy.deepcopy(raw_response)
-    for choice in redacted.get("choices") or []:
-        message = choice.get("message") or {}
-        for tool_call in message.get("tool_calls") or []:
-            function = tool_call.get("function") or {}
-            arguments = function.get("arguments")
-            if isinstance(arguments, str):
-                function["arguments"] = (
-                    f"<stripped {len(arguments)} chars of submit_game arguments>"
-                )
-    return json.dumps(redacted, default=str)
+    audit trail, with each submit_game call's arguments blanked out (via
+    ai_client.redact_tool_call_arguments) — the game source in there is
+    already on disk (or, on a failed attempt, already discarded), so
+    keeping a second copy in every attempt row would make the table
+    balloon for no benefit. Everything else (ids, timestamps, finish_reason,
+    usage, reasoning_content if thinking mode was on) is kept as-is."""
+    return json.dumps(ai.redact_tool_call_arguments(raw_response), default=str)
 
 
 # @traceable makes each job one LangSmith parent trace, so every retry's

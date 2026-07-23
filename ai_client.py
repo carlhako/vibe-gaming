@@ -37,6 +37,9 @@ caller passes an explicit `temperature`. Pass `model` explicitly to pin
 deepseek-v4-pro or (until retirement) a legacy name.
 """
 
+import copy
+import json
+import logging
 import os
 from dataclasses import dataclass
 
@@ -51,6 +54,8 @@ MODEL_DEFAULT = "deepseek-v4-flash"  # 284B total / 13B active MoE, 1M ctx — f
 MODEL_PRO = "deepseek-v4-pro"        # 1.6T total / 49B active MoE, 1M ctx — best quality
 
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
+
+_logger = logging.getLogger(__name__)
 
 
 class AIError(Exception):
@@ -98,20 +103,64 @@ def _resolve_model(model: str | None) -> str:
     return model or MODEL_DEFAULT
 
 
-def _resolve_thinking(effort: str | None, temperature: float | None) -> tuple[dict, str, float | None]:
+def _resolve_thinking(
+    effort: str | None, temperature: float | None
+) -> tuple[dict, str | None, str, float | None]:
     """Map `effort` onto DeepSeek V4's per-request thinking-mode toggle.
 
-    "high"/"max" enable thinking mode at that reasoning_effort (temperature
-    is documented as a no-op there, so it's only forwarded if the caller set
-    one explicitly). Anything else disables thinking and defaults
+    "high"/"max" enable thinking mode: `thinking` goes in `extra_body` (no
+    native SDK field for it), while `reasoning_effort` is returned separately
+    to be passed as its own top-level kwarg — matching DeepSeek's documented
+    example (https://api-docs.deepseek.com/guides/thinking_mode) rather than
+    relying on extra_body's top-level merge to carry it. temperature is
+    documented as a no-op in thinking mode, so it's only forwarded if the
+    caller set one explicitly. Anything else disables thinking and defaults
     temperature to 0.0 — DeepSeek's own recommendation for code/math — unless
     the caller overrode it.
+
+    Returns (extra_body, reasoning_effort_kwarg, resolved_effort_label, resolved_temperature).
     """
     if effort in ("high", "max"):
-        extra_body = {"thinking": {"type": "enabled"}, "reasoning_effort": effort}
-        return extra_body, effort, temperature
+        extra_body = {"thinking": {"type": "enabled"}}
+        return extra_body, effort, effort, temperature
     extra_body = {"thinking": {"type": "disabled"}}
-    return extra_body, "non-thinking", (0.0 if temperature is None else temperature)
+    return extra_body, None, "non-thinking", (0.0 if temperature is None else temperature)
+
+
+def redact_tool_call_arguments(raw_response: dict) -> dict:
+    """Deep-copy `raw_response` with each tool call's `arguments` blanked
+    out. For this project that's submit_game's full generated
+    index.html/js source — large, already persisted to disk/DB elsewhere,
+    and not useful (or safe to duplicate indefinitely) in a debug log.
+    Everything else (ids, timestamps, finish_reason, usage,
+    reasoning_content when thinking mode is on) is kept as-is."""
+    redacted = copy.deepcopy(raw_response)
+    for choice in redacted.get("choices") or []:
+        message = choice.get("message") or {}
+        for tool_call in message.get("tool_calls") or []:
+            function = tool_call.get("function") or {}
+            arguments = function.get("arguments")
+            if isinstance(arguments, str):
+                function["arguments"] = f"<stripped {len(arguments)} chars of tool-call arguments>"
+    return redacted
+
+
+def _log_response(raw_response: dict) -> None:
+    """Log the full DeepSeek response payload at DEBUG for future
+    debugging (e.g. verifying thinking-mode fields), minus tool-call
+    arguments — see redact_tool_call_arguments."""
+    if _logger.isEnabledFor(logging.DEBUG):
+        _logger.debug(
+            "DeepSeek response payload: %s",
+            json.dumps(redact_tool_call_arguments(raw_response), default=str),
+        )
+
+
+def _log_api_error(exc: APIError) -> None:
+    """Log whatever payload the API sent back with an error response, for
+    the same future-debugging purpose as _log_response."""
+    if _logger.isEnabledFor(logging.DEBUG):
+        _logger.debug("DeepSeek error response payload: %s", json.dumps(exc.body, default=str))
 
 
 def ask(
@@ -141,7 +190,7 @@ def ask(
     unchanged don't need per-call edits.
     """
     resolved_model = _resolve_model(model)
-    extra_body, resolved_effort, resolved_temperature = _resolve_thinking(effort, temperature)
+    extra_body, reasoning_effort, resolved_effort, resolved_temperature = _resolve_thinking(effort, temperature)
     system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
 
     client = _client()
@@ -154,6 +203,8 @@ def ask(
         timeout=timeout,
         extra_body=extra_body,
     )
+    if reasoning_effort is not None:
+        create_kwargs["reasoning_effort"] = reasoning_effort
     if resolved_temperature is not None:
         create_kwargs["temperature"] = resolved_temperature
     if response_format is not None:
@@ -164,9 +215,13 @@ def ask(
     except APITimeoutError:
         raise AIError(f"Error: timed out after {timeout}s")
     except APIError as exc:
+        _log_api_error(exc)
         raise AIError(f"Error: {exc}")
     except Exception as exc:
         raise AIError(f"Error: {exc}")
+
+    response_dict = response.model_dump()
+    _log_response(response_dict)
 
     choice = response.choices[0] if response.choices else None
     text = (choice.message.content or "").strip() if choice else ""
@@ -177,7 +232,7 @@ def ask(
         output_tokens=output_tokens,
         model=resolved_model,
         effort=resolved_effort,
-        raw_response=response.model_dump(),
+        raw_response=response_dict,
     )
 
 
@@ -217,7 +272,7 @@ def ask_with_tools(
     no tool call on that path.
     """
     resolved_model = _resolve_model(model)
-    extra_body, resolved_effort, resolved_temperature = _resolve_thinking(effort, temperature)
+    extra_body, reasoning_effort, resolved_effort, resolved_temperature = _resolve_thinking(effort, temperature)
     tool_choice = _resolve_tool_choice(tool_choice, extra_body)
 
     client = _client()
@@ -230,6 +285,8 @@ def ask_with_tools(
     )
     if tool_choice is not None:
         create_kwargs["tool_choice"] = tool_choice
+    if reasoning_effort is not None:
+        create_kwargs["reasoning_effort"] = reasoning_effort
     if resolved_temperature is not None:
         create_kwargs["temperature"] = resolved_temperature
 
@@ -238,9 +295,13 @@ def ask_with_tools(
     except APITimeoutError:
         raise AIError(f"Error: timed out after {timeout}s")
     except APIError as exc:
+        _log_api_error(exc)
         raise AIError(f"Error: {exc}")
     except Exception as exc:
         raise AIError(f"Error: {exc}")
+
+    response_dict = response.model_dump()
+    _log_response(response_dict)
 
     choice = response.choices[0] if response.choices else None
     if choice is None:
@@ -263,5 +324,5 @@ def ask_with_tools(
         output_tokens=output_tokens,
         model=resolved_model,
         effort=resolved_effort,
-        raw_response=response.model_dump(),
+        raw_response=response_dict,
     )
