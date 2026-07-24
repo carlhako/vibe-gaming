@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Moderation log — The Vibe Arcade</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="shell">
+    <main class="cabinet form-page">
+      <div class="cabinet-plate">
+        <span class="power-light on"></span>
+        <span class="now-playing">ADMIN MODERATION LOG</span>
+      </div>
+      <div class="form-panel stats-panel">
+        <a class="back-link" href="{{ url_for('admin_stats', token=admin_token) }}">&larr; back to stats</a>
+        <h1>Moderation log</h1>
+        <p class="form-hint">
+          Every automated content_moderation.check_game() call made after a
+          successful generation/enhancement — not just the ones that got
+          flagged.
+        </p>
+
+        <div class="pager">
+          <form method="get" action="{{ url_for('admin_moderation') }}" class="pager-size">
+            {% for k, v in pager.keep.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+            <label>Rows
+              <select name="mod_per" onchange="this.form.submit()">
+                {% for n in page_sizes %}<option value="{{ n }}" {{ 'selected' if pager.per == n }}>{{ n }}</option>{% endfor %}
+              </select>
+            </label>
+          </form>
+          {% if pager.total > pager.per %}
+          <nav class="pager-links">
+            {% if pager.prev_url %}<a href="{{ pager.prev_url }}">&larr; prev</a>{% else %}<span class="pager-off">&larr; prev</span>{% endif %}
+            <span>page {{ pager.page }} of {{ pager.pages }}</span>
+            {% if pager.next_url %}<a href="{{ pager.next_url }}">next &rarr;</a>{% else %}<span class="pager-off">next &rarr;</span>{% endif %}
+          </nav>
+          {% endif %}
+        </div>
+
+        {% if rows %}
+        <div class="table-scroll">
+        <table class="stats-table">
+          <thead><tr><th>When</th><th>Game</th><th>Flagged</th><th>Reason</th><th>Model</th><th>Tokens</th><th>Links</th></tr></thead>
+          <tbody>
+            {% for r in rows %}
+            <tr class="{{ 'is-hidden-row' if r.flagged }}">
+              <td><span class="local-ts" data-utc="{{ r.created_at }}">{{ r.created_at[:19].replace('T', ' ') }}</span></td>
+              <td>{% if r.slug %}<a class="game-row-play-link" href="{{ url_for('play', slug=r.slug) }}" target="_blank" rel="noopener">{{ r.title }} &#8599;</a>{% else %}{{ r.title or r.game_id[:8] ~ '…' }}{% endif %}</td>
+              <td>{{ 'Yes' if r.flagged else 'No' }}</td>
+              <td>{{ r.reason or '—' }}</td>
+              <td>{{ r.model or '—' }}</td>
+              <td class="token-cell">
+                {% if r.input_tokens is none and r.output_tokens is none %}—
+                {% else %}{{ (r.input_tokens or 0) + (r.output_tokens or 0) }}{% endif %}
+              </td>
+              <td>
+                <div class="history-actions">
+                  <button type="button" class="link-btn mod-prompt-btn" data-prompt="{{ r.prompt }}">Prompt</button>
+                  {% if r.raw_response %}
+                  <button type="button" class="link-btn mod-json-btn" data-json="{{ r.raw_response }}">JSON</button>
+                  {% else %}
+                  <span class="form-hint">no JSON</span>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        </div>
+        {% else %}
+        <p class="form-hint">No moderation calls recorded yet.</p>
+        {% endif %}
+      </div>
+    </main>
+  </div>
+
+  <dialog id="text-dialog" class="rename-dialog text-dialog">
+    <h3 id="text-dialog-heading"></h3>
+    <pre id="text-dialog-content"></pre>
+    <div class="dialog-actions">
+      <button type="button" id="text-dialog-close">Close</button>
+    </div>
+  </dialog>
+
+  <script>
+    function formatLocalTimestamp(iso) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      if (isNaN(d)) return iso;
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+        `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    document.querySelectorAll(".local-ts").forEach((el) => {
+      el.textContent = formatLocalTimestamp(el.dataset.utc);
+    });
+
+    const textDialog = document.getElementById("text-dialog");
+    const textDialogHeading = document.getElementById("text-dialog-heading");
+    const textDialogContent = document.getElementById("text-dialog-content");
+
+    function openTextDialog(heading, content) {
+      textDialogHeading.textContent = heading;
+      textDialogContent.textContent = content;
+      textDialog.showModal();
+    }
+
+    document.querySelectorAll(".mod-prompt-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        openTextDialog("Prompt", btn.dataset.prompt || "(empty)");
+      });
+    });
+
+    document.querySelectorAll(".mod-json-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        let content = btn.dataset.json || "";
+        try {
+          content = JSON.stringify(JSON.parse(content), null, 2);
+        } catch (e) {
+          // Not parseable JSON (shouldn't happen) - show the raw string.
+        }
+        openTextDialog("DeepSeek API response", content);
+      });
+    });
+
+    document.getElementById("text-dialog-close").addEventListener("click", () => textDialog.close());
+  </script>
+</body>
+</html>

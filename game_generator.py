@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import re
 import shutil
 import time
@@ -63,6 +64,8 @@ _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
 RESERVED_SLUGS = {"backups"}
 
 GAMES_DIR = Path(__file__).resolve().parent / "games"
+
+_logger = logging.getLogger(__name__)
 
 
 class GameGenerationError(Exception):
@@ -215,20 +218,39 @@ def rollback_game_files(game_dir: Path) -> None:
 
 def run_moderation_pass(game_id: str, slug: str, description: str, notes: str,
                          games_dir: Path, db_conn=None) -> None:
-    """Run content_moderation.check_game() against the just-written game and,
-    if flagged, hide it and log a report — called once on the final accepted
-    submission, never on a retry attempt. Never raises and never changes the
-    caller's success result: a moderation-call failure (see
-    content_moderation.check_game's own AIError/unparseable-reply handling)
-    just means the game stays visible, same as if the pass had never run."""
-    html = (Path(games_dir) / slug / "index.html").read_text(encoding="utf-8")
-    check_result = content_moderation.check_game(html, description, notes)
-    if check_result["flagged"]:
-        db.set_game_hidden(game_id, True, conn=db_conn)
-        db.create_report(
-            game_id=game_id, reporter_uid=None, ip_address="system",
-            reason=check_result["reason"], source="moderation", conn=db_conn,
+    """Run content_moderation.check_game() against the just-written game,
+    log the call (prompt + raw API response, for the admin moderation-log
+    page) and, if flagged, hide it and log a report — called once on the
+    final accepted submission, never on a retry attempt. Never raises and
+    never changes the caller's success result: a moderation-call failure
+    (see content_moderation.check_game's own AIError/unparseable-reply
+    handling) just means the game stays visible, same as if the pass had
+    never run; a failure logging the call itself is swallowed the same way
+    so an audit-trail write can never turn a successful generation into a
+    failed job."""
+    try:
+        html = (Path(games_dir) / slug / "index.html").read_text(encoding="utf-8")
+        check_result = content_moderation.check_game(html, description, notes)
+        raw_response = check_result.get("raw_response")
+        db.add_moderation_call(
+            game_id=game_id,
+            prompt=check_result.get("prompt") or "",
+            raw_response=json.dumps(raw_response, default=str) if raw_response is not None else None,
+            model=check_result.get("model"),
+            input_tokens=check_result.get("input_tokens"),
+            output_tokens=check_result.get("output_tokens"),
+            flagged=check_result["flagged"],
+            reason=check_result["reason"],
+            conn=db_conn,
         )
+        if check_result["flagged"]:
+            db.set_game_hidden(game_id, True, conn=db_conn)
+            db.create_report(
+                game_id=game_id, reporter_uid=None, ip_address="system",
+                reason=check_result["reason"], source="moderation", conn=db_conn,
+            )
+    except Exception:
+        _logger.exception("moderation pass failed for game_id=%s", game_id)
 
 
 # ---------------------------------------------------------------------------

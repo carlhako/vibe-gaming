@@ -21,6 +21,10 @@
           <a class="game-row-play-link" href="{{ url_for('admin_reports', token=admin_token) }}">
             Reports{% if open_report_count %} ({{ open_report_count }}){% endif %} &rarr;
           </a>
+          &nbsp;&nbsp;
+          <a class="game-row-play-link" href="{{ url_for('admin_moderation', token=admin_token) }}">
+            Moderation log &rarr;
+          </a>
         </p>
 
         <div class="admin-tabs" role="tablist">

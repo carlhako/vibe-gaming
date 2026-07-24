@@ -160,6 +160,21 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
 CREATE INDEX IF NOT EXISTS idx_reports_game ON reports(game_id);
+
+CREATE TABLE IF NOT EXISTS moderation_calls (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id       TEXT NOT NULL REFERENCES web_games(game_id),
+    prompt        TEXT NOT NULL,
+    raw_response  TEXT,
+    model         TEXT,
+    input_tokens  INTEGER,
+    output_tokens INTEGER,
+    flagged       INTEGER NOT NULL DEFAULT 0,
+    reason        TEXT,
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_moderation_calls_game ON moderation_calls(game_id);
+CREATE INDEX IF NOT EXISTS idx_moderation_calls_created ON moderation_calls(created_at);
 """
 
 
@@ -1072,3 +1087,56 @@ def dismiss_reports(game_id, conn=None) -> int:
     )
     c.commit()
     return cur.rowcount
+
+
+# ---------------------------------------------------------------------------
+# moderation_calls (audit trail for content_moderation.check_game(), every
+# call — not just the ones that end up flagged)
+# ---------------------------------------------------------------------------
+
+def add_moderation_call(game_id, prompt, raw_response=None, model=None,
+                         input_tokens=None, output_tokens=None,
+                         flagged=False, reason=None, conn=None):
+    """Log one content_moderation.check_game() call. `raw_response`, when
+    given, should already be a JSON-serialized string of the raw DeepSeek
+    API response (see game_generator.run_moderation_pass) — kept as-is
+    (unredacted; this pass never handles the game's own source, only its
+    player-facing text, so there's nothing to strip)."""
+    c = _c(conn)
+    c.execute(
+        """
+        INSERT INTO moderation_calls
+            (game_id, prompt, raw_response, model, input_tokens, output_tokens,
+             flagged, reason, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (game_id, prompt, raw_response, model, input_tokens, output_tokens,
+         1 if flagged else 0, reason, _now()),
+    )
+    c.commit()
+
+
+def count_moderation_calls(conn=None) -> int:
+    c = _c(conn)
+    row = c.execute("SELECT COUNT(*) AS n FROM moderation_calls").fetchone()
+    return row["n"]
+
+
+def get_moderation_history(limit=20, offset=0, conn=None):
+    """One page of moderation_calls, newest first, joined to web_games for
+    the game's current title/slug (NULL if the game_id's web_games row was
+    somehow removed since — the log row itself is never deleted)."""
+    c = _c(conn)
+    rows = c.execute(
+        """
+        SELECT mc.id, mc.game_id, mc.prompt, mc.raw_response, mc.model,
+               mc.input_tokens, mc.output_tokens, mc.flagged, mc.reason, mc.created_at,
+               wg.title, wg.slug
+        FROM moderation_calls mc
+        LEFT JOIN web_games wg ON wg.game_id = mc.game_id
+        ORDER BY mc.created_at DESC, mc.id DESC
+        LIMIT ? OFFSET ?
+        """,
+        (limit, offset),
+    ).fetchall()
+    return [dict(r) for r in rows]

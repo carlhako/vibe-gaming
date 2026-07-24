@@ -1156,6 +1156,33 @@ def create_app(games_dir=None) -> Flask:
         db.dismiss_reports(game_id, conn=get_db())
         return redirect(url_for("admin_reports", token=request.args.get("token")))
 
+    @app.get("/admin/moderation")
+    @require_admin_token
+    def admin_moderation():
+        conn = get_db()
+        admin_token = request.args.get("token")
+        page, per = _page_params("mod")
+        total = db.count_moderation_calls(conn=conn)
+        pages = max(1, math.ceil(total / per))
+        page = min(page, pages)
+        rows = db.get_moderation_history(limit=per, offset=(page - 1) * per, conn=conn)
+
+        def _mod_url(**overrides):
+            params = dict(token=admin_token, mod_page=page, mod_per=per)
+            params.update(overrides)
+            return url_for("admin_moderation", **{k: v for k, v in params.items() if v is not None})
+
+        pager = {
+            "page": page, "pages": pages, "per": per, "total": total,
+            "prev_url": _mod_url(mod_page=page - 1) if page > 1 else None,
+            "next_url": _mod_url(mod_page=page + 1) if page < pages else None,
+            "keep": {"token": admin_token},
+        }
+        return render_template(
+            "admin_moderation.html", rows=rows, pager=pager,
+            admin_token=admin_token, page_sizes=_ADMIN_PAGE_SIZES,
+        )
+
     @app.teardown_appcontext
     def _close_db(exception=None):
         conn = g.pop("db_conn", None)

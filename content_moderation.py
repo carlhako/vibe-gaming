@@ -17,7 +17,11 @@ completing. See docs/security-fix/04-moderation-and-reporting.md.
 
 # Exports:
 #   check_game(html: str, description: str, notes: str) -> dict
-#     ({"flagged": bool, "reason": str})
+#     ({"flagged": bool, "reason": str, "prompt": str, "raw_response": dict | None,
+#       "model": str | None, "input_tokens": int | None, "output_tokens": int | None})
+#     prompt/raw_response/model/tokens are for the admin moderation-log page
+#     (see game_generator.run_moderation_pass / db.add_moderation_call); a
+#     call that never got an API response back (AIError) has raw_response=None.
 """
 
 import json
@@ -58,13 +62,17 @@ def _build_user_prompt(html: str, description: str, notes: str) -> str:
 
 def check_game(html: str, description: str, notes: str) -> dict:
     """Ask DeepSeek to review a game's player-facing text for
-    phishing/social-engineering copy. Returns {"flagged": bool, "reason":
-    str}. Never raises — any AIError or unparseable reply is treated as
+    phishing/social-engineering copy. Returns {"flagged", "reason",
+    "prompt", "raw_response", "model", "input_tokens", "output_tokens"}.
+    Never raises — any AIError or unparseable reply is treated as
     flagged=False, since this is a backstop and must never block a
-    successful generation."""
+    successful generation; either failure mode still returns the prompt
+    that was sent (raw_response is None only for the AIError case, since
+    there's no API response to report)."""
+    prompt = _build_user_prompt(html, description, notes)
     try:
         result = ai.ask(
-            _build_user_prompt(html, description, notes),
+            prompt,
             system_prompt=_SYSTEM_PROMPT,
             model=ai.MODEL_DEFAULT,  # pin to the cheap/fast model regardless of what "default" means elsewhere
             effort=None,  # non-thinking: no reasoning tokens for a pass this cheap and frequent
@@ -73,16 +81,23 @@ def check_game(html: str, description: str, notes: str) -> dict:
         )
     except ai.AIError as exc:
         _logger.warning("content moderation call failed, defaulting to unflagged: %s", exc)
-        return {"flagged": False, "reason": ""}
+        return {
+            "flagged": False, "reason": "", "prompt": prompt, "raw_response": None,
+            "model": ai.MODEL_DEFAULT, "input_tokens": None, "output_tokens": None,
+        }
 
+    base = {
+        "prompt": prompt, "raw_response": result.raw_response, "model": result.model,
+        "input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
+    }
     try:
         parsed = json.loads(result.text)
         flagged = bool(parsed.get("flagged"))
         reason = parsed.get("reason") or ""
         if not isinstance(reason, str):
             reason = str(reason)
-        return {"flagged": flagged, "reason": reason}
+        return {"flagged": flagged, "reason": reason, **base}
     except (json.JSONDecodeError, AttributeError) as exc:
         _logger.warning("content moderation reply unparseable, defaulting to unflagged: %s (%r)",
                          exc, result.text)
-        return {"flagged": False, "reason": ""}
+        return {"flagged": False, "reason": "", **base}
