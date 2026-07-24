@@ -225,14 +225,8 @@
                 <td>
                   <div class="history-actions">
                     {% if r.result_slug %}<a class="game-row-play-link" href="{{ url_for('play', slug=r.result_slug) }}" target="_blank" rel="noopener">Play &#8599;</a>{% endif %}
-                    <button type="button" class="link-btn history-prompt-btn" data-prompt="{{ r.prompt }}">Prompt</button>
-                    {% if r.last_raw_response %}
-                    <button type="button" class="link-btn history-json-btn"
-                      data-json="{{ r.last_raw_response }}"
-                      data-attempt="{{ r.last_raw_response_attempt }}">JSON</button>
-                    {% else %}
-                    <span class="form-hint">no JSON</span>
-                    {% endif %}
+                    <button type="button" class="link-btn history-prompt-btn" data-job-id="{{ r.job_id }}">Prompt</button>
+                    <button type="button" class="link-btn history-json-btn" data-job-id="{{ r.job_id }}">JSON</button>
                     <button type="button" class="link-btn history-detail-btn"
                       data-job-id="{{ r.job_id }}"
                       data-kind="{{ r.kind }}"
@@ -305,11 +299,17 @@
     </div>
   </dialog>
 
-  <dialog id="text-dialog" class="rename-dialog text-dialog">
-    <h3 id="text-dialog-heading"></h3>
-    <pre id="text-dialog-content"></pre>
+  <dialog id="payload-dialog" class="rename-dialog text-dialog payload-dialog">
+    <h3 id="payload-dialog-heading"></h3>
+    <div class="payload-nav">
+      <button type="button" id="payload-prev">&larr; Prev attempt</button>
+      <span class="form-hint" id="payload-position"></span>
+      <button type="button" id="payload-next">Next attempt &rarr;</button>
+    </div>
+    <p class="form-hint" id="payload-meta"></p>
+    <pre id="payload-dialog-content"></pre>
     <div class="dialog-actions">
-      <button type="button" id="text-dialog-close">Close</button>
+      <button type="button" id="payload-dialog-close">Close</button>
     </div>
   </dialog>
 
@@ -391,36 +391,125 @@
 
     document.getElementById("history-detail-close").addEventListener("click", () => historyDialog.close());
 
-    // ---- Prompt / JSON payload dialog (shared) ----
-    const textDialog = document.getElementById("text-dialog");
-    const textDialogHeading = document.getElementById("text-dialog-heading");
-    const textDialogContent = document.getElementById("text-dialog-content");
+    // ---- Prompt / JSON payload dialog (shared, grouped by job with
+    // prev/next paging across every retry attempt) ----
+    const payloadDialog = document.getElementById("payload-dialog");
+    const payloadHeading = document.getElementById("payload-dialog-heading");
+    const payloadContent = document.getElementById("payload-dialog-content");
+    const payloadMeta = document.getElementById("payload-meta");
+    const payloadPosition = document.getElementById("payload-position");
+    const payloadPrev = document.getElementById("payload-prev");
+    const payloadNext = document.getElementById("payload-next");
 
-    function openTextDialog(heading, content) {
-      textDialogHeading.textContent = heading;
-      textDialogContent.textContent = content;
-      textDialog.showModal();
+    // Cache fetched attempt lists per job so Prompt/JSON buttons on the same
+    // row (or reopening the dialog) don't re-fetch.
+    const payloadCache = new Map();
+    let payloadState = null; // { jobPrompt, attempts, index, mode }
+
+    function renderPayload() {
+      if (!payloadState) return;
+      const { jobPrompt, attempts, index, mode } = payloadState;
+      const n = attempts.length;
+      if (n === 0) {
+        payloadHeading.textContent = mode === "json" ? "DeepSeek API response" : "Prompt";
+        payloadPosition.textContent = "";
+        payloadMeta.textContent = "";
+        payloadContent.textContent = "No attempts recorded for this job.";
+        payloadPrev.disabled = true;
+        payloadNext.disabled = true;
+        return;
+      }
+      const a = attempts[index];
+      payloadPosition.textContent = `Attempt ${a.attempt_number} of ${n}`;
+      payloadPrev.disabled = index <= 0;
+      payloadNext.disabled = index >= n - 1;
+      payloadMeta.textContent = `Outcome: ${a.outcome}` +
+        (a.duration_seconds != null ? ` · ${a.duration_seconds.toFixed(1)}s` : "") +
+        (a.tokens_used != null ? ` · ${a.tokens_used} tokens out` : "");
+
+      if (mode === "json") {
+        payloadHeading.textContent = "DeepSeek API response";
+        if (a.raw_response) {
+          try {
+            payloadContent.textContent = JSON.stringify(JSON.parse(a.raw_response), null, 2);
+          } catch (e) {
+            payloadContent.textContent = a.raw_response;
+          }
+        } else {
+          payloadContent.textContent = "No response captured for this attempt " +
+            "(transport/API error before a reply came back).";
+        }
+      } else {
+        payloadHeading.textContent = "Prompt";
+        if (index === 0) {
+          payloadContent.textContent = jobPrompt || "(empty)";
+        } else {
+          const prev = attempts[index - 1];
+          payloadContent.textContent =
+            `Retry feedback sent back after attempt ${prev.attempt_number} ` +
+            `(${prev.outcome}):\n\n${prev.detail || "(no detail recorded)"}`;
+        }
+      }
+    }
+
+    async function openPayloadDialog(jobId, mode) {
+      payloadHeading.textContent = mode === "json" ? "DeepSeek API response" : "Prompt";
+      payloadPosition.textContent = "";
+      payloadMeta.textContent = "";
+      payloadContent.textContent = "Loading…";
+      payloadPrev.disabled = true;
+      payloadNext.disabled = true;
+      payloadDialog.showModal();
+
+      let data = payloadCache.get(jobId);
+      if (!data) {
+        try {
+          const resp = await fetch(
+            `/admin/generation/${encodeURIComponent(jobId)}/attempts?token=${encodeURIComponent(ADMIN_TOKEN)}`);
+          data = await resp.json();
+          payloadCache.set(jobId, data);
+        } catch (e) {
+          payloadContent.textContent = "Failed to load attempt history.";
+          return;
+        }
+      }
+
+      const attempts = data.attempts || [];
+      // JSON starts at the most recent attempt with a captured response;
+      // Prompt starts at the first attempt (the original request).
+      let index = 0;
+      if (mode === "json") {
+        for (let i = attempts.length - 1; i >= 0; i--) {
+          if (attempts[i].raw_response) { index = i; break; }
+        }
+      }
+      payloadState = { jobPrompt: data.prompt, attempts, index, mode };
+      renderPayload();
     }
 
     document.querySelectorAll(".history-prompt-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        openTextDialog("Prompt", btn.dataset.prompt || "(empty)");
-      });
+      btn.addEventListener("click", () => openPayloadDialog(btn.dataset.jobId, "prompt"));
     });
 
     document.querySelectorAll(".history-json-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        let content = btn.dataset.json || "";
-        try {
-          content = JSON.stringify(JSON.parse(content), null, 2);
-        } catch (e) {
-          // Not parseable JSON (shouldn't happen) - show the raw string.
-        }
-        openTextDialog(`DeepSeek API response — attempt ${btn.dataset.attempt || "?"}`, content);
-      });
+      btn.addEventListener("click", () => openPayloadDialog(btn.dataset.jobId, "json"));
     });
 
-    document.getElementById("text-dialog-close").addEventListener("click", () => textDialog.close());
+    payloadPrev.addEventListener("click", () => {
+      if (payloadState && payloadState.index > 0) {
+        payloadState.index -= 1;
+        renderPayload();
+      }
+    });
+
+    payloadNext.addEventListener("click", () => {
+      if (payloadState && payloadState.index < payloadState.attempts.length - 1) {
+        payloadState.index += 1;
+        renderPayload();
+      }
+    });
+
+    document.getElementById("payload-dialog-close").addEventListener("click", () => payloadDialog.close());
 
     // ---- Tabs ----
     const tabButtons = document.querySelectorAll(".admin-tab");

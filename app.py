@@ -1183,6 +1183,23 @@ def create_app(games_dir=None) -> Flask:
             admin_token=admin_token, page_sizes=_ADMIN_PAGE_SIZES,
         )
 
+    @app.get("/admin/generation/<job_id>/attempts")
+    @require_admin_token
+    def admin_generation_attempts(job_id):
+        """Every recorded attempt for one generation job (raw DeepSeek
+        response + rejection detail per attempt), for the history page's
+        payload-browser dialog — a retried job's earlier attempts aren't
+        visible anywhere else in the UI, since the history list itself only
+        joins in the most recent one."""
+        if not _GAME_ID_RE.match(job_id):
+            abort(404)
+        conn = get_db()
+        job = db.get_generation_request(job_id, conn=conn)
+        if job is None:
+            abort(404)
+        attempts = db.get_generation_attempts(job_id, conn=conn)
+        return jsonify(prompt=job["prompt"], attempts=attempts)
+
     @app.teardown_appcontext
     def _close_db(exception=None):
         conn = g.pop("db_conn", None)

@@ -304,6 +304,39 @@ def test_generation_history_tokens_and_last_raw_response(isolated_db):
     assert json.loads(row["last_raw_response"]) == {"id": "resp-3", "usage": {}}
 
 
+def test_get_generation_attempts_returns_full_retry_history(isolated_db):
+    """Unlike get_generation_history's single "most recent" raw_response,
+    get_generation_attempts surfaces every attempt in order — including
+    ones with no raw_response (transport failures) — so the admin history
+    page's payload browser can page through a retried job's full trail."""
+    db.create_generation_request(
+        job_id="job-multi", kind="create", prompt="a maze game", requested_by="web:zzz",
+    )
+    db.add_generation_attempt(
+        "job-multi", 1, "ai_error", detail="timeout", duration_seconds=1.0,
+    )
+    db.add_generation_attempt(
+        "job-multi", 2, "safety_violation", detail="bad", input_tokens=7, tokens_used=3,
+        duration_seconds=1.0, raw_response=json.dumps({"id": "resp-2"}),
+    )
+    db.add_generation_attempt(
+        "job-multi", 3, "success", input_tokens=11, tokens_used=13,
+        duration_seconds=1.0, raw_response=json.dumps({"id": "resp-3"}),
+    )
+
+    attempts = db.get_generation_attempts("job-multi")
+    assert [a["attempt_number"] for a in attempts] == [1, 2, 3]
+    assert attempts[0]["outcome"] == "ai_error"
+    assert attempts[0]["raw_response"] is None
+    assert attempts[1]["detail"] == "bad"
+    assert json.loads(attempts[1]["raw_response"]) == {"id": "resp-2"}
+    assert attempts[2]["outcome"] == "success"
+
+
+def test_get_generation_attempts_empty_for_unknown_job(isolated_db):
+    assert db.get_generation_attempts("no-such-job") == []
+
+
 def test_play_history_joins_and_paginates(isolated_db):
     game_id = _make_game()
     db.ensure_user("player-uid")

@@ -877,6 +877,23 @@ def add_generation_attempt(job_id, attempt_number, outcome, detail=None,
     c.commit()
 
 
+def get_generation_attempts(job_id, conn=None):
+    """Every attempt recorded for job_id, oldest first — the full retry
+    history (each attempt's own outcome/detail/raw_response), not just the
+    single most-recent one get_generation_history's list view surfaces.
+    Powers the admin history page's per-job payload browser so a retried
+    job's earlier DeepSeek responses and rejection reasons stay visible
+    instead of only the last attempt's."""
+    c = _c(conn)
+    rows = c.execute(
+        "SELECT attempt_number, outcome, detail, input_tokens, tokens_used, "
+        "duration_seconds, raw_response, created_at FROM generation_attempts "
+        "WHERE job_id=? ORDER BY attempt_number ASC",
+        (job_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ---------------------------------------------------------------------------
 # enhance_locks (phase A: "form open" lock — see acquire_enhance_lock)
 #

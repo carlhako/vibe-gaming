@@ -1303,6 +1303,33 @@ body {
   padding: 10px 12px;
 }
 
+.payload-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.payload-nav button {
+  font-family: inherit;
+  font-size: 12.5px;
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  border-radius: 4px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.payload-nav button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+#payload-meta {
+  margin: -4px 0 0;
+}
+
 .rename-dialog::backdrop {
   background: rgba(0, 0, 0, 0.6);
 }
