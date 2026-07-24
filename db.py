@@ -183,11 +183,21 @@ _ADDED_COLUMNS = {
 
 
 def _ensure_columns(conn):
+    """Check-then-ALTER is inherently racy across processes: under gunicorn
+    (multiple worker processes, each importing app.py and running this
+    against the same on-disk DB independently) two workers can both see a
+    column missing and both try to add it, so the loser's ALTER TABLE
+    raises "duplicate column name" even though nothing is actually wrong.
+    Swallow exactly that error — anything else still raises."""
     for table, columns in _ADDED_COLUMNS.items():
         existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
         for name, coltype in columns:
             if name not in existing:
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {coltype}")
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {coltype}")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column name" not in str(exc):
+                        raise
 
 
 _schema_ready_paths: set[str] = set()
