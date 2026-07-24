@@ -70,10 +70,12 @@ threads per gunicorn worker process. The job runner polls the
 `UPDATE`, so this is correct regardless of `--workers N` — there's no
 in-memory queue that would only be visible to one process.
 
-If you put this behind a reverse proxy, wrap the app in
-`werkzeug.middleware.proxy_fix.ProxyFix` — otherwise `request.remote_addr`
-(used for both the ratings anti-abuse IP constraint and the access log)
-will read as the proxy's IP for every request.
+The app is wrapped in `werkzeug.middleware.proxy_fix.ProxyFix` (trusting
+one hop), so `request.remote_addr` — used for the ratings anti-abuse IP
+constraint, play history, and the access log — recovers the real client
+IP from `X-Forwarded-For` when run behind a reverse proxy like Caddy. If
+you add more hops in front of Caddy, bump `ProxyFix`'s `x_for` count in
+`app.py` accordingly.
 
 ## Development
 

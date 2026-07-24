@@ -201,7 +201,7 @@
             <tbody>
               {% for r in history_rows %}
               <tr class="{{ 'is-hidden-row' if r.status == 'failed' }}">
-                <td>{{ r.created_at[:19].replace('T', ' ') }}</td>
+                <td><span class="local-ts" data-utc="{{ r.created_at }}">{{ r.created_at[:19].replace('T', ' ') }}</span></td>
                 <td>{{ 'new' if r.kind == 'create' else r.kind }}{% if r.kind == 'enhance' and r.source_title %} <span class="form-hint">of {{ r.source_title }}</span>{% endif %}</td>
                 <td>{{ r.result_title or r.new_title or (r.prompt[:60] ~ ('…' if r.prompt|length > 60 else '')) }}</td>
                 <td>{{ r.creator_username or (r.creator_uid[:8] ~ '…' if r.creator_uid else r.requested_by) }}</td>
@@ -259,7 +259,7 @@
             <tbody>
               {% for p in plays_rows %}
               <tr>
-                <td>{{ p.played_at[:19].replace('T', ' ') }}</td>
+                <td><span class="local-ts" data-utc="{{ p.played_at }}">{{ p.played_at[:19].replace('T', ' ') }}</span></td>
                 <td>{% if p.game_slug %}<a href="{{ url_for('play', slug=p.game_slug) }}" target="_blank" rel="noopener">{{ p.game_title }}</a>{% else %}{{ p.game_title or '—' }}{% endif %}</td>
                 <td>{{ p.username or (p.client_uid[:8] ~ '…' if p.client_uid else '—') }}</td>
                 <td>{{ p.ip_address or '—' }}</td>
@@ -305,6 +305,22 @@
 
   <script>
     const ADMIN_TOKEN = {{ admin_token | tojson }};
+
+    // Every timestamp is stored and server-rendered as UTC ISO-8601. Reformat
+    // in the browser's own timezone rather than the server's, since admins
+    // and the server won't generally share one.
+    function formatLocalTimestamp(iso) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      if (isNaN(d)) return iso;
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+        `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    document.querySelectorAll(".local-ts").forEach((el) => {
+      el.textContent = formatLocalTimestamp(el.dataset.utc);
+    });
     const renameDialog = document.getElementById("rename-dialog");
     const renameForm = document.getElementById("rename-form");
     const renameInput = document.getElementById("rename-input");
@@ -341,7 +357,7 @@
         historyHeading.textContent = `${d.kind === "create" ? "New game" : d.kind} — ${d.status}`;
         historyMeta.replaceChildren();
         [
-          ["Requested", d.createdAt ? d.createdAt.replace("T", " ").slice(0, 19) : ""],
+          ["Requested", formatLocalTimestamp(d.createdAt)],
           ["Requested by", d.requestedBy],
           ["Model", d.effort ? `${d.model} (${d.effort})` : d.model],
           ["Attempts", d.attempts],

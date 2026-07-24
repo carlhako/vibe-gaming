@@ -30,6 +30,7 @@ from flask import (
     Flask, abort, g, jsonify, make_response, redirect, render_template,
     request, send_file, send_from_directory, url_for,
 )
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import db
 import game_generator
@@ -255,6 +256,12 @@ def create_app(games_dir=None) -> Flask:
         static_folder=str(_BASE_DIR / "static"),
     )
 
+    # Runs behind a Caddy reverse proxy (single hop), so trust its
+    # X-Forwarded-For/-Proto to recover the real client IP — otherwise
+    # request.remote_addr is always Caddy's own address, breaking the
+    # ratings anti-abuse IP constraint and the access log below.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=0, x_port=0, x_prefix=0)
+
     # Bundled games ship their game_id in meta.json but vibegames.db is
     # gitignored, so a fresh clone has no web_games rows for them until
     # this backfills one per game. No-op on every start after the first.
@@ -427,10 +434,6 @@ def create_app(games_dir=None) -> Flask:
         if vg_uid is None:
             vg_uid = uuid.uuid4().hex
 
-        # NOTE: request.remote_addr is the enforcement's IP half — if this
-        # ever sits behind a reverse proxy, wrap the app in
-        # werkzeug.middleware.proxy_fix.ProxyFix or every vote will read as
-        # coming from the proxy's IP, collapsing the per-IP constraint.
         ok = db.record_rating(
             game_id, vote, client_uid=vg_uid, ip_address=request.remote_addr or "unknown",
             conn=conn,
@@ -841,10 +844,6 @@ def create_app(games_dir=None) -> Flask:
                 " duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     request.method, request.path, response.status_code,
-                    # NOTE: request.remote_addr is the raw peer IP. If this app
-                    # is ever run behind a reverse proxy, wrap it in
-                    # werkzeug.middleware.proxy_fix.ProxyFix or this (and the
-                    # ratings IP constraint above) will see only the proxy's IP.
                     request.remote_addr or "unknown",
                     request.headers.get("User-Agent"),
                     request.cookies.get(_VG_UID_COOKIE),
