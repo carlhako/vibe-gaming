@@ -158,6 +158,13 @@ def now_iso() -> str:
     return _now()
 
 
+def seconds_ago_iso(seconds: float) -> str:
+    """UTC-ISO timestamp `seconds` in the past, in the same format every
+    table uses — for callers outside this module building a `since_iso`
+    cutoff for count_recent_generation_requests()."""
+    return _iso_add_seconds(_now(), -seconds)
+
+
 def _c(conn):
     return conn if conn is not None else get_connection()
 
@@ -174,6 +181,7 @@ _ADDED_COLUMNS = {
     "generation_requests": [
         ("tokens_used", "INTEGER"), ("creator_uid", "TEXT"),
         ("input_tokens", "INTEGER"), ("output_tokens", "INTEGER"),
+        ("ip_address", "TEXT"),
     ],
     "generation_attempts": [
         ("duration_seconds", "REAL"), ("raw_response", "TEXT"),
@@ -638,7 +646,7 @@ def get_web_games(sort="alpha", conn=None):
 # ---------------------------------------------------------------------------
 
 def create_generation_request(job_id, kind, prompt, requested_by, source_game_id=None,
-                               new_title=None, creator_uid=None, conn=None):
+                               new_title=None, creator_uid=None, ip_address=None, conn=None):
     """Insert a new queued job. kind is 'create' or 'enhance'."""
     c = _c(conn)
     now = _now()
@@ -646,12 +654,27 @@ def create_generation_request(job_id, kind, prompt, requested_by, source_game_id
         """
         INSERT INTO generation_requests
             (job_id, kind, prompt, new_title, source_game_id, result_game_id,
-             requested_by, creator_uid, status, attempts, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 'queued', 0, ?, ?)
+             requested_by, creator_uid, ip_address, status, attempts, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 'queued', 0, ?, ?)
         """,
-        (job_id, kind, prompt, new_title, source_game_id, requested_by, creator_uid, now, now),
+        (job_id, kind, prompt, new_title, source_game_id, requested_by, creator_uid,
+         ip_address, now, now),
     )
     c.commit()
+
+
+def count_recent_generation_requests(creator_uid, ip_address, since_iso, conn=None) -> int:
+    """Count of generation_requests created at or after since_iso, matching
+    creator_uid OR ip_address — same "block on cookie or IP, whichever fires
+    first" anti-abuse posture as the two UNIQUE constraints on `ratings`,
+    reused here for request-volume rate limiting rather than vote dedup."""
+    c = _c(conn)
+    row = c.execute(
+        "SELECT COUNT(*) AS n FROM generation_requests "
+        "WHERE created_at >= ? AND (creator_uid = ? OR ip_address = ?)",
+        (since_iso, creator_uid, ip_address),
+    ).fetchone()
+    return row["n"]
 
 
 def get_generation_request(job_id, conn=None):
@@ -771,6 +794,19 @@ def count_generating(conn=None) -> int:
     c = _c(conn)
     row = c.execute(
         "SELECT COUNT(*) AS n FROM generation_requests WHERE status='generating'"
+    ).fetchone()
+    return row["n"]
+
+
+def count_active_generation_requests(conn=None) -> int:
+    """Total jobs currently sitting in the queue or being worked, across
+    every requester — 'generating' is capped at 1 by claim_next_queued_request,
+    but nothing else bounds how many can pile up as 'queued'. Used to cap
+    total queue depth independently of the per-requester rate limit (see
+    app.py's _queue_full)."""
+    c = _c(conn)
+    row = c.execute(
+        "SELECT COUNT(*) AS n FROM generation_requests WHERE status IN ('queued', 'generating')"
     ).fetchone()
     return row["n"]
 

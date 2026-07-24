@@ -51,3 +51,16 @@ enhanceaiwebgame:
 job_runner:
   workers: 1                 # poll-loop threads per process (dev) / per gunicorn worker (prod)
   poll_interval_seconds: 1   # how often an idle worker checks for a newly queued job
+
+# Caps how often one visitor (by vg_uid cookie OR IP, whichever fires first —
+# same anti-abuse posture as the ratings table's two UNIQUE constraints) can
+# queue a /games/new or /enhance job, to bound worst-case DeepSeek token
+# spend from a single abusive source. max_queue_size is a separate, global
+# cap on total queued-or-generating jobs across ALL visitors at once — the
+# per-visitor limit alone doesn't stop many different visitors from each
+# queuing up to their own limit and piling up an unbounded backlog. Missing
+# this block (or config.yaml entirely) falls back to these same defaults.
+rate_limit:
+  max_requests: 5
+  window_seconds: 3600       # 1 hour
+  max_queue_size: 5          # total queued+generating jobs allowed at once, across everyone

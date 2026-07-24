@@ -384,3 +384,75 @@ def test_get_user_leaderboard_includes_zero_game_users(isolated_db):
     row = next(r for r in board if r["uid"] == uid)
     assert row["total_likes"] == 0
     assert row["game_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# count_recent_generation_requests (Sprint 3 Part B: rate limiting)
+# ---------------------------------------------------------------------------
+
+def _backdate(conn, job_id, seconds_ago):
+    conn.execute(
+        "UPDATE generation_requests SET created_at=? WHERE job_id=?",
+        (db.seconds_ago_iso(seconds_ago), job_id),
+    )
+    conn.commit()
+
+
+def test_count_recent_generation_requests_counts_same_uid(isolated_db):
+    conn = db.get_connection()
+    for i in range(5):
+        db.create_generation_request(
+            job_id=f"u-{i}", kind="create", prompt="p", requested_by="web:x",
+            creator_uid="uid-a", ip_address=f"10.0.0.{i}", conn=conn,
+        )
+    since_iso = db.seconds_ago_iso(3600)
+    assert db.count_recent_generation_requests("uid-a", "9.9.9.9", since_iso, conn=conn) == 5
+
+
+def test_count_recent_generation_requests_counts_same_ip_different_uid(isolated_db):
+    """A 6th request from a different creator_uid but the same IP as the
+    first 5 still counts — proves the OR logic (block on cookie *or* IP,
+    whichever fires first, same posture as the ratings UNIQUE constraints)."""
+    conn = db.get_connection()
+    for i in range(5):
+        db.create_generation_request(
+            job_id=f"v-{i}", kind="create", prompt="p", requested_by="web:x",
+            creator_uid=f"uid-{i}", ip_address="1.2.3.4", conn=conn,
+        )
+    since_iso = db.seconds_ago_iso(3600)
+    count = db.count_recent_generation_requests("uid-does-not-match", "1.2.3.4", since_iso, conn=conn)
+    assert count == 5
+
+
+def test_count_recent_generation_requests_excludes_outside_window(isolated_db):
+    conn = db.get_connection()
+    db.create_generation_request(
+        job_id="old-1", kind="create", prompt="p", requested_by="web:x",
+        creator_uid="uid-b", ip_address="2.2.2.2", conn=conn,
+    )
+    _backdate(conn, "old-1", seconds_ago=7200)  # 2 hours ago
+    db.create_generation_request(
+        job_id="new-1", kind="create", prompt="p", requested_by="web:x",
+        creator_uid="uid-b", ip_address="2.2.2.2", conn=conn,
+    )
+    since_iso = db.seconds_ago_iso(3600)  # 1-hour window
+    count = db.count_recent_generation_requests("uid-b", "2.2.2.2", since_iso, conn=conn)
+    assert count == 1
+
+
+def test_count_active_generation_requests_counts_queued_and_generating_only(isolated_db):
+    conn = db.get_connection()
+    db.create_generation_request(
+        job_id="active-1", kind="create", prompt="p", requested_by="web:x", conn=conn,
+    )
+    db.create_generation_request(
+        job_id="active-2", kind="create", prompt="p", requested_by="web:x", conn=conn,
+    )
+    db.create_generation_request(
+        job_id="done-1", kind="create", prompt="p", requested_by="web:x", conn=conn,
+    )
+    conn.execute("UPDATE generation_requests SET status='generating' WHERE job_id='active-2'")
+    conn.execute("UPDATE generation_requests SET status='success' WHERE job_id='done-1'")
+    conn.commit()
+
+    assert db.count_active_generation_requests(conn=conn) == 2

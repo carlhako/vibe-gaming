@@ -34,10 +34,28 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 import db
 import game_generator
+import safety
 
 load_dotenv()  # so ADMIN_TOKEN (and anything else in .env) is set before any request
 
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
+
+# Content-Security-Policy for served game HTML (/play/<slug> only — untrusted
+# generated content). Host list is derived from safety.ALLOWED_CDN_HOSTS
+# rather than duplicated here, so the CSP and the generation-time CDN
+# allowlist can never drift apart.
+_CDN_ORIGINS = " ".join(f"https://{host}" for host in sorted(safety.ALLOWED_CDN_HOSTS))
+_GAME_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' " + _CDN_ORIGINS + "; "
+    "style-src 'self' 'unsafe-inline' " + _CDN_ORIGINS + "; "
+    "font-src 'self' " + _CDN_ORIGINS + "; "
+    "img-src 'self' data: blob:; "
+    "connect-src 'self'; "
+    "form-action 'none'; "
+    "frame-ancestors 'self'; "
+    "base-uri 'none';"
+)
 _GAME_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _BASE_DIR = Path(__file__).parent
 _VG_UID_COOKIE = "vg_uid"
@@ -45,6 +63,30 @@ _VG_UID_MAX_AGE = 31536000  # 1 year
 _ADMIN_PAGE_SIZES = (20, 50, 100, 1000)
 
 _logger = logging.getLogger(__name__)
+
+
+def _load_rate_limit_config() -> dict:
+    """`rate_limit:` block from config.yaml (same load-if-present pattern as
+    gunicorn.conf.py's _load_config), defaulting to 5 requests/hour per
+    cookie-or-IP if config.yaml is missing or has no such block — tunable
+    without a code change, per docs/security-fix/03-pipeline-hardening.md.
+    max_queue_size is a separate, global cap (see _queue_full): the
+    per-requester limit alone doesn't bound how many *different* requesters
+    can each queue up to their own limit at once."""
+    config_path = _BASE_DIR / "config.yaml"
+    cfg = {}
+    if config_path.exists():
+        import yaml
+        with open(config_path) as f:
+            cfg = (yaml.safe_load(f) or {}).get("rate_limit", {})
+    return {
+        "max_requests": cfg.get("max_requests", 5),
+        "window_seconds": cfg.get("window_seconds", 3600),
+        "max_queue_size": cfg.get("max_queue_size", 5),
+    }
+
+
+_RATE_LIMIT = _load_rate_limit_config()
 
 
 def get_db():
@@ -483,7 +525,9 @@ def create_app(games_dir=None) -> Flask:
                 ip_address=request.remote_addr or "unknown",
                 conn=conn,
             )
-        return send_from_directory(game_dir, "index.html")
+        response = send_from_directory(game_dir, "index.html")
+        response.headers["Content-Security-Policy"] = _GAME_CSP
+        return response
 
     @app.get("/games/<game_id>/download")
     def download_game(game_id):
@@ -507,6 +551,26 @@ def create_app(games_dir=None) -> Flask:
         user = db.get_user(vg_uid, conn=get_db()) if vg_uid else None
         return render_template("new_game.html", user=user)
 
+    def _rate_limited(vg_uid: str) -> bool:
+        """True if vg_uid-or-this-IP has hit the generation rate limit —
+        same "cookie or IP, whichever fires first" posture as the ratings
+        UNIQUE constraints, applied here to request volume instead of vote
+        dedup (see docs/security-fix/03-pipeline-hardening.md)."""
+        since_iso = db.seconds_ago_iso(_RATE_LIMIT["window_seconds"])
+        count = db.count_recent_generation_requests(
+            vg_uid, request.remote_addr or "unknown", since_iso, conn=get_db(),
+        )
+        return count >= _RATE_LIMIT["max_requests"]
+
+    def _queue_full() -> bool:
+        """True if the total number of queued-or-generating jobs, across
+        every requester, is already at the configured cap. Independent of
+        _rate_limited: that caps one requester's own volume, this caps
+        total queue depth so many different requesters each under their own
+        limit still can't pile up an unbounded backlog of pending DeepSeek
+        calls."""
+        return db.count_active_generation_requests(conn=get_db()) >= _RATE_LIMIT["max_queue_size"]
+
     @app.post("/games/new")
     def new_game_submit():
         prompt = (request.form.get("prompt") or "").strip()
@@ -520,11 +584,22 @@ def create_app(games_dir=None) -> Flask:
         if vg_uid is None:
             vg_uid = uuid.uuid4().hex
 
+        if _queue_full():
+            return render_template(
+                "new_game.html",
+                error="The generation queue is full right now — try again in a few minutes.",
+            ), 503
+        if _rate_limited(vg_uid):
+            return render_template(
+                "new_game.html",
+                error="You're generating games too quickly — try again in a few minutes.",
+            ), 429
+
         requested_by = "web:" + vg_uid[:12]
         job_id = uuid.uuid4().hex
         db.create_generation_request(
             job_id=job_id, kind="create", prompt=prompt, requested_by=requested_by,
-            creator_uid=vg_uid, conn=get_db(),
+            creator_uid=vg_uid, ip_address=request.remote_addr or "unknown", conn=get_db(),
         )
 
         resp = redirect(url_for("job_status_page", job_id=job_id))
@@ -619,6 +694,12 @@ def create_app(games_dir=None) -> Flask:
         elif not db.heartbeat_enhance_lock(game_id, lock_token, conn=get_db()):
             error = "Your lock on this game expired. Reopen this page to try again."
             status = 409
+        elif _queue_full():
+            error = "The generation queue is full right now — try again in a few minutes."
+            status = 503
+        elif _rate_limited(vg_uid):
+            error = "You're generating games too quickly — try again in a few minutes."
+            status = 429
 
         if error:
             lock_ctx = _enhance_lock_context(game_id, vg_uid)
@@ -628,7 +709,8 @@ def create_app(games_dir=None) -> Flask:
         job_id = uuid.uuid4().hex
         db.create_generation_request(
             job_id=job_id, kind="enhance", prompt=description, requested_by=requested_by,
-            source_game_id=game_id, new_title=new_title, creator_uid=vg_uid, conn=get_db(),
+            source_game_id=game_id, new_title=new_title, creator_uid=vg_uid,
+            ip_address=request.remote_addr or "unknown", conn=get_db(),
         )
         db.release_enhance_lock(game_id, lock_token, conn=get_db())
 
@@ -855,6 +937,16 @@ def create_app(games_dir=None) -> Flask:
             # Logging must never break a real request.
             _logger.exception("failed to write access_log row for %s %s",
                                request.method, request.path)
+        return response
+
+    @app.after_request
+    def _add_security_headers(response):
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "same-origin"
+        # /play/<slug> is meant to be framed by our own menu page and gets
+        # its own frame-ancestors directive via the CSP set above instead.
+        if not request.path.startswith("/play/"):
+            response.headers["X-Frame-Options"] = "DENY"
         return response
 
     @app.get("/admin/stats")
