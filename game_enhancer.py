@@ -164,7 +164,8 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
     except GameEnhancementError as exc:
         result = {
             "success": False, "game_id": None, "slug": None, "title": None,
-            "description": None, "attempts": 0, "tokens_used": 0, "model": "default",
+            "description": None, "attempts": 0,
+            "input_tokens": 0, "output_tokens": 0, "tokens_used": 0, "model": "default",
             "effort": cfg.get("effort", "high"), "duration_seconds": time.monotonic() - t0,
             "error": str(exc), "notes": "", "url": None,
             "parent_game_id": None, "root_game_id": None,
@@ -195,7 +196,9 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
         result = {
             "success": True, "game_id": outcome["game_id"], "slug": outcome["slug"],
             "title": outcome["title"], "description": outcome["description"],
-            "attempts": outcome["attempts"], "tokens_used": outcome["tokens_used"],
+            "attempts": outcome["attempts"],
+            "input_tokens": outcome["input_tokens"], "output_tokens": outcome["output_tokens"],
+            "tokens_used": outcome["tokens_used"],
             "model": outcome["model"], "effort": outcome["effort"],
             "duration_seconds": duration, "error": None, "notes": outcome["notes"],
             "url": gg.build_play_url(outcome["slug"], config),
@@ -206,6 +209,7 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
             description=result["description"], requested_by=requested_by, status="success",
             attempts=result["attempts"], version=1, model=result["model"],
             effort=result["effort"], duration_seconds=duration,
+            input_tokens=result["input_tokens"], output_tokens=result["output_tokens"],
             tokens_used=result["tokens_used"], error=None,
             parent_game_id=result["parent_game_id"], root_game_id=result["root_game_id"],
             creator_uid=creator_uid,
@@ -215,6 +219,7 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
         result = {
             "success": False, "game_id": None, "slug": None, "title": None,
             "description": None, "attempts": outcome["attempts"],
+            "input_tokens": outcome["input_tokens"], "output_tokens": outcome["output_tokens"],
             "tokens_used": outcome["tokens_used"], "model": outcome["model"],
             "effort": outcome["effort"], "duration_seconds": duration,
             "error": outcome["error"], "notes": "", "url": None,

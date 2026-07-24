@@ -25,6 +25,8 @@
           <button type="button" class="admin-tab" data-tab="plays" data-hue="2" role="tab">Play history</button>
         </div>
 
+        {% macro tokencell(tokens, cost) %}{% if tokens is none %}—{% else %}{{ tokens }} <span class="token-cost">(${{ '%.4f'|format(cost or 0) }})</span>{% endif %}{% endmacro %}
+
         {% macro pager(pg) %}
         <div class="pager">
           <form method="get" action="{{ url_for('admin_stats') }}#{{ pg.tab }}" class="pager-size">
@@ -187,8 +189,15 @@
           <h2>Generation history</h2>
           {{ pager(history_pager) }}
           {% if history_rows %}
+          <p class="form-hint">
+            Estimated cost assumes ${{ '%.2f'|format(input_cost_per_million) }} / 1M input
+            tokens and ${{ '%.2f'|format(output_cost_per_million) }} / 1M output tokens
+            (<code>DEEPSEEK_INPUT_COST_PER_MILLION</code> / <code>DEEPSEEK_OUTPUT_COST_PER_MILLION</code>
+            in <code>.env</code>).
+          </p>
+          <div class="table-scroll">
           <table class="stats-table">
-            <thead><tr><th>When</th><th>Kind</th><th>Title</th><th>Requested by</th><th>Status</th><th>Attempts</th><th>Model</th><th>Duration</th><th>Tokens</th><th></th><th></th></tr></thead>
+            <thead><tr><th>When</th><th>Kind</th><th>Title</th><th>Requested by</th><th>Status</th><th>Attempts</th><th>Model</th><th>Duration</th><th>Input tokens</th><th>Output tokens</th><th>Total tokens</th><th>Links</th></tr></thead>
             <tbody>
               {% for r in history_rows %}
               <tr class="{{ 'is-hidden-row' if r.status == 'failed' }}">
@@ -200,28 +209,42 @@
                 <td>{{ r.attempts or '—' }}</td>
                 <td>{{ r.model or '—' }}{% if r.effort %} <span class="form-hint">({{ r.effort }})</span>{% endif %}</td>
                 <td>{{ '%.1fs'|format(r.duration_seconds) if r.duration_seconds is not none else '—' }}</td>
-                <td>{{ r.tokens_used if r.tokens_used is not none else '—' }}</td>
-                <td>{% if r.result_slug %}<a class="game-row-play-link" href="{{ url_for('play', slug=r.result_slug) }}" target="_blank" rel="noopener">Play &#8599;</a>{% endif %}</td>
+                <td class="token-cell">{{ tokencell(r.input_tokens, r.input_cost) }}</td>
+                <td class="token-cell">{{ tokencell(r.output_tokens, r.output_cost) }}</td>
+                <td class="token-cell">{{ tokencell(r.tokens_used, r.total_cost) }}</td>
                 <td>
-                  <button type="button" class="rename-btn history-detail-btn"
-                    data-job-id="{{ r.job_id }}"
-                    data-kind="{{ r.kind }}"
-                    data-status="{{ r.status }}"
-                    data-created-at="{{ r.created_at }}"
-                    data-requested-by="{{ r.requested_by }}"
-                    data-model="{{ r.model or '' }}"
-                    data-effort="{{ r.effort or '' }}"
-                    data-attempts="{{ r.attempts or '' }}"
-                    data-duration="{{ r.duration_seconds if r.duration_seconds is not none else '' }}"
-                    data-tokens="{{ r.tokens_used if r.tokens_used is not none else '' }}"
-                    data-error="{{ r.error or '' }}"
-                    data-prompt="{{ r.prompt }}"
-                  >Details</button>
+                  <div class="history-actions">
+                    {% if r.result_slug %}<a class="game-row-play-link" href="{{ url_for('play', slug=r.result_slug) }}" target="_blank" rel="noopener">Play &#8599;</a>{% endif %}
+                    <button type="button" class="link-btn history-prompt-btn" data-prompt="{{ r.prompt }}">Prompt</button>
+                    {% if r.last_raw_response %}
+                    <button type="button" class="link-btn history-json-btn"
+                      data-json="{{ r.last_raw_response }}"
+                      data-attempt="{{ r.last_raw_response_attempt }}">JSON</button>
+                    {% else %}
+                    <span class="form-hint">no JSON</span>
+                    {% endif %}
+                    <button type="button" class="link-btn history-detail-btn"
+                      data-job-id="{{ r.job_id }}"
+                      data-kind="{{ r.kind }}"
+                      data-status="{{ r.status }}"
+                      data-created-at="{{ r.created_at }}"
+                      data-requested-by="{{ r.requested_by }}"
+                      data-model="{{ r.model or '' }}"
+                      data-effort="{{ r.effort or '' }}"
+                      data-attempts="{{ r.attempts or '' }}"
+                      data-duration="{{ r.duration_seconds if r.duration_seconds is not none else '' }}"
+                      data-input-tokens="{{ r.input_tokens if r.input_tokens is not none else '' }}"
+                      data-output-tokens="{{ r.output_tokens if r.output_tokens is not none else '' }}"
+                      data-tokens="{{ r.tokens_used if r.tokens_used is not none else '' }}"
+                      data-error="{{ r.error or '' }}"
+                    >Details</button>
+                  </div>
                 </td>
               </tr>
               {% endfor %}
             </tbody>
           </table>
+          </div>
           {% else %}
           <p class="form-hint">No generation jobs yet.</p>
           {% endif %}
@@ -267,10 +290,16 @@
     <h3 id="history-detail-heading"></h3>
     <dl class="history-detail-meta" id="history-detail-meta"></dl>
     <p class="form-hint" id="history-detail-error" hidden></p>
-    <label class="field-label" for="history-detail-prompt">Prompt</label>
-    <textarea id="history-detail-prompt" rows="10" readonly></textarea>
     <div class="dialog-actions">
       <button type="button" id="history-detail-close">Close</button>
+    </div>
+  </dialog>
+
+  <dialog id="text-dialog" class="rename-dialog text-dialog">
+    <h3 id="text-dialog-heading"></h3>
+    <pre id="text-dialog-content"></pre>
+    <div class="dialog-actions">
+      <button type="button" id="text-dialog-close">Close</button>
     </div>
   </dialog>
 
@@ -296,7 +325,6 @@
     const historyHeading = document.getElementById("history-detail-heading");
     const historyMeta = document.getElementById("history-detail-meta");
     const historyError = document.getElementById("history-detail-error");
-    const historyPrompt = document.getElementById("history-detail-prompt");
 
     function metaRow(label, value) {
       if (!value) return "";
@@ -318,7 +346,9 @@
           ["Model", d.effort ? `${d.model} (${d.effort})` : d.model],
           ["Attempts", d.attempts],
           ["Duration", d.duration ? `${parseFloat(d.duration).toFixed(1)}s` : ""],
-          ["Tokens used", d.tokens],
+          ["Input tokens", d.inputTokens],
+          ["Output tokens", d.outputTokens],
+          ["Total tokens", d.tokens],
         ].forEach(([label, value]) => historyMeta.append(...([...metaRow(label, value)])));
 
         if (d.error) {
@@ -329,12 +359,42 @@
           historyError.textContent = "";
         }
 
-        historyPrompt.value = d.prompt || "";
         historyDialog.showModal();
       });
     });
 
     document.getElementById("history-detail-close").addEventListener("click", () => historyDialog.close());
+
+    // ---- Prompt / JSON payload dialog (shared) ----
+    const textDialog = document.getElementById("text-dialog");
+    const textDialogHeading = document.getElementById("text-dialog-heading");
+    const textDialogContent = document.getElementById("text-dialog-content");
+
+    function openTextDialog(heading, content) {
+      textDialogHeading.textContent = heading;
+      textDialogContent.textContent = content;
+      textDialog.showModal();
+    }
+
+    document.querySelectorAll(".history-prompt-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        openTextDialog("Prompt", btn.dataset.prompt || "(empty)");
+      });
+    });
+
+    document.querySelectorAll(".history-json-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        let content = btn.dataset.json || "";
+        try {
+          content = JSON.stringify(JSON.parse(content), null, 2);
+        } catch (e) {
+          // Not parseable JSON (shouldn't happen) - show the raw string.
+        }
+        openTextDialog(`DeepSeek API response — attempt ${btn.dataset.attempt || "?"}`, content);
+      });
+    });
+
+    document.getElementById("text-dialog-close").addEventListener("click", () => textDialog.close());
 
     // ---- Tabs ----
     const tabButtons = document.querySelectorAll(".admin-tab");

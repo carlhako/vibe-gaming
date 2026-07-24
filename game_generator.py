@@ -346,7 +346,8 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
         {"role": "user", "content": initial_user_prompt},
     ]
 
-    total_tokens = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
     last_model = model or "default"
     last_effort = effort
     previous_failure = None
@@ -357,11 +358,12 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
     notes = ""
     attempt = 0
 
-    def record_attempt(attempt, outcome, *, detail=None, tokens_used=None,
+    def record_attempt(attempt, outcome, *, detail=None, input_tokens=None, tokens_used=None,
                         duration_seconds=None, raw_response=None):
         if job_id is not None:
             db.add_generation_attempt(
-                job_id, attempt, outcome, detail=detail, tokens_used=tokens_used,
+                job_id, attempt, outcome, detail=detail, input_tokens=input_tokens,
+                tokens_used=tokens_used,
                 duration_seconds=duration_seconds, raw_response=raw_response,
                 conn=db_conn,
             )
@@ -396,7 +398,8 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
                            duration_seconds=time.monotonic() - attempt_t0)
             continue
 
-        total_tokens += ask_result.output_tokens
+        total_input_tokens += ask_result.input_tokens
+        total_output_tokens += ask_result.output_tokens
         last_model = ask_result.model or "default"
         last_effort = ask_result.effort
         redacted = _redact_raw_response(ask_result.raw_response)
@@ -410,6 +413,7 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
                            "Call it now with the complete index.html source.",
             })
             record_attempt(attempt, "ai_error", detail=previous_failure,
+                           input_tokens=ask_result.input_tokens,
                            tokens_used=ask_result.output_tokens,
                            duration_seconds=time.monotonic() - attempt_t0,
                            raw_response=redacted)
@@ -463,7 +467,8 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
             title = final_title
             description_out = parsed["description"]
             notes = parsed["notes"]
-            record_attempt(attempt, "success", tokens_used=ask_result.output_tokens,
+            record_attempt(attempt, "success", input_tokens=ask_result.input_tokens,
+                           tokens_used=ask_result.output_tokens,
                            duration_seconds=time.monotonic() - attempt_t0,
                            raw_response=redacted)
             break
@@ -478,6 +483,7 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
             else:
                 outcome = "ai_error"
             record_attempt(attempt, outcome, detail=previous_failure,
+                           input_tokens=ask_result.input_tokens,
                            tokens_used=ask_result.output_tokens,
                            duration_seconds=time.monotonic() - attempt_t0,
                            raw_response=redacted)
@@ -486,7 +492,9 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
     return {
         "success": slug is not None,
         "game_id": game_id, "slug": slug, "title": title, "description": description_out,
-        "notes": notes, "attempts": attempt, "tokens_used": total_tokens,
+        "notes": notes, "attempts": attempt,
+        "input_tokens": total_input_tokens, "output_tokens": total_output_tokens,
+        "tokens_used": total_input_tokens + total_output_tokens,
         "model": last_model, "effort": last_effort, "error": previous_failure,
     }
 
@@ -517,7 +525,9 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
         result = {
             "success": True, "game_id": outcome["game_id"], "slug": outcome["slug"],
             "title": outcome["title"], "description": outcome["description"],
-            "attempts": outcome["attempts"], "tokens_used": outcome["tokens_used"],
+            "attempts": outcome["attempts"],
+            "input_tokens": outcome["input_tokens"], "output_tokens": outcome["output_tokens"],
+            "tokens_used": outcome["tokens_used"],
             "model": outcome["model"], "effort": outcome["effort"],
             "duration_seconds": duration, "error": None, "notes": outcome["notes"],
             "url": build_play_url(outcome["slug"], config),
@@ -534,6 +544,8 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
             model=result["model"],
             effort=result["effort"],
             duration_seconds=result["duration_seconds"],
+            input_tokens=result["input_tokens"],
+            output_tokens=result["output_tokens"],
             tokens_used=result["tokens_used"],
             error=None,
             parent_game_id=None,
@@ -544,7 +556,9 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
     else:
         result = {
             "success": False, "game_id": None, "slug": None, "title": None, "description": None,
-            "attempts": outcome["attempts"], "tokens_used": outcome["tokens_used"],
+            "attempts": outcome["attempts"],
+            "input_tokens": outcome["input_tokens"], "output_tokens": outcome["output_tokens"],
+            "tokens_used": outcome["tokens_used"],
             "model": outcome["model"], "effort": outcome["effort"],
             "duration_seconds": duration, "error": outcome["error"],
             "notes": "", "url": None,

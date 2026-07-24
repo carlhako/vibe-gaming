@@ -88,6 +88,30 @@ def _page_params(prefix):
     return page, per
 
 
+def _token_cost(tokens, cost_per_million):
+    """USD cost of `tokens` at `cost_per_million` (None in, None out — a job
+    with no recorded token count shouldn't render as a $0.00 cost)."""
+    if tokens is None:
+        return None
+    return tokens / 1_000_000 * cost_per_million
+
+
+def _attach_token_costs(rows, input_cost_per_million, output_cost_per_million):
+    """Mutates each history row in place, adding input_cost/output_cost/
+    total_cost (USD, or None when the corresponding token count is None)
+    for the admin history page's per-row cost display."""
+    for row in rows:
+        input_cost = _token_cost(row.get("input_tokens"), input_cost_per_million)
+        output_cost = _token_cost(row.get("output_tokens"), output_cost_per_million)
+        row["input_cost"] = input_cost
+        row["output_cost"] = output_cost
+        row["total_cost"] = (
+            None if input_cost is None and output_cost is None
+            else (input_cost or 0) + (output_cost or 0)
+        )
+    return rows
+
+
 def _build_manifest(games_dir: Path) -> list[dict]:
     games = []
     if not games_dir.exists():
@@ -874,6 +898,15 @@ def create_app(games_dir=None) -> Flask:
         history_page = min(history_page, history_pages)
         history_rows = db.get_generation_history(
             limit=history_per, offset=(history_page - 1) * history_per, conn=conn)
+        try:
+            input_cost_per_million = float(os.environ.get("DEEPSEEK_INPUT_COST_PER_MILLION", 0))
+        except ValueError:
+            input_cost_per_million = 0.0
+        try:
+            output_cost_per_million = float(os.environ.get("DEEPSEEK_OUTPUT_COST_PER_MILLION", 0))
+        except ValueError:
+            output_cost_per_million = 0.0
+        _attach_token_costs(history_rows, input_cost_per_million, output_cost_per_million)
 
         plays_total = db.count_plays(conn=conn)
         plays_pages = max(1, math.ceil(plays_total / plays_per))
@@ -918,6 +951,8 @@ def create_app(games_dir=None) -> Flask:
             all_games=all_games, admin_token=admin_token,
             all_users=all_users,
             history_rows=history_rows, history_pager=history_pager,
+            input_cost_per_million=input_cost_per_million,
+            output_cost_per_million=output_cost_per_million,
             plays_rows=plays_rows, plays_pager=plays_pager,
             page_sizes=_ADMIN_PAGE_SIZES,
         )

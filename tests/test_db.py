@@ -1,6 +1,7 @@
 """Tests for db.py: schema creation, upsert semantics, race-safe job
 claiming, and rating anti-abuse enforcement."""
 
+import json
 import threading
 
 import pytest
@@ -268,6 +269,39 @@ def test_generation_history_pagination_and_join(isolated_db):
 
     page = db.get_generation_history(limit=2, offset=2)
     assert [r["job_id"] for r in page] == ["job-1"]
+
+
+def test_generation_history_tokens_and_last_raw_response(isolated_db):
+    """input_tokens/output_tokens roll up onto the job row, and the history
+    query surfaces the most recent attempt that actually got an API
+    response back (skipping earlier attempts/transport failures with no
+    raw_response) — this is what the admin history page's token columns
+    and JSON detail dialog are built from."""
+    db.create_generation_request(
+        job_id="job-tok", kind="create", prompt="a maze game", requested_by="web:zzz",
+    )
+    db.add_generation_attempt(
+        "job-tok", 1, "ai_error", detail="timeout", duration_seconds=1.0,
+    )
+    db.add_generation_attempt(
+        "job-tok", 2, "safety_violation", detail="bad", input_tokens=7, tokens_used=3,
+        duration_seconds=1.0, raw_response=json.dumps({"id": "resp-2", "usage": {}}),
+    )
+    db.add_generation_attempt(
+        "job-tok", 3, "success", input_tokens=11, tokens_used=13,
+        duration_seconds=1.0, raw_response=json.dumps({"id": "resp-3", "usage": {}}),
+    )
+    db.update_generation_request(
+        "job-tok", status="success", input_tokens=18, output_tokens=16, tokens_used=34,
+    )
+
+    row = db.get_generation_history()[0]
+    assert row["job_id"] == "job-tok"
+    assert row["input_tokens"] == 18
+    assert row["output_tokens"] == 16
+    assert row["tokens_used"] == 34
+    assert row["last_raw_response_attempt"] == 3
+    assert json.loads(row["last_raw_response"]) == {"id": "resp-3", "usage": {}}
 
 
 def test_play_history_joins_and_paginates(isolated_db):

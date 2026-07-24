@@ -1109,10 +1109,46 @@ body {
   opacity: 0.4;
 }
 
+.table-scroll {
+  overflow-x: auto;
+}
+
 .stats-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 12.5px;
+}
+
+.token-cell {
+  white-space: nowrap;
+}
+
+.token-cost {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.history-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: var(--accent2);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
 }
 
 .stats-table th, .stats-table td {
@@ -1211,6 +1247,36 @@ body {
   font-size: 12.5px;
   padding: 10px 12px;
   resize: vertical;
+}
+
+.text-dialog {
+  max-width: 560px;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.text-dialog[open] {
+  display: flex;
+}
+
+.text-dialog h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.text-dialog pre {
+  margin: 0;
+  max-height: 55vh;
+  overflow: auto;
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 10px 12px;
 }
 
 .rename-dialog::backdrop {

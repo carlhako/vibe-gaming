@@ -9,7 +9,7 @@ function-calling API used by the game-generation loop (caller owns the
 message list and appends tool results between calls).
 
 Drop-in replacement for home-net's `irc_bot.libs.ai` (same `ask()` shape:
-`AskResult(text, output_tokens, model, effort)`, `AIError`) so
+`AskResult(text, input_tokens, output_tokens, model, effort)`, `AIError`) so
 game_generator.py / game_enhancer.py needed near-zero changes when ported
 out of that project.
 
@@ -65,6 +65,7 @@ class AIError(Exception):
 @dataclass
 class AskResult:
     text: str
+    input_tokens: int
     output_tokens: int
     model: str
     effort: str
@@ -83,6 +84,7 @@ class ToolAskResult:
     message: dict         # assistant message dict, ready to append to the conversation
     tool_calls: list[ToolCall]
     text: str             # any plain-text content alongside/instead of tool calls
+    input_tokens: int
     output_tokens: int
     model: str
     effort: str
@@ -225,10 +227,12 @@ def ask(
 
     choice = response.choices[0] if response.choices else None
     text = (choice.message.content or "").strip() if choice else ""
+    input_tokens = response.usage.prompt_tokens if response.usage else 0
     output_tokens = response.usage.completion_tokens if response.usage else 0
 
     return AskResult(
         text=text,
+        input_tokens=input_tokens,
         output_tokens=output_tokens,
         model=resolved_model,
         effort=resolved_effort,
@@ -315,12 +319,14 @@ def ask_with_tools(
         for tc in (choice.message.tool_calls or [])
     ]
     text = (choice.message.content or "").strip()
+    input_tokens = response.usage.prompt_tokens if response.usage else 0
     output_tokens = response.usage.completion_tokens if response.usage else 0
 
     return ToolAskResult(
         message=message_dict,
         tool_calls=tool_calls,
         text=text,
+        input_tokens=input_tokens,
         output_tokens=output_tokens,
         model=resolved_model,
         effort=resolved_effort,

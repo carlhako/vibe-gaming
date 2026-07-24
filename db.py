@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS web_games (
     model            TEXT,
     effort           TEXT,
     duration_seconds REAL,
+    input_tokens     INTEGER,
+    output_tokens    INTEGER,
     tokens_used      INTEGER,
     error            TEXT,
     parent_game_id   TEXT REFERENCES web_games(game_id),
@@ -70,6 +72,8 @@ CREATE TABLE IF NOT EXISTS generation_requests (
     model            TEXT,
     effort           TEXT,
     duration_seconds REAL,
+    input_tokens     INTEGER,
+    output_tokens    INTEGER,
     tokens_used      INTEGER,
     error            TEXT,
     created_at       TEXT NOT NULL,
@@ -83,6 +87,7 @@ CREATE TABLE IF NOT EXISTS generation_attempts (
     attempt_number   INTEGER NOT NULL,
     outcome          TEXT NOT NULL,
     detail           TEXT,
+    input_tokens     INTEGER,
     tokens_used      INTEGER,
     duration_seconds REAL,
     raw_response     TEXT,
@@ -164,11 +169,16 @@ _ADDED_COLUMNS = {
     "web_games": [
         ("tokens_used", "INTEGER"), ("creator_uid", "TEXT"),
         ("hidden", "INTEGER NOT NULL DEFAULT 0"),
+        ("input_tokens", "INTEGER"), ("output_tokens", "INTEGER"),
     ],
     "generation_requests": [
         ("tokens_used", "INTEGER"), ("creator_uid", "TEXT"),
+        ("input_tokens", "INTEGER"), ("output_tokens", "INTEGER"),
     ],
-    "generation_attempts": [("duration_seconds", "REAL"), ("raw_response", "TEXT")],
+    "generation_attempts": [
+        ("duration_seconds", "REAL"), ("raw_response", "TEXT"),
+        ("input_tokens", "INTEGER"),
+    ],
 }
 
 
@@ -223,6 +233,7 @@ def make_slug(title: str, game_id: str) -> str:
 
 def register_web_game(game_id, slug, title, description, requested_by, status, attempts,
                        version=1, model=None, effort=None, duration_seconds=None,
+                       input_tokens=None, output_tokens=None,
                        tokens_used=None, error=None, parent_game_id=None, root_game_id=None,
                        creator_uid=None, conn=None):
     """Insert or update the live registry row for a generated web game.
@@ -242,21 +253,24 @@ def register_web_game(game_id, slug, title, description, requested_by, status, a
         """
         INSERT INTO web_games
             (game_id, slug, title, description, requested_by, status, attempts, version,
-             model, effort, duration_seconds, tokens_used, error, parent_game_id, root_game_id,
+             model, effort, duration_seconds, input_tokens, output_tokens, tokens_used,
+             error, parent_game_id, root_game_id,
              creator_uid, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(game_id) DO UPDATE
             SET slug=excluded.slug, title=excluded.title, description=excluded.description,
                 status=excluded.status, attempts=excluded.attempts,
                 version=excluded.version, model=excluded.model,
                 effort=excluded.effort, duration_seconds=excluded.duration_seconds,
+                input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
                 tokens_used=excluded.tokens_used,
                 error=excluded.error, parent_game_id=excluded.parent_game_id,
                 root_game_id=excluded.root_game_id, creator_uid=excluded.creator_uid,
                 updated_at=excluded.updated_at
         """,
         (game_id, slug, title, description, requested_by, status, attempts, version,
-         model, effort, duration_seconds, tokens_used, error, parent_game_id, root_game_id,
+         model, effort, duration_seconds, input_tokens, output_tokens, tokens_used,
+         error, parent_game_id, root_game_id,
          creator_uid, now, now),
     )
     c.commit()
@@ -406,18 +420,27 @@ def get_generation_history(limit=20, offset=0, conn=None):
     """One page of generation/enhancement jobs, newest first — every run,
     failures included. Joins in the resulting game's title/slug (NULL for
     failed or still-running jobs) and the requester's username if their
-    vg_uid has a users row."""
+    vg_uid has a users row. Also pulls in the most recent attempt's raw
+    DeepSeek response payload (NULL if every attempt errored before a
+    response came back, e.g. a transport failure) for the admin history
+    page's "JSON" detail dialog."""
     c = _c(conn)
     rows = c.execute(
         """
         SELECT gr.job_id, gr.kind, gr.prompt, gr.new_title, gr.status,
                gr.requested_by, gr.creator_uid, gr.created_at,
                gr.error, gr.model, gr.effort, gr.attempts,
-               gr.tokens_used, gr.duration_seconds,
+               gr.input_tokens, gr.output_tokens, gr.tokens_used, gr.duration_seconds,
                gr.source_game_id,
                wg.title AS result_title, wg.slug AS result_slug,
                u.username AS creator_username,
-               src.title AS source_title
+               src.title AS source_title,
+               (SELECT ga.raw_response FROM generation_attempts ga
+                WHERE ga.job_id = gr.job_id AND ga.raw_response IS NOT NULL
+                ORDER BY ga.attempt_number DESC LIMIT 1) AS last_raw_response,
+               (SELECT ga.attempt_number FROM generation_attempts ga
+                WHERE ga.job_id = gr.job_id AND ga.raw_response IS NOT NULL
+                ORDER BY ga.attempt_number DESC LIMIT 1) AS last_raw_response_attempt
         FROM generation_requests gr
         LEFT JOIN web_games wg ON wg.game_id = gr.result_game_id
         LEFT JOIN users u ON u.uid = gr.creator_uid
@@ -631,6 +654,7 @@ def get_generation_request(job_id, conn=None):
 
 def update_generation_request(job_id, status=None, result_game_id=None, attempts=None,
                                model=None, effort=None, duration_seconds=None,
+                               input_tokens=None, output_tokens=None,
                                tokens_used=None, error=None, conn=None):
     """Sparse update: only columns explicitly passed (non-None) are touched,
     except `error` which can be intentionally cleared by passing an empty
@@ -649,6 +673,10 @@ def update_generation_request(job_id, status=None, result_game_id=None, attempts
         fields["effort"] = effort
     if duration_seconds is not None:
         fields["duration_seconds"] = duration_seconds
+    if input_tokens is not None:
+        fields["input_tokens"] = input_tokens
+    if output_tokens is not None:
+        fields["output_tokens"] = output_tokens
     if tokens_used is not None:
         fields["tokens_used"] = tokens_used
     if error is not None:
@@ -752,20 +780,22 @@ def sweep_orphaned_requests(conn=None) -> int:
 
 
 def add_generation_attempt(job_id, attempt_number, outcome, detail=None,
-                            tokens_used=None, duration_seconds=None, raw_response=None,
-                            conn=None):
+                            input_tokens=None, tokens_used=None, duration_seconds=None,
+                            raw_response=None, conn=None):
     """`raw_response`, when given, should already be a JSON-serialized string
     (see game_generator._redact_raw_response) — the caller strips the
-    generated game source out of it first so this audit blob stays small."""
+    generated game source out of it first so this audit blob stays small.
+    `tokens_used` here is this attempt's completion/output tokens;
+    `input_tokens` its prompt tokens."""
     c = _c(conn)
     c.execute(
         """
         INSERT INTO generation_attempts
-            (job_id, attempt_number, outcome, detail, tokens_used, duration_seconds,
-             raw_response, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (job_id, attempt_number, outcome, detail, input_tokens, tokens_used,
+             duration_seconds, raw_response, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (job_id, attempt_number, outcome, detail, tokens_used, duration_seconds,
+        (job_id, attempt_number, outcome, detail, input_tokens, tokens_used, duration_seconds,
          raw_response, _now()),
     )
     c.commit()

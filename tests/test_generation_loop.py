@@ -33,11 +33,12 @@ def _submission(arguments, tool_call_id="call_1"):
         message=message,
         tool_calls=[ai.ToolCall(id=tool_call_id, name="submit_game", arguments=arguments)],
         text="",
+        input_tokens=5,
         output_tokens=5,
         model="deepseek-v4-flash",
         effort="high",
         raw_response={"choices": [{"message": message}],
-                      "usage": {"completion_tokens": 5}},
+                      "usage": {"prompt_tokens": 5, "completion_tokens": 5}},
     )
 
 
@@ -73,7 +74,9 @@ def test_rejection_feeds_failure_back_as_tool_result(isolated_db, games_dir):
 
     assert outcome["success"]
     assert outcome["attempts"] == 2
-    assert outcome["tokens_used"] == 10
+    assert outcome["input_tokens"] == 10
+    assert outcome["output_tokens"] == 10
+    assert outcome["tokens_used"] == 20
 
     # Second call must carry the whole conversation: the model's rejected
     # submission followed by a tool result naming the safety violation.
@@ -114,7 +117,7 @@ def test_gives_up_after_max_attempts(isolated_db, games_dir):
 def test_reply_without_tool_call_gets_a_nudge(isolated_db, games_dir):
     no_call = ai.ToolAskResult(
         message={"role": "assistant", "content": "here is your game: ..."},
-        tool_calls=[], text="here is your game: ...", output_tokens=5,
+        tool_calls=[], text="here is your game: ...", input_tokens=5, output_tokens=5,
         model="deepseek-v4-flash", effort="high",
         raw_response={"choices": [{"message": {"role": "assistant"}}]},
     )

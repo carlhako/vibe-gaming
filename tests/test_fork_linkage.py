@@ -32,6 +32,7 @@ def _submission(title, html=None):
         message=message,
         tool_calls=[ai.ToolCall(id="call_1", name="submit_game", arguments=args)],
         text="",
+        input_tokens=5,
         output_tokens=5,
         model="deepseek-v4-flash",
         effort="high",
