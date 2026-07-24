@@ -116,6 +116,31 @@ aspirational:
   The username link in the sidebar points here once a user is signed in.
   `/leaderboard` is the public, all-users view of the same thumbs-up
   totals (`db.get_user_leaderboard()`), unauthenticated.
+- **Content moderation + player reporting**: `content_moderation.py`'s
+  `check_game()` asks DeepSeek to review a just-accepted game's visible
+  player-facing text (not the code) for phishing/social-engineering copy —
+  the one class of attack `safety.py`'s static blocklist and
+  `smoke_test.py`'s runtime egress check can't catch, since it's plain
+  text, not a code or network signature. Run once, in the success branch
+  of both `game_generator.generate_game()` and
+  `game_enhancer.enhance_game()` (via the shared
+  `game_generator.run_moderation_pass()`), never on a retry attempt; any
+  `AIError` or unparseable reply defaults to `flagged=False` so a
+  moderation-call outage never blocks a successful generation. A flagged
+  game is auto-hidden (`db.set_game_hidden`) and logged to a new
+  `reports` table (`source='moderation'`) — the requester still sees a
+  normal success message, since generation itself did succeed. Players
+  can also report a game themselves: a "Report this game" control in the
+  info modal (`static/app.js`) posts to
+  `POST /api/games/<game_id>/report`, enforced to one report per game per
+  `vg_uid` cookie *and* per IP by two `UNIQUE` constraints on `reports` —
+  the same two-constraint pattern `ratings` already uses. `GET
+  /admin/reports` (behind `require_admin_token`) lists every game with an
+  open report, grouped with a count and each reason/source, and lets an
+  admin Hide/Unhide (reusing the existing
+  `POST /admin/games/<game_id>/hidden` route) or Dismiss
+  (`POST /admin/reports/<game_id>/dismiss`) a game's reports; `admin_stats.html`
+  links to it with an open-report count badge.
 - `safety.py` — regex blocklist + CDN allowlist, scans generated HTML
   before it's ever written to disk.
 - `smoke_test.py` — headless Playwright load of generated HTML, fails the
@@ -242,22 +267,26 @@ disk-sync register it.
 app.py                 Flask site: menu, /games/new, /games/<id>/enhance,
                         /games/<id>/download, /status/<job_id>, /api/games
                         (sort), /api/games/<id>/info (prompt/model/tokens/
-                        lineage), rate endpoint, /signup, /u/<uid> (sign-in
-                        link), /signin, /account, /profile, /leaderboard,
-                        access-log middleware, /admin/stats,
-                        /admin/games/download
+                        lineage), rate endpoint, report endpoint, /signup,
+                        /u/<uid> (sign-in link), /signin, /account, /profile,
+                        /leaderboard, access-log middleware, /admin/stats,
+                        /admin/games/download, /admin/reports
 job_runner.py           DB-polling background worker: claims generation_requests,
                         dispatches to game_generator/game_enhancer
-game_generator.py       generate_game() + shared run_generation_attempts() retry loop
+game_generator.py       generate_game() + shared run_generation_attempts() retry loop,
+                        run_moderation_pass() (shared with game_enhancer)
 game_enhancer.py        enhance_game(): forks a new game_id/slug, links parent/root
 safety.py               regex blocklist + CDN allowlist for generated HTML
+content_moderation.py   DeepSeek-judged check_game(): flags phishing/social-engineering
+                        player-facing text safety.py/smoke_test.py can't catch
 smoke_test.py           headless Playwright load, fails on JS errors
 ai_client.py            DeepSeek Chat Completions client (swap point for other providers)
 db.py                   SQLite: web_games, generation_requests, generation_attempts,
-                        ratings, plays, access_log, users; sync_games_from_disk()
-                        startup backfill
+                        ratings, reports, plays, access_log, users;
+                        sync_games_from_disk() startup backfill
 gunicorn.conf.py        post_fork hook starts job_runner workers per worker process
-templates/index.html    menu shell: sidebar (sort toggle, rate/enhance controls) + iframe
+templates/index.html    menu shell: sidebar (sort toggle, rate/enhance controls) + iframe,
+                        info modal w/ Report control
 templates/new_game.html  "Create New Game" prompt form
 templates/enhance.html  enhancement prompt + optional new-title form
 templates/status.html   job status page (polls static/status.js)
@@ -266,12 +295,13 @@ templates/signin.html   paste-a-token form (alternative to the /u/<uid> link)
 templates/profile.html  own games w/ hide toggle, play/like stats, recent plays
 templates/leaderboard.html  public all-users ranking by total thumbs_up
 templates/admin_stats.html  access-log/usage dashboard, behind ADMIN_TOKEN
+templates/admin_reports.html  open-reports review page, behind ADMIN_TOKEN
 static/style.css        arcade-cabinet styling
-static/app.js           play-on-click, thumbs-vote, sort toggle behavior
+static/app.js           play-on-click, thumbs-vote, report-this-game, sort toggle behavior
 static/status.js        polls /api/status/<job_id> until success/failed
 games/block-dodge/      bundled game (game_id committed in meta.json)
 games/connect-4-4/      bundled game (game_id committed in meta.json)
-tests/                  pytest suite: db.py, startup disk-sync, fork linkage
+tests/                  pytest suite: db.py, startup disk-sync, fork linkage, reports
 config.yaml.example     copy to config.yaml
 .env.example            copy to .env: DEEPSEEK_API_KEY, ADMIN_TOKEN
 ```

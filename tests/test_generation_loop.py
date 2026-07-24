@@ -9,6 +9,8 @@ from unittest import mock
 import pytest
 
 import ai_client as ai
+import content_moderation
+import db
 import game_generator as gg
 
 CONFIG = {
@@ -187,3 +189,78 @@ def test_forcing_tool_choice_downgraded_only_in_thinking_mode():
     assert ai._resolve_tool_choice(None, thinking) is None
     assert ai._resolve_tool_choice(forced, non_thinking) == forced
     assert ai._resolve_tool_choice("required", non_thinking) == "required"
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4 Part A: automated content-moderation pass, hooked into
+# generate_game()'s success branch (run_generation_attempts itself is
+# unaware of moderation — only the orchestrator is)
+# ---------------------------------------------------------------------------
+
+def _generate_with(games_dir, moderation_patch):
+    responses = [_submission(_game_args(SAFE_HTML))]
+
+    def scripted(messages, **kwargs):
+        return responses[0]
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")), \
+         moderation_patch:
+        return gg.generate_game("desc", "web:t", CONFIG, games_dir=games_dir)
+
+
+def test_moderation_flag_hides_game_and_creates_report(isolated_db, games_dir):
+    patch = mock.patch.object(
+        content_moderation, "check_game",
+        return_value={"flagged": True, "reason": "asks player for a password"},
+    )
+    result = _generate_with(games_dir, patch)
+
+    assert result["success"] is True, "a flagged game still reports success to the requester"
+    game = db.get_web_game(result["game_id"])
+    assert game["hidden"] == 1
+
+    open_reports = db.get_open_reports()
+    assert len(open_reports) == 1
+    assert open_reports[0]["game_id"] == result["game_id"]
+    assert open_reports[0]["reports"][0]["source"] == "moderation"
+    assert open_reports[0]["reports"][0]["reason"] == "asks player for a password"
+
+
+def test_moderation_unflagged_leaves_game_visible(isolated_db, games_dir):
+    patch = mock.patch.object(
+        content_moderation, "check_game", return_value={"flagged": False, "reason": ""},
+    )
+    result = _generate_with(games_dir, patch)
+
+    assert result["success"] is True
+    game = db.get_web_game(result["game_id"])
+    assert game["hidden"] == 0
+    assert db.get_open_reports() == []
+
+
+def test_moderation_ai_error_defaults_to_unflagged(isolated_db, games_dir):
+    """content_moderation.check_game itself swallows AIError -> flagged=False
+    (see content_moderation.py); assert that outage never blocks or hides a
+    successful generation."""
+    patch = mock.patch.object(ai, "ask", side_effect=ai.AIError("moderation outage"))
+    result = _generate_with(games_dir, patch)
+
+    assert result["success"] is True
+    game = db.get_web_game(result["game_id"])
+    assert game["hidden"] == 0
+    assert db.get_open_reports() == []
+
+
+def test_moderation_unparseable_reply_defaults_to_unflagged(isolated_db, games_dir):
+    bad_ask_result = ai.AskResult(
+        text="not json at all", input_tokens=1, output_tokens=1,
+        model="deepseek-v4-flash", effort="non-thinking", raw_response={},
+    )
+    patch = mock.patch.object(ai, "ask", return_value=bad_ask_result)
+    result = _generate_with(games_dir, patch)
+
+    assert result["success"] is True
+    game = db.get_web_game(result["game_id"])
+    assert game["hidden"] == 0
+    assert db.get_open_reports() == []

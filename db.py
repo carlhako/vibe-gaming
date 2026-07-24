@@ -145,6 +145,21 @@ CREATE TABLE IF NOT EXISTS enhance_locks (
     last_ping_at  TEXT NOT NULL,
     expires_at    TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS reports (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id       TEXT NOT NULL REFERENCES web_games(game_id),
+    reporter_uid  TEXT,
+    ip_address    TEXT NOT NULL,
+    reason        TEXT,
+    source        TEXT NOT NULL DEFAULT 'player',
+    status        TEXT NOT NULL DEFAULT 'open',
+    created_at    TEXT NOT NULL,
+    UNIQUE(game_id, reporter_uid),
+    UNIQUE(game_id, ip_address)
+);
+CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
+CREATE INDEX IF NOT EXISTS idx_reports_game ON reports(game_id);
 """
 
 
@@ -980,3 +995,80 @@ def get_active_enhance_job(source_game_id, conn=None):
         (source_game_id,),
     ).fetchone()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# reports (player "report this game" + automated moderation flags)
+# ---------------------------------------------------------------------------
+
+def create_report(game_id, reporter_uid, ip_address, reason, source="player", conn=None) -> bool:
+    """Record a report against game_id. Returns True on success, False if
+    this reporter_uid or ip_address already has an open-or-not report on
+    this game — the two UNIQUE constraints on `reports` are the actual
+    enforcement, same try/except-on-IntegrityError shape as record_rating.
+    The automated-moderation path (reporter_uid=None, ip_address='system')
+    is exempt from colliding with real player reports: SQLite treats NULL
+    as distinct in UNIQUE, and 'system' won't match a real IP."""
+    c = _c(conn)
+    try:
+        c.execute(
+            "INSERT INTO reports (game_id, reporter_uid, ip_address, reason, source, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (game_id, reporter_uid, ip_address, reason, source, _now()),
+        )
+    except sqlite3.IntegrityError:
+        c.rollback()
+        return False
+    c.commit()
+    return True
+
+
+def get_open_reports(conn=None):
+    """Open reports grouped by game_id, joined to web_games for
+    title/slug/hidden state. Each entry carries report_count,
+    last_reported_at, and a `reports` list (id/reporter_uid/ip_address/
+    reason/source/created_at) for the admin page's expandable detail view.
+    Ordered by report_count desc, then most-recently-reported first."""
+    c = _c(conn)
+    rows = c.execute(
+        """
+        SELECT r.id, r.game_id, r.reporter_uid, r.ip_address, r.reason, r.source, r.created_at,
+               g.title, g.slug, g.hidden
+        FROM reports r
+        JOIN web_games g ON g.game_id = r.game_id
+        WHERE r.status = 'open'
+        ORDER BY r.created_at DESC
+        """
+    ).fetchall()
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        d = dict(row)
+        game_id = d["game_id"]
+        if game_id not in grouped:
+            grouped[game_id] = {
+                "game_id": game_id, "title": d["title"], "slug": d["slug"],
+                "hidden": bool(d["hidden"]), "reports": [],
+            }
+        grouped[game_id]["reports"].append({
+            "id": d["id"], "reporter_uid": d["reporter_uid"], "ip_address": d["ip_address"],
+            "reason": d["reason"], "source": d["source"], "created_at": d["created_at"],
+        })
+    result = list(grouped.values())
+    for g in result:
+        g["report_count"] = len(g["reports"])
+        g["last_reported_at"] = max(r["created_at"] for r in g["reports"])
+    result.sort(key=lambda g: (g["report_count"], g["last_reported_at"]), reverse=True)
+    return result
+
+
+def dismiss_reports(game_id, conn=None) -> int:
+    """Mark every open report on game_id as dismissed (admin judged it a
+    false alarm) without necessarily hiding the game. Returns the number
+    of rows updated."""
+    c = _c(conn)
+    cur = c.execute(
+        "UPDATE reports SET status='dismissed' WHERE game_id=? AND status='open'",
+        (game_id,),
+    )
+    c.commit()
+    return cur.rowcount

@@ -495,6 +495,39 @@ def create_app(games_dir=None) -> Flask:
             )
         return resp
 
+    @app.post("/api/games/<game_id>/report")
+    def report_game(game_id):
+        if not _GAME_ID_RE.match(game_id):
+            abort(404)
+        conn = get_db()
+        game = db.get_web_game(game_id, conn=conn)
+        if game is None:
+            abort(404)
+
+        payload = request.get_json(silent=True) or {}
+        reason = (payload.get("reason") or "").strip()[:500] or None
+
+        vg_uid = request.cookies.get(_VG_UID_COOKIE)
+        set_cookie = vg_uid is None
+        if vg_uid is None:
+            vg_uid = uuid.uuid4().hex
+
+        ok = db.create_report(
+            game_id, reporter_uid=vg_uid, ip_address=request.remote_addr or "unknown",
+            reason=reason, source="player", conn=conn,
+        )
+        body = {"ok": ok}
+        if not ok:
+            body["reason"] = "already_reported"
+        resp = jsonify(body)
+        resp.status_code = 200 if ok else 409
+        if set_cookie:
+            resp.set_cookie(
+                _VG_UID_COOKIE, vg_uid, max_age=_VG_UID_MAX_AGE,
+                httponly=False, samesite="Lax",
+            )
+        return resp
+
     @app.get("/play/<slug>")
     def play(slug):
         if not _SLUG_RE.match(slug):
@@ -979,6 +1012,7 @@ def create_app(games_dir=None) -> Flask:
         ][:10]
         all_games = get_games(include_hidden=True)
         all_users = db.get_all_users(conn=conn)
+        open_report_count = len(db.get_open_reports(conn=conn))
 
         admin_token = request.args.get("token")
         history_page, history_per = _page_params("history")
@@ -1046,6 +1080,7 @@ def create_app(games_dir=None) -> Flask:
             output_cost_per_million=output_cost_per_million,
             plays_rows=plays_rows, plays_pager=plays_pager,
             page_sizes=_ADMIN_PAGE_SIZES,
+            open_report_count=open_report_count,
         )
 
     @app.get("/admin/games/download")
@@ -1102,6 +1137,24 @@ def create_app(games_dir=None) -> Flask:
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
         return redirect(url_for("admin_stats", token=request.args.get("token")))
+
+    @app.get("/admin/reports")
+    @require_admin_token
+    def admin_reports():
+        conn = get_db()
+        open_reports = db.get_open_reports(conn=conn)
+        return render_template(
+            "admin_reports.html", open_reports=open_reports,
+            admin_token=request.args.get("token"),
+        )
+
+    @app.post("/admin/reports/<game_id>/dismiss")
+    @require_admin_token
+    def admin_dismiss_report(game_id):
+        if not _GAME_ID_RE.match(game_id):
+            abort(404)
+        db.dismiss_reports(game_id, conn=get_db())
+        return redirect(url_for("admin_reports", token=request.args.get("token")))
 
     @app.teardown_appcontext
     def _close_db(exception=None):

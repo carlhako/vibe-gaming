@@ -17,6 +17,12 @@
         <a class="back-link" href="{{ url_for('index') }}">&larr; back to the shelf</a>
         <h1>Access stats</h1>
 
+        <p>
+          <a class="game-row-play-link" href="{{ url_for('admin_reports', token=admin_token) }}">
+            Reports{% if open_report_count %} ({{ open_report_count }}){% endif %} &rarr;
+          </a>
+        </p>
+
         <div class="admin-tabs" role="tablist">
           <button type="button" class="admin-tab" data-tab="traffic" data-hue="3" role="tab">Traffic</button>
           <button type="button" class="admin-tab" data-tab="games" data-hue="0" role="tab">Games</button>

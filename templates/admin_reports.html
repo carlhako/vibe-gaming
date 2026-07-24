@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reports — The Vibe Arcade</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="shell">
+    <main class="cabinet form-page">
+      <div class="cabinet-plate">
+        <span class="power-light on"></span>
+        <span class="now-playing">ADMIN REPORTS</span>
+      </div>
+      <div class="form-panel stats-panel">
+        <a class="back-link" href="{{ url_for('admin_stats', token=admin_token) }}">&larr; back to stats</a>
+        <h1>Open reports</h1>
+
+        {% if open_reports %}
+        <table class="stats-table">
+          <thead><tr><th>Game</th><th>Reports</th><th>Visibility</th><th></th></tr></thead>
+          <tbody>
+            {% for g in open_reports %}
+            <tr class="{{ 'is-hidden-row' if g.hidden }}">
+              <td>
+                <a class="game-row-play-link" href="{{ url_for('play', slug=g.slug) }}" target="_blank" rel="noopener">{{ g.title }} &#8599;</a>
+              </td>
+              <td>
+                <details>
+                  <summary>{{ g.report_count }} report{{ '' if g.report_count == 1 else 's' }}</summary>
+                  <ul class="report-reason-list">
+                    {% for r in g.reports %}
+                    <li>
+                      <span class="report-source">[{{ r.source }}]</span>
+                      <span class="local-ts" data-utc="{{ r.created_at }}">{{ r.created_at[:19].replace('T', ' ') }}</span>
+                      {% if r.reason %}&mdash; {{ r.reason }}{% endif %}
+                    </li>
+                    {% endfor %}
+                  </ul>
+                </details>
+              </td>
+              <td>
+                <form class="visibility-form" method="post"
+                      action="{{ url_for('admin_set_game_hidden', game_id=g.game_id, token=admin_token) }}">
+                  <label>
+                    <input type="radio" name="hidden" value="0" {{ 'checked' if not g.hidden }}
+                           onchange="this.form.submit()">
+                    Show
+                  </label>
+                  <label>
+                    <input type="radio" name="hidden" value="1" {{ 'checked' if g.hidden }}
+                           onchange="this.form.submit()">
+                    Hide
+                  </label>
+                </form>
+              </td>
+              <td>
+                <form method="post"
+                      action="{{ url_for('admin_dismiss_report', game_id=g.game_id, token=admin_token) }}">
+                  <button type="submit">Dismiss</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="form-hint">No open reports.</p>
+        {% endif %}
+      </div>
+    </main>
+  </div>
+
+  <script>
+    function formatLocalTimestamp(iso) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      if (isNaN(d)) return iso;
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+        `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    document.querySelectorAll(".local-ts").forEach((el) => {
+      el.textContent = formatLocalTimestamp(el.dataset.utc);
+    });
+  </script>
+</body>
+</html>

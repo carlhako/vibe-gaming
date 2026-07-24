@@ -52,6 +52,7 @@ from pathlib import Path
 from langsmith import traceable
 
 import ai_client as ai
+import content_moderation
 import db
 import safety
 import smoke_test
@@ -206,6 +207,28 @@ def rollback_game_files(game_dir: Path) -> None:
     """Delete the game directory if present. Idempotent — safe to call when
     it's already missing."""
     shutil.rmtree(Path(game_dir), ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Automated content-moderation pass (shared by generate_game / enhance_game)
+# ---------------------------------------------------------------------------
+
+def run_moderation_pass(game_id: str, slug: str, description: str, notes: str,
+                         games_dir: Path, db_conn=None) -> None:
+    """Run content_moderation.check_game() against the just-written game and,
+    if flagged, hide it and log a report — called once on the final accepted
+    submission, never on a retry attempt. Never raises and never changes the
+    caller's success result: a moderation-call failure (see
+    content_moderation.check_game's own AIError/unparseable-reply handling)
+    just means the game stays visible, same as if the pass had never run."""
+    html = (Path(games_dir) / slug / "index.html").read_text(encoding="utf-8")
+    check_result = content_moderation.check_game(html, description, notes)
+    if check_result["flagged"]:
+        db.set_game_hidden(game_id, True, conn=db_conn)
+        db.create_report(
+            game_id=game_id, reporter_uid=None, ip_address="system",
+            reason=check_result["reason"], source="moderation", conn=db_conn,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -552,6 +575,10 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
             root_game_id=result["game_id"],
             creator_uid=creator_uid,
             conn=db_conn,
+        )
+        run_moderation_pass(
+            result["game_id"], result["slug"], result["description"], result["notes"],
+            games_dir, db_conn=db_conn,
         )
     else:
         result = {

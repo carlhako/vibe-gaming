@@ -197,6 +197,7 @@ function renderLineageLink(item) {
 
 async function openInfoModal(gameId) {
   infoModalLastFocused = document.activeElement;
+  resetReportUI(gameId);
   try {
     const res = await fetch(`/api/games/${encodeURIComponent(gameId)}/info`);
     if (!res.ok) return;
@@ -300,4 +301,74 @@ document.getElementById("info-modal-lineage").addEventListener("click", (evt) =>
   playSlug(a.dataset.slug, a.dataset.title || a.textContent);
   const cartSelectBtn = document.querySelector(`.cart-select[data-slug="${CSS.escape(a.dataset.slug)}"]`);
   if (cartSelectBtn) bumpPlayCount(cartSelectBtn);
+});
+
+// ---- Report this game ----
+// Real enforcement is server-side (409 on a repeat cookie/IP report); the
+// "reported" localStorage flag here only saves a round trip, same pattern
+// as VOTED_KEY above.
+const REPORTED_KEY = "vg_reported_games";
+
+function getReportedSet() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(REPORTED_KEY) || "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+function markReported(gameId) {
+  const reported = getReportedSet();
+  reported.add(gameId);
+  localStorage.setItem(REPORTED_KEY, JSON.stringify([...reported]));
+}
+
+const reportToggleBtn = document.getElementById("info-modal-report-toggle");
+const reportForm = document.getElementById("info-modal-report-form");
+const reportReasonEl = document.getElementById("info-modal-report-reason");
+const reportSubmitBtn = document.getElementById("info-modal-report-submit");
+const reportStatusEl = document.getElementById("info-modal-report-status");
+let currentReportGameId = null;
+
+function resetReportUI(gameId) {
+  currentReportGameId = gameId;
+  reportForm.hidden = true;
+  reportReasonEl.value = "";
+  reportStatusEl.hidden = true;
+  reportStatusEl.textContent = "";
+  const alreadyReported = getReportedSet().has(gameId);
+  reportToggleBtn.disabled = alreadyReported;
+  reportToggleBtn.textContent = alreadyReported ? "Reported — thanks" : "Report this game";
+}
+
+reportToggleBtn.addEventListener("click", () => {
+  reportForm.hidden = !reportForm.hidden;
+});
+
+reportSubmitBtn.addEventListener("click", async () => {
+  if (!currentReportGameId) return;
+  reportSubmitBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/games/${encodeURIComponent(currentReportGameId)}/report`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: reportReasonEl.value.trim() }),
+    });
+    if (res.status === 200 || res.status === 409) {
+      markReported(currentReportGameId);
+      reportToggleBtn.disabled = true;
+      reportToggleBtn.textContent = "Reported — thanks";
+      reportForm.hidden = true;
+      reportStatusEl.hidden = false;
+      reportStatusEl.textContent = "Thanks — a moderator will take a look.";
+    } else {
+      reportStatusEl.hidden = false;
+      reportStatusEl.textContent = "Something went wrong — try again.";
+    }
+  } catch (err) {
+    reportStatusEl.hidden = false;
+    reportStatusEl.textContent = "Network error — try again.";
+  } finally {
+    reportSubmitBtn.disabled = false;
+  }
 });

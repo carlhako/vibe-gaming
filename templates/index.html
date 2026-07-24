@@ -175,6 +175,19 @@
         <h3 id="info-modal-play-count"></h3>
         <ul class="modal-plays-list" id="info-modal-plays-list"></ul>
       </div>
+      <div class="modal-report">
+        <button type="button" class="link-btn" id="info-modal-report-toggle">Report this game</button>
+        <div class="modal-report-form" id="info-modal-report-form" hidden>
+          <label class="field-label" for="info-modal-report-reason">
+            What's wrong with this game? (optional)
+          </label>
+          <textarea id="info-modal-report-reason" maxlength="500" rows="3"></textarea>
+          <div class="modal-report-actions">
+            <button type="button" id="info-modal-report-submit">Submit report</button>
+          </div>
+          <p class="form-hint" id="info-modal-report-status" hidden></p>
+        </div>
+      </div>
     </div>
   </div>
 

@@ -215,6 +215,10 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
             creator_uid=creator_uid,
             conn=db_conn,
         )
+        gg.run_moderation_pass(
+            result["game_id"], result["slug"], result["description"], result["notes"],
+            games_dir, db_conn=db_conn,
+        )
     else:
         result = {
             "success": False, "game_id": None, "slug": None, "title": None,
