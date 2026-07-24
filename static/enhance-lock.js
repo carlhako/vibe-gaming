@@ -94,24 +94,20 @@
     tickTimer = setInterval(tick, 1000);
     disableForm();
   } else if (!locked && heldByMe && phase === "form") {
-    // We hold the lock — show the countdown, keep it alive with a
-    // heartbeat, and watch for losing it (idle timeout, or a fresher
-    // acquisition elsewhere) so we can stop the user from submitting
-    // into a lock that's no longer theirs. Each successful heartbeat
-    // slides the server's deadline forward (see db.heartbeat_enhance_lock),
-    // so an actively-open tab shouldn't ever actually hit zero here — but
-    // track the server's latest expires_at rather than the page-load-time
-    // value so the displayed countdown matches reality if a ping is ever
-    // delayed.
-    let currentExpiresAt = lockExpiresAt;
+    // We hold the lock — keep it alive with a heartbeat, and watch for
+    // losing it (idle timeout, or a fresher acquisition elsewhere) so we
+    // can stop the user from submitting into a lock that's no longer
+    // theirs. Each successful heartbeat slides the server's deadline
+    // forward a full ENHANCE_LOCK_TTL_SECONDS (see
+    // db.heartbeat_enhance_lock), which fires far more often than the
+    // TTL requires — so a shrinking "X remaining" countdown here would
+    // never get anywhere: it'd tick down for one ping interval and then
+    // jump straight back to the top, over and over, looking broken
+    // instead of reassuring. Show a stable message instead; the real
+    // signal the user needs is "did I lose it", handled by the ping
+    // failure branch below.
     setLock("🔒 LOCKED BY YOU", "on locked-mine");
-    const tick = () => {
-      if (!currentExpiresAt) return;
-      const remaining = currentExpiresAt.getTime() - Date.now();
-      showBanner(`You've locked this game for enhancing — ${formatCountdown(Math.max(0, remaining))} remaining.`);
-    };
-    tick();
-    tickTimer = setInterval(tick, 1000);
+    showBanner("You've locked this game for enhancing — it stays reserved for you while this tab is open.");
 
     let pingTimer = null;
 
@@ -122,11 +118,8 @@
         const data = await res.json();
         if (!data.ok) {
           clearInterval(pingTimer);
-          clearInterval(tickTimer);
           disableForm("You lost your lock on this game (idle too long) — reopen this page to try again.");
           setLock("🔒 LOCK LOST", "locked-other");
-        } else if (data.expires_at) {
-          currentExpiresAt = new Date(data.expires_at);
         }
       } catch (err) {
         // transient network error — keep trying on the next tick
