@@ -48,6 +48,20 @@ enhanceaiwebgame:
   max_attempts: 3            # 1 initial + 2 retries; each failed attempt restores the backup first
   smoke_test_timeout_seconds: 20
 
+# The ReAct editing agent (docs/multifile-agent/) used for enhance jobs
+# whose SOURCE game is format: "multi-file" in its meta.json — single-file
+# games keep using enhanceaiwebgame above, unchanged. The agent explores a
+# game's src/ files with tools instead of resubmitting the whole game, so
+# there's no output-ceiling-driven size note here the way LARGE_SOURCE_BYTES
+# exists for enhanceaiwebgame.
+multifile_agent:
+  model: "deepseek-v4-flash"
+  effort: "high"
+  timeout_seconds: 1800        # per ai_client.ask_with_tools() call
+  max_steps: 40                # hard cap on read/write/finish turns before giving up
+  max_verification_retries: 3  # finish() calls that fail build->scan->smoke before giving up
+  max_module_bytes: 196608     # 3x ai_client.MAX_OUTPUT_TOKENS bytes; see agent.py
+
 job_runner:
   workers: 1                 # poll-loop threads per process (dev) / per gunicorn worker (prod)
   poll_interval_seconds: 1   # how often an idle worker checks for a newly queued job

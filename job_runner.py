@@ -20,6 +20,7 @@ import time
 import traceback
 from pathlib import Path
 
+import agent
 import db
 import game_enhancer
 import game_generator
@@ -50,11 +51,21 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
                 creator_uid=job.get("creator_uid"),
             )
         elif job["kind"] == "enhance":
-            result = game_enhancer.enhance_game(
-                job["source_game_id"], job["prompt"], job["requested_by"], config,
-                db_conn=conn, games_dir=games_dir, job_id=job_id,
-                new_title=job.get("new_title"), creator_uid=job.get("creator_uid"),
-            )
+            # Multi-file sources go through the ReAct editing agent (Sprint 2
+            # of docs/multifile-agent/); single-file sources keep using the
+            # existing whole-file resubmit loop, unchanged.
+            if agent.is_multi_file_source(job["source_game_id"], games_dir, conn=conn):
+                result = agent.enhance_multifile_game(
+                    job["source_game_id"], job["prompt"], job["requested_by"], config,
+                    db_conn=conn, games_dir=games_dir, job_id=job_id,
+                    new_title=job.get("new_title"), creator_uid=job.get("creator_uid"),
+                )
+            else:
+                result = game_enhancer.enhance_game(
+                    job["source_game_id"], job["prompt"], job["requested_by"], config,
+                    db_conn=conn, games_dir=games_dir, job_id=job_id,
+                    new_title=job.get("new_title"), creator_uid=job.get("creator_uid"),
+                )
         else:
             raise ValueError(f"unknown job kind: {job['kind']!r}")
     except Exception as exc:  # noqa: BLE001 - a job must never take the worker thread down

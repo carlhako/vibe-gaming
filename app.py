@@ -976,6 +976,38 @@ def create_app(games_dir=None) -> Flask:
             "source_game_id": job["source_game_id"],
         })
 
+    @app.get("/api/jobs/<job_id>/events")
+    def api_job_events(job_id):
+        """Incremental agent-event feed for a multi-file enhance job
+        (Sprint 3 of docs/multifile-agent/) — the backend the live chat UI
+        polls. Single-file jobs have no agent_events rows, so `events` is
+        simply empty and this generalizes today's /api/status/<job_id>
+        rather than replacing it."""
+        if not _GAME_ID_RE.match(job_id):
+            abort(404)
+        conn = get_db()
+        job = db.get_generation_request(job_id, conn=conn)
+        if job is None:
+            abort(404)
+        since = request.args.get("since", default=0, type=int) or 0
+        events = db.get_agent_events(job_id, since=since, conn=conn)
+
+        result = None
+        if job["result_game_id"]:
+            game = db.get_web_game(job["result_game_id"], conn=conn)
+            if game:
+                result = {
+                    "slug": game["slug"], "title": game["title"],
+                    "url": url_for("play", slug=game["slug"]),
+                }
+
+        return jsonify({
+            "status": job["status"],
+            "kind": job["kind"],
+            "events": events,
+            "result": result,
+        })
+
     @app.before_request
     def _start_timer():
         g._t0 = time.monotonic()

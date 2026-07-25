@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Click Counter</title>
+<style>body {
+  background: #111;
+  color: #eee;
+  font-family: sans-serif;
+  text-align: center;
+  padding-top: 3rem;
+}
+
+#count {
+  font-size: 4rem;
+  margin: 0 0 1rem;
+}
+
+button {
+  font-size: 1.5rem;
+  padding: 0.5rem 1.5rem;
+  cursor: pointer;
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <h1 id="count">0</h1>
+  <button id="btn" type="button">Click me</button>
+</div>
+<script>(function () {
+  var count = 0;
+  var countEl = document.getElementById("count");
+  var btn = document.getElementById("btn");
+
+  btn.addEventListener("click", function () {
+    count += 1;
+    countEl.textContent = String(count);
+  });
+})();
+</script>
+</body>
+</html>

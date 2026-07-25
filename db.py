@@ -181,6 +181,18 @@ CREATE TABLE IF NOT EXISTS settings (
     value      TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS agent_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id     TEXT NOT NULL REFERENCES generation_requests(job_id),
+    seq        INTEGER NOT NULL,
+    role       TEXT NOT NULL,
+    content    TEXT,
+    data       TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(job_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_events_job ON agent_events(job_id, seq);
 """
 
 
@@ -935,6 +947,52 @@ def get_generation_attempts(job_id, conn=None):
         (job_id,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# agent_events (Sprint 3 of docs/multifile-agent/: durable, ordered record of
+# the ReAct agent's think->act->observe->verify->finish arc, polled
+# incrementally by the browser via since=<seq>)
+# ---------------------------------------------------------------------------
+
+def add_agent_event(job_id, role, content=None, data=None, conn=None) -> int:
+    """Append one ordered event to job_id's agent transcript. seq is
+    assigned as max(seq)+1 within this job_id so callers never track it
+    themselves. `data`, when given, is a plain dict and is JSON-serialized
+    here — callers keep full file contents out of both `content` and
+    `data` (read_file/write_file events carry only path/size), same
+    redaction discipline as generation_attempts.raw_response. Returns the
+    assigned seq."""
+    c = _c(conn)
+    row = c.execute(
+        "SELECT COALESCE(MAX(seq), 0) AS m FROM agent_events WHERE job_id=?", (job_id,)
+    ).fetchone()
+    seq = row["m"] + 1
+    c.execute(
+        "INSERT INTO agent_events (job_id, seq, role, content, data, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (job_id, seq, role, content, json.dumps(data) if data is not None else None, _now()),
+    )
+    c.commit()
+    return seq
+
+
+def get_agent_events(job_id, since=0, conn=None):
+    """Every event for job_id with seq > since, oldest first — the
+    incremental slice GET /api/jobs/<job_id>/events polls for. `data` is
+    parsed back into a dict (or None)."""
+    c = _c(conn)
+    rows = c.execute(
+        "SELECT seq, role, content, data, created_at FROM agent_events "
+        "WHERE job_id=? AND seq > ? ORDER BY seq ASC",
+        (job_id, since),
+    ).fetchall()
+    events = []
+    for r in rows:
+        d = dict(r)
+        d["data"] = json.loads(d["data"]) if d["data"] is not None else None
+        events.append(d)
+    return events
 
 
 # ---------------------------------------------------------------------------

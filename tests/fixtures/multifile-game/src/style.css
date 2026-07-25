@@ -1,0 +1,18 @@
+body {
+  background: #111;
+  color: #eee;
+  font-family: sans-serif;
+  text-align: center;
+  padding-top: 3rem;
+}
+
+#count {
+  font-size: 4rem;
+  margin: 0 0 1rem;
+}
+
+button {
+  font-size: 1.5rem;
+  padding: 0.5rem 1.5rem;
+  cursor: pointer;
+}
