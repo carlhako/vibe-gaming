@@ -2,6 +2,7 @@
   const panel = document.getElementById("status-panel");
   const jobId = panel.dataset.jobId;
   const heading = document.getElementById("status-heading");
+  const promptEl = document.getElementById("status-prompt");
   const detail = document.getElementById("status-detail");
   const eta = document.getElementById("status-eta");
   const timerEl = document.getElementById("status-timer");
@@ -63,6 +64,12 @@
 
   function render(job) {
     heading.textContent = LABELS[job.status] || job.status;
+
+    if (promptEl.hidden && job.prompt) {
+      const verb = job.kind === "enhance" ? "Enhancing" : "Request";
+      promptEl.textContent = `${verb}: "${job.prompt}"`;
+      promptEl.hidden = false;
+    }
 
     if (job.status === "queued" || job.status === "generating") {
       if (job.status === "queued") {

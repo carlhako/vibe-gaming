@@ -13,6 +13,7 @@
   --hue-2: #ff6b6b;
   --hue-3: #6ba3ff;
   --hue-4: #d38bff;
+  --chat-max-width: 1100px;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -929,6 +930,170 @@ body {
 
 .status-actions {
   margin-top: 6px;
+}
+
+/* ---- Live agent chat (Sprint 4 of docs/multifile-agent/) ---- */
+
+/* Widens the create/enhance status screen specifically (the arcade menu
+   keeps its own width) into a two-pane grid: request summary on the left,
+   the live agent transcript on the right. Collapses to stacked panes below
+   900px. */
+.job-shell {
+  width: 100%;
+  max-width: var(--chat-max-width);
+  margin: 32px auto 0;
+  display: grid;
+  grid-template-columns: minmax(0, 420px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .job-shell {
+    grid-template-columns: 1fr;
+  }
+}
+
+.job-input-pane .form-panel {
+  margin: 0;
+  max-width: none;
+  width: 100%;
+}
+
+.job-chat-pane {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  min-height: 200px;
+}
+
+.chat-pane-head {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  max-height: 65vh;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) var(--panel);
+}
+
+.chat-log::-webkit-scrollbar {
+  width: 9px;
+}
+
+.chat-log::-webkit-scrollbar-track {
+  background: var(--panel);
+}
+
+.chat-log::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 5px;
+  border: 2px solid var(--panel);
+}
+
+.chat-empty {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-style: italic;
+}
+
+.chat-msg {
+  font-size: 12.5px;
+  line-height: 1.55;
+  border-radius: 6px;
+  padding: 8px 10px;
+  word-break: break-word;
+}
+
+.chat-msg-thought {
+  background: var(--panel-raised);
+  color: var(--muted);
+  font-style: italic;
+  padding: 6px 10px;
+}
+
+.chat-msg-thought summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.chat-msg-thought summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-msg-thought pre {
+  white-space: pre-wrap;
+  font-family: inherit;
+  margin-top: 6px;
+}
+
+.chat-msg-assistant {
+  background: var(--panel-raised);
+  color: var(--ink);
+}
+
+.chat-msg-tool_call {
+  color: var(--accent2);
+  padding-bottom: 0;
+}
+
+.chat-msg-tool_result {
+  color: var(--muted);
+  padding-top: 0;
+  padding-left: 20px;
+  margin-top: -8px;
+  font-size: 11.5px;
+}
+
+.chat-msg-tool_result.is-error,
+.chat-msg-tool_result.is-rejected {
+  color: var(--hue-2);
+}
+
+.chat-msg-build {
+  border: 1px solid var(--line);
+  background: var(--panel-raised);
+  font-weight: 600;
+}
+
+.chat-msg-build.is-success {
+  border-color: var(--accent-dim);
+  color: var(--accent2);
+}
+
+.chat-msg-build.is-fail {
+  border-color: var(--hue-2);
+  color: var(--hue-2);
+}
+
+.chat-msg-final {
+  background: rgba(87, 227, 137, 0.08);
+  border: 1px solid var(--accent2);
+  color: var(--ink);
+}
+
+.chat-final-play-link {
+  display: inline-block;
+  margin-top: 8px;
+}
+
+.chat-msg-error {
+  background: rgba(255, 107, 107, 0.08);
+  border: 1px solid var(--hue-2);
+  color: var(--ink);
 }
 
 .status-prompt-result {

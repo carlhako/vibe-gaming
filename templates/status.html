@@ -16,22 +16,32 @@
         <span class="power-light on" id="power-light"></span>
         <span class="now-playing">STATUS</span>
       </div>
-      <div class="form-panel status-panel" id="status-panel" data-job-id="{{ job_id }}">
-        <a class="back-link" href="{{ url_for('index') }}">&larr; back to the shelf</a>
-        <h1 id="status-heading">Queued&hellip;</h1>
-        <p class="form-hint">
-          This page's URL is unique to your request — bookmark it or just
-          leave the tab; it's safe to close and come back, generation
-          keeps running in the background.
-        </p>
-        <p class="form-hint" id="status-detail">Waiting for a worker to pick this up.</p>
-        <p class="form-hint" id="status-eta"></p>
-        <p class="status-timer" id="status-timer" hidden></p>
-        <p class="form-hint" id="status-stats"></p>
-        <div class="status-actions" id="status-actions" hidden></div>
+      <div class="job-shell">
+        <div class="job-input-pane">
+          <div class="form-panel status-panel" id="status-panel" data-job-id="{{ job_id }}">
+            <a class="back-link" href="{{ url_for('index') }}">&larr; back to the shelf</a>
+            <h1 id="status-heading">Queued&hellip;</h1>
+            <p class="form-hint">
+              This page's URL is unique to your request — bookmark it or just
+              leave the tab; it's safe to close and come back, generation
+              keeps running in the background.
+            </p>
+            <p class="form-hint" id="status-prompt" hidden></p>
+            <p class="form-hint" id="status-detail">Waiting for a worker to pick this up.</p>
+            <p class="form-hint" id="status-eta"></p>
+            <p class="status-timer" id="status-timer" hidden></p>
+            <p class="form-hint" id="status-stats"></p>
+            <div class="status-actions" id="status-actions" hidden></div>
+          </div>
+        </div>
+        <div class="job-chat-pane" id="chat-pane" data-job-id="{{ job_id }}">
+          <div class="chat-pane-head">Agent transcript</div>
+          <div class="chat-log" id="chat-log"></div>
+        </div>
       </div>
     </main>
   </div>
   <script src="{{ url_for('static', filename='status.js') }}"></script>
+  <script src="{{ url_for('static', filename='agent_chat.js') }}"></script>
 </body>
 </html>
