@@ -47,6 +47,8 @@ from dotenv import load_dotenv
 from langsmith.wrappers import wrap_openai
 from openai import APIError, APITimeoutError, OpenAI
 
+import db
+
 load_dotenv()
 
 BASE_URL = "https://api.deepseek.com"
@@ -92,6 +94,8 @@ class ToolAskResult:
 
 
 def _client() -> OpenAI:
+    if not db.is_ai_generation_enabled():
+        raise AIError("Error: AI generation is currently disabled by an admin")
     api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
         raise AIError("Error: DEEPSEEK_API_KEY is not set (see .env.example)")

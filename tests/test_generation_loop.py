@@ -264,3 +264,15 @@ def test_moderation_unparseable_reply_defaults_to_unflagged(isolated_db, games_d
     game = db.get_web_game(result["game_id"])
     assert game["hidden"] == 0
     assert db.get_open_reports() == []
+
+
+def test_generate_game_fails_cleanly_when_ai_disabled(isolated_db, games_dir):
+    """Exercises the real ai_client._client() chokepoint (not mocked) so a
+    kill-switch flip is honored even without any route-level gate."""
+    db.set_ai_generation_enabled(False)
+    result = gg.generate_game("desc", "web:t", CONFIG, games_dir=games_dir)
+
+    assert result["success"] is False
+    assert "disabled" in result["error"]
+    assert "Game generation failed:" in result["message"]
+    assert not any(games_dir.iterdir()), "no half-written directory may survive"

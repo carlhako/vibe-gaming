@@ -28,6 +28,20 @@ import game_generator
 def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
     job_id = job["job_id"]
     t0 = time.monotonic()
+    if not db.is_ai_generation_enabled(conn=conn):
+        # Job was queued before an admin flipped the kill switch off — fail
+        # it immediately rather than burning a full retry loop against a
+        # chokepoint (ai_client._client()) that's guaranteed to reject it.
+        db.update_generation_request(
+            job_id, status="failed", attempts=job.get("attempts", 0) + 1,
+            duration_seconds=time.monotonic() - t0,
+            error="AI generation is currently disabled by an admin", conn=conn,
+        )
+        db.add_generation_attempt(
+            job_id, job.get("attempts", 0) + 1, "ai_error",
+            detail="AI generation is currently disabled by an admin", conn=conn,
+        )
+        return
     try:
         if job["kind"] == "create":
             result = game_generator.generate_game(

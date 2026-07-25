@@ -963,6 +963,23 @@ body {
   max-width: 780px;
 }
 
+.stats-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.stats-header h1 {
+  margin: 0;
+}
+
+.ai-toggle-form {
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 .stats-panel h2 {
   font-size: 14px;
   margin: 22px 0 10px;

@@ -175,6 +175,12 @@ CREATE TABLE IF NOT EXISTS moderation_calls (
 );
 CREATE INDEX IF NOT EXISTS idx_moderation_calls_game ON moderation_calls(game_id);
 CREATE INDEX IF NOT EXISTS idx_moderation_calls_created ON moderation_calls(created_at);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -197,6 +203,43 @@ def seconds_ago_iso(seconds: float) -> str:
 
 def _c(conn):
     return conn if conn is not None else get_connection()
+
+
+# Generic key-value settings store — a single, general-purpose flag table
+# rather than one-off boolean columns, since more admin-toggleable AI
+# features are expected to reuse this same mechanism.
+def get_setting(key: str, default: str | None = None, conn=None) -> str | None:
+    conn = _c(conn)
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row is not None else default
+
+
+def set_setting(key: str, value: str, conn=None) -> None:
+    conn = _c(conn)
+    conn.execute(
+        """
+        INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+        """,
+        (key, value, _now()),
+    )
+    conn.commit()
+
+
+AI_GENERATION_ENABLED_KEY = "ai_generation_enabled"
+
+
+def is_ai_generation_enabled(conn=None) -> bool:
+    """True unless an admin has explicitly turned generation off (missing
+    key = enabled, so a fresh/existing DB doesn't silently break on
+    deploy). The one flag every LLM-backed feature should check —
+    /api/ai-status, the new_game/enhance routes, job_runner, and
+    ai_client._client() all read this."""
+    return get_setting(AI_GENERATION_ENABLED_KEY, conn=conn) != "0"
+
+
+def set_ai_generation_enabled(enabled: bool, conn=None) -> None:
+    set_setting(AI_GENERATION_ENABLED_KEY, "1" if enabled else "0", conn=conn)
 
 
 # Columns added after a table's initial CREATE TABLE IF NOT EXISTS shipped —

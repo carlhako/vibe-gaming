@@ -15,7 +15,22 @@
       </div>
       <div class="form-panel stats-panel">
         <a class="back-link" href="{{ url_for('index') }}">&larr; back to the shelf</a>
-        <h1>Access stats</h1>
+        <div class="stats-header">
+          <h1>Access stats</h1>
+          <form class="visibility-form ai-toggle-form" method="post"
+                action="{{ url_for('admin_set_ai_generation_enabled', token=admin_token) }}">
+            <label>
+              <input type="radio" name="enabled" value="1" {{ 'checked' if ai_generation_enabled }}
+                     onchange="this.form.submit()">
+              AI generation ON
+            </label>
+            <label>
+              <input type="radio" name="enabled" value="0" {{ 'checked' if not ai_generation_enabled }}
+                     onchange="this.form.submit()">
+              OFF
+            </label>
+          </form>
+        </div>
 
         <p>
           <a class="game-row-play-link" href="{{ url_for('admin_reports', token=admin_token) }}">

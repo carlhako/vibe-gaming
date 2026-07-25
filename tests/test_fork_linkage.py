@@ -110,3 +110,19 @@ def test_failed_enhance_leaves_no_partial_directory(isolated_db, games_dir):
     assert not result["success"]
     after = {p.name for p in games_dir.iterdir()}
     assert before == after, "a failed enhance must not leave any new directory behind"
+
+
+def test_enhance_game_fails_cleanly_when_ai_disabled(isolated_db, games_dir):
+    with mock.patch.object(ai, "ask_with_tools", return_value=_submission("Original")), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        original = gg.generate_game("desc", "web:a", CONFIG, games_dir=games_dir)
+
+    before = {p.name for p in games_dir.iterdir()}
+
+    db.set_ai_generation_enabled(False)
+    result = ge.enhance_game(original["game_id"], "improve it", "web:b", CONFIG, games_dir=games_dir)
+
+    assert not result["success"]
+    assert "disabled" in result["error"]
+    after = {p.name for p in games_dir.iterdir()}
+    assert before == after, "a disabled-generation enhance must not leave any new directory behind"

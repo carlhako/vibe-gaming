@@ -528,6 +528,14 @@ def create_app(games_dir=None) -> Flask:
             )
         return resp
 
+    @app.get("/api/ai-status")
+    def api_ai_status():
+        """General-purpose "is AI generation enabled" flag — checked by
+        any page/feature gating an LLM-backed action (new_game, enhance,
+        and future AI features), not narrowly scoped to just these two
+        forms."""
+        return jsonify(ai_generation_enabled=db.is_ai_generation_enabled(conn=get_db()))
+
     @app.get("/play/<slug>")
     def play(slug):
         if not _SLUG_RE.match(slug):
@@ -582,7 +590,15 @@ def create_app(games_dir=None) -> Flask:
     def new_game_form():
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
         user = db.get_user(vg_uid, conn=get_db()) if vg_uid else None
-        return render_template("new_game.html", user=user)
+        ai_enabled = db.is_ai_generation_enabled(conn=get_db())
+        return render_template("new_game.html", user=user, ai_enabled=ai_enabled)
+
+    def _ai_disabled() -> bool:
+        """True if an admin has flipped the global AI-generation kill
+        switch off (see /admin/stats) — checked ahead of queue/rate
+        limiting since a flat "feature disabled" message takes priority
+        over those."""
+        return not db.is_ai_generation_enabled(conn=get_db())
 
     def _rate_limited(vg_uid: str) -> bool:
         """True if vg_uid-or-this-IP has hit the generation rate limit —
@@ -606,10 +622,16 @@ def create_app(games_dir=None) -> Flask:
 
     @app.post("/games/new")
     def new_game_submit():
+        if _ai_disabled():
+            return render_template(
+                "new_game.html",
+                error="This feature is currently disabled, try again later.",
+            ), 503
+
         prompt = (request.form.get("prompt") or "").strip()
         if not prompt:
             return render_template(
-                "new_game.html", error="Please describe the game you want."
+                "new_game.html", error="Please describe the game you want.", ai_enabled=True,
             ), 400
 
         vg_uid = request.cookies.get(_VG_UID_COOKIE)
@@ -621,11 +643,13 @@ def create_app(games_dir=None) -> Flask:
             return render_template(
                 "new_game.html",
                 error="The generation queue is full right now — try again in a few minutes.",
+                ai_enabled=True,
             ), 503
         if _rate_limited(vg_uid):
             return render_template(
                 "new_game.html",
                 error="You're generating games too quickly — try again in a few minutes.",
+                ai_enabled=True,
             ), 429
 
         requested_by = "web:" + vg_uid[:12]
@@ -691,7 +715,10 @@ def create_app(games_dir=None) -> Flask:
         user = db.get_user(vg_uid, conn=get_db())
 
         lock_ctx = _enhance_lock_context(game_id, vg_uid)
-        resp = make_response(render_template("enhance.html", game=game, user=user, **lock_ctx))
+        ai_enabled = db.is_ai_generation_enabled(conn=get_db())
+        resp = make_response(render_template(
+            "enhance.html", game=game, user=user, ai_enabled=ai_enabled, **lock_ctx
+        ))
         if set_cookie:
             resp.set_cookie(
                 _VG_UID_COOKIE, vg_uid, max_age=_VG_UID_MAX_AGE,
@@ -727,6 +754,9 @@ def create_app(games_dir=None) -> Flask:
         elif not db.heartbeat_enhance_lock(game_id, lock_token, conn=get_db()):
             error = "Your lock on this game expired. Reopen this page to try again."
             status = 409
+        elif _ai_disabled():
+            error = "This feature is currently disabled, try again later."
+            status = 503
         elif _queue_full():
             error = "The generation queue is full right now — try again in a few minutes."
             status = 503
@@ -736,7 +766,11 @@ def create_app(games_dir=None) -> Flask:
 
         if error:
             lock_ctx = _enhance_lock_context(game_id, vg_uid)
-            return render_template("enhance.html", game=game, user=user, error=error, **lock_ctx), status
+            ai_enabled = db.is_ai_generation_enabled(conn=get_db())
+            return render_template(
+                "enhance.html", game=game, user=user, error=error,
+                ai_enabled=ai_enabled, **lock_ctx
+            ), status
 
         requested_by = "web:" + vg_uid[:12]
         job_id = uuid.uuid4().hex
@@ -1013,6 +1047,7 @@ def create_app(games_dir=None) -> Flask:
         all_games = get_games(include_hidden=True)
         all_users = db.get_all_users(conn=conn)
         open_report_count = len(db.get_open_reports(conn=conn))
+        ai_generation_enabled = db.is_ai_generation_enabled(conn=conn)
 
         admin_token = request.args.get("token")
         history_page, history_per = _page_params("history")
@@ -1081,7 +1116,15 @@ def create_app(games_dir=None) -> Flask:
             plays_rows=plays_rows, plays_pager=plays_pager,
             page_sizes=_ADMIN_PAGE_SIZES,
             open_report_count=open_report_count,
+            ai_generation_enabled=ai_generation_enabled,
         )
+
+    @app.post("/admin/ai-generation-enabled")
+    @require_admin_token
+    def admin_set_ai_generation_enabled():
+        enabled = request.form.get("enabled") == "1"
+        db.set_ai_generation_enabled(enabled, conn=get_db())
+        return redirect(url_for("admin_stats", token=request.args.get("token")))
 
     @app.get("/admin/games/download")
     @require_admin_token
