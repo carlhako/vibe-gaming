@@ -44,7 +44,6 @@ import os
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
-from langsmith.wrappers import wrap_openai
 from openai import APIError, APITimeoutError, OpenAI
 
 import db
@@ -112,10 +111,7 @@ def _client() -> OpenAI:
     api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
         raise AIError("Error: DEEPSEEK_API_KEY is not set (see .env.example)")
-    # wrap_openai adds LangSmith tracing per chat.completions.create call
-    # (prompts, response, tokens, latency). No-op unless LANGSMITH_TRACING
-    # is truthy in the environment; upload failures never raise into us.
-    return wrap_openai(OpenAI(api_key=api_key, base_url=BASE_URL))
+    return OpenAI(api_key=api_key, base_url=BASE_URL)
 
 
 def _resolve_model(model: str | None) -> str:

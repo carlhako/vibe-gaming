@@ -50,8 +50,6 @@ import shutil
 import time
 from pathlib import Path
 
-from langsmith import traceable
-
 import ai_client as ai
 import content_moderation
 import db
@@ -353,11 +351,6 @@ def _redact_raw_response(raw_response: dict, *, keep_arguments: bool = False) ->
     return json.dumps(ai.redact_tool_call_arguments(raw_response), default=str)
 
 
-# @traceable makes each job one LangSmith parent trace, so every retry's
-# DeepSeek call (traced inside ai_client via wrap_openai) nests under it
-# instead of appearing as disconnected calls. Pass-through no-op unless
-# LANGSMITH_TRACING is enabled in the environment.
-@traceable(name="run_generation_attempts")
 def run_generation_attempts(*, description: str, requested_by: str, system_prompt: str,
                              initial_user_prompt: str, cfg: dict, games_dir: Path,
                              job_id: str | None = None, db_conn=None,
