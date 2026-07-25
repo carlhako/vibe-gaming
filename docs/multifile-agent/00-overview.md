@@ -2,8 +2,8 @@
 
 ## Why
 
-One game (Tower Maze Defense, the Sorcerer/minigun fork chain) is already
-~230 KB of inlined HTML — right at DeepSeek's hard **output-token ceiling**
+One game (Sorcerer With A Minigun, the minigun/skeletons fork chain) is
+already ~230 KB of inlined HTML — right at DeepSeek's hard **output-token ceiling**
 of 65,536 (`ai_client.MAX_OUTPUT_TOKENS` ≈ ~260 KB of HTML at ~4 chars/
 token). The current pipeline requires the model to re-emit the *complete*
 `index.html` on every generation and every enhancement. We shipped
@@ -54,7 +54,7 @@ be forced to read all of it either.** Two mechanisms enforce this:
 - **Dual-format, no forced global migration.** Legacy games stay
   `format: "single-file"` and keep using the existing
   `run_generation_attempts()` loop. Multi-file is opt-in per game; we pilot
-  it on the Tower Maze chain only (Sprint 5).
+  it on the Sorcerer With A Minigun chain only (Sprint 5).
 - **Live updates via incremental polling for v1**, not SSE. It matches the
   project's existing DB-polling philosophy (`static/status.js` already polls
   `/api/status/<job_id>`), stays correct under multiple gunicorn workers, and
@@ -97,7 +97,7 @@ be forced to read all of it either.** Two mechanisms enforce this:
    Claude-chat-style transcript on Create/Enhance: widened two-pane layout,
    polling the events endpoint, rendering think/act/observe/build/smoke as
    chat messages. The headline user-facing feature.
-5. **[Sprint 5](05-migration-and-pilot.md) — Explode + pilot on Tower Maze.**
+5. **[Sprint 5](05-migration-and-pilot.md) — Explode + pilot on Sorcerer With A Minigun.**
    The AI-assisted single-file → multi-file split, dual-format enhance, and a
    measured token-delta comparison on the real problem game.
 6. **[Sprint 6](06-streaming-and-polish.md) — Streaming polish + stretch
