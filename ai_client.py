@@ -55,6 +55,17 @@ BASE_URL = "https://api.deepseek.com"
 MODEL_DEFAULT = "deepseek-v4-flash"  # 284B total / 13B active MoE, 1M ctx — fast + cheap
 MODEL_PRO = "deepseek-v4-pro"        # 1.6T total / 49B active MoE, 1M ctx — best quality
 
+# DeepSeek V4's hard per-response completion ceiling (verified live 2026-07-25:
+# a big single-file game truncated at exactly completion_tokens == 65536 with
+# finish_reason == "length"). We pin max_tokens to it so the ceiling is
+# explicit and can't silently regress if the API default drops — and so the
+# generation loop's finish_reason == "length" truncation handling has a stable
+# number to reason about. In thinking mode this budget is SHARED with
+# reasoning_content tokens, so chain-of-thought eats into what's left for the
+# actual answer (the reason large enhancements truncate — see game_generator's
+# run_generation_attempts, which drops thinking mode on a truncation retry).
+MAX_OUTPUT_TOKENS = 65536
+
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 
 _logger = logging.getLogger(__name__)
@@ -72,6 +83,7 @@ class AskResult:
     model: str
     effort: str
     raw_response: dict
+    finish_reason: str = "stop"  # "length" means the output hit MAX_OUTPUT_TOKENS and was truncated
 
 
 @dataclass
@@ -91,6 +103,7 @@ class ToolAskResult:
     model: str
     effort: str
     raw_response: dict
+    finish_reason: str = "stop"  # "length" means the output hit MAX_OUTPUT_TOKENS and was truncated
 
 
 def _client() -> OpenAI:
@@ -177,6 +190,7 @@ def ask(
     effort: str | None = None,
     temperature: float | None = None,
     timeout: int | None = 120,
+    max_tokens: int | None = MAX_OUTPUT_TOKENS,
     response_format: dict | None = None,
     **_ignored,
 ) -> AskResult:
@@ -209,6 +223,8 @@ def ask(
         timeout=timeout,
         extra_body=extra_body,
     )
+    if max_tokens is not None:
+        create_kwargs["max_tokens"] = max_tokens
     if reasoning_effort is not None:
         create_kwargs["reasoning_effort"] = reasoning_effort
     if resolved_temperature is not None:
@@ -241,6 +257,7 @@ def ask(
         model=resolved_model,
         effort=resolved_effort,
         raw_response=response_dict,
+        finish_reason=(choice.finish_reason or "stop") if choice else "stop",
     )
 
 
@@ -266,6 +283,7 @@ def ask_with_tools(
     effort: str | None = None,
     temperature: float | None = None,
     timeout: int | None = 120,
+    max_tokens: int | None = MAX_OUTPUT_TOKENS,
 ) -> ToolAskResult:
     """One turn of a multi-turn, function-calling conversation. The caller
     owns the message list: append the returned `.message`, then one
@@ -291,6 +309,8 @@ def ask_with_tools(
         timeout=timeout,
         extra_body=extra_body,
     )
+    if max_tokens is not None:
+        create_kwargs["max_tokens"] = max_tokens
     if tool_choice is not None:
         create_kwargs["tool_choice"] = tool_choice
     if reasoning_effort is not None:
@@ -335,4 +355,5 @@ def ask_with_tools(
         model=resolved_model,
         effort=resolved_effort,
         raw_response=response_dict,
+        finish_reason=choice.finish_reason or "stop",
     )

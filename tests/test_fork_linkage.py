@@ -126,3 +126,26 @@ def test_enhance_game_fails_cleanly_when_ai_disabled(isolated_db, games_dir):
     assert "disabled" in result["error"]
     after = {p.name for p in games_dir.iterdir()}
     assert before == after, "a disabled-generation enhance must not leave any new directory behind"
+
+
+# ---------------------------------------------------------------------------
+# Size-conditional compactness nudge (only injected for already-large games)
+# ---------------------------------------------------------------------------
+
+def test_compactness_note_omitted_for_normal_games():
+    small = "<!doctype html><html><body>ok</body></html>"
+    assert ge._compactness_note(small) == ""
+    prompt = ge._build_system_prompt("Small Game", small)
+    assert "## Size" not in prompt
+
+
+def test_compactness_note_injected_for_large_games():
+    large = "<!doctype html><html><body>" + ("x" * ge.LARGE_SOURCE_BYTES) + "</body></html>"
+    note = ge._compactness_note(large)
+    assert "## Size" in note
+    # Must not encourage minifying — that would sabotage future enhancements.
+    assert "not minify" in note.lower() or "do not minify" in note.lower()
+    prompt = ge._build_system_prompt("Big Game", large)
+    assert "## Size" in prompt
+    # Still sits before the embedded source, like the other prompt sections.
+    assert prompt.index("## Size") < prompt.index("## Current game")

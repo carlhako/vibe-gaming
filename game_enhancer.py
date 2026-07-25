@@ -51,6 +51,36 @@ class GameEnhancementError(Exception):
     into the next retry's prompt as the concrete failure reason."""
 
 
+# When the source game is already this large, a full resubmission (the enhance
+# contract always resends the COMPLETE file) plus any thinking-mode reasoning
+# tokens risks overrunning the model's output ceiling (ai.MAX_OUTPUT_TOKENS,
+# ~262 KB of HTML at ~4 chars/token). ~150 KB source is roughly the point where
+# that headroom gets tight, so we proactively ask the model to keep the
+# revision compact only for these games — normal-sized games get no such
+# instruction, since blanket compactness fights the quality bar and produces
+# denser code that's harder to patch on the NEXT enhancement.
+LARGE_SOURCE_BYTES = 150_000
+
+
+def _compactness_note(existing_game_html: str) -> str:
+    """A size section for the enhance system prompt, injected ONLY when the
+    source is already large enough to risk output-length truncation. Empty
+    string otherwise. Explicitly forbids minifying/readability loss so it
+    can't sabotage future enhancements of the same fork chain."""
+    if len(existing_game_html.encode("utf-8")) < LARGE_SOURCE_BYTES:
+        return ""
+    return (
+        "## Size\n"
+        "This game's source is already large and close to the model's maximum "
+        "output length, so resending the whole file can get truncated. Keep "
+        "your revision tight: reuse existing helpers instead of duplicating "
+        "code, remove obvious dead code you come across, and don't add bulk "
+        "the request doesn't call for. Do NOT minify, obfuscate, or sacrifice "
+        "readability or existing features — the file must stay easy to edit "
+        "for future enhancements.\n\n"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Target resolution
 # ---------------------------------------------------------------------------
@@ -106,7 +136,8 @@ def _build_system_prompt(source_title: str, existing_game_html: str) -> str:
         "unrelated edits. Don't let the change regress the game to a "
         "half-finished state: it should still be complete and satisfying to "
         "play afterward, with clear feedback and an obvious way to restart.\n\n"
-        "## Current game\n"
+        + _compactness_note(existing_game_html)
+        + "## Current game\n"
         f"```html\n{existing_game_html}\n```\n\n"
         + gg.SUBMIT_TOOL_INSTRUCTIONS
         + "\nUse `notes` for one or two sentences summarizing what changed."

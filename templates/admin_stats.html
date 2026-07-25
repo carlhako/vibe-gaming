@@ -438,9 +438,16 @@
       payloadPosition.textContent = `Attempt ${a.attempt_number} of ${n}`;
       payloadPrev.disabled = index <= 0;
       payloadNext.disabled = index >= n - 1;
+      let finishReason = null;
+      if (a.raw_response) {
+        try {
+          finishReason = JSON.parse(a.raw_response)?.choices?.[0]?.finish_reason ?? null;
+        } catch (e) { /* leave null */ }
+      }
       payloadMeta.textContent = `Outcome: ${a.outcome}` +
         (a.duration_seconds != null ? ` · ${a.duration_seconds.toFixed(1)}s` : "") +
-        (a.tokens_used != null ? ` · ${a.tokens_used} tokens out` : "");
+        (a.tokens_used != null ? ` · ${a.tokens_used} tokens out` : "") +
+        (finishReason ? ` · finish: ${finishReason}` : "");
 
       if (mode === "json") {
         payloadHeading.textContent = "DeepSeek API response";

@@ -233,6 +233,24 @@ to `"auto"` when thinking is enabled — the generation loop always asks
 for the forced choice and tolerates the occasional no-tool-call reply
 with a nudge. Non-thinking mode honors the forced choice.
 
+Both `ask()` and `ask_with_tools()` pin `max_tokens` to
+`ai_client.MAX_OUTPUT_TOKENS` (65536 — DeepSeek V4's hard completion
+ceiling) and surface the response's `finish_reason`. In thinking mode this
+budget is *shared* with `reasoning_content` tokens, so a large
+enhancement's chain-of-thought can push the actual game source past the
+cap: the reply is cut off mid-stream (`finish_reason == "length"`),
+leaving the `submit_game` arguments an incomplete JSON fragment — the
+"Unterminated string ... (char N)" failure. `run_generation_attempts()`
+detects that case explicitly (rather than misreporting it as generic
+malformed JSON, which the model misreads as an escaping bug), records the
+attempt with outcome `truncated`, feeds back a size-specific notice, and
+**drops thinking mode for the retry** to hand the reasoning budget back to
+the game source. Truncated and parse-failure attempts keep their raw
+tool-call arguments *unredacted* in `generation_attempts.raw_response`
+(the game never reached disk, so that row is the only place the actual
+bytes are inspectable) — successful attempts still strip them, since the
+source is on disk.
+
 Observability: the OpenAI client is wrapped with LangSmith's
 `wrap_openai`, and `run_generation_attempts()` is `@traceable`, so with
 `LANGSMITH_TRACING=true` (+ `LANGSMITH_API_KEY`) each job becomes one

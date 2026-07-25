@@ -335,14 +335,21 @@ def format_report(result: dict) -> str:
 # Shared retry loop (used by generate_game() and game_enhancer.enhance_game())
 # ---------------------------------------------------------------------------
 
-def _redact_raw_response(raw_response: dict) -> str:
+def _redact_raw_response(raw_response: dict, *, keep_arguments: bool = False) -> str:
     """JSON-serialize ai_client's raw API response for the generation_attempts
-    audit trail, with each submit_game call's arguments blanked out (via
-    ai_client.redact_tool_call_arguments) — the game source in there is
-    already on disk (or, on a failed attempt, already discarded), so
-    keeping a second copy in every attempt row would make the table
-    balloon for no benefit. Everything else (ids, timestamps, finish_reason,
-    usage, reasoning_content if thinking mode was on) is kept as-is."""
+    audit trail. By default each submit_game call's arguments are blanked out
+    (via ai_client.redact_tool_call_arguments) — a successful game's source is
+    already on disk, so a second copy in every attempt row would just make the
+    table balloon. Everything else (ids, timestamps, finish_reason, usage,
+    reasoning_content if thinking mode was on) is kept as-is.
+
+    `keep_arguments=True` preserves the raw tool-call arguments verbatim — used
+    on attempts that FAILED to parse or were TRUNCATED (finish_reason=length),
+    where that raw (malformed/cut-off) JSON is the whole point of the audit:
+    the game was never written to disk, so this row is the only place the
+    actual bytes the model produced can be inspected."""
+    if keep_arguments:
+        return json.dumps(raw_response, default=str)
     return json.dumps(ai.redact_tool_call_arguments(raw_response), default=str)
 
 
@@ -450,6 +457,48 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
         redacted = _redact_raw_response(ask_result.raw_response)
         messages.append(ask_result.message)
 
+        # finish_reason == "length": the reply hit the hard output-token
+        # ceiling (ai.MAX_OUTPUT_TOKENS) and was cut off mid-stream, so the
+        # submit_game arguments are an incomplete, unparseable JSON fragment
+        # (this is the "Unterminated string ... (char N)" failure). Retrying
+        # identically just truncates again — and in thinking mode the reasoning
+        # tokens share this same budget, so they're usually what tips a large
+        # game over the edge. Feed back an explicit truncation notice (NOT the
+        # generic "malformed JSON", which the model misreads as an escaping
+        # bug) and drop thinking mode for the retry to hand the reasoning
+        # budget back to the game source.
+        if ask_result.finish_reason == "length":
+            previous_failure = (
+                "submission truncated: your previous reply hit the model's "
+                "maximum output length and was cut off mid-file "
+                "(finish_reason=length), so the submit_game arguments are an "
+                "incomplete JSON fragment. This is a SIZE limit, not a JSON "
+                "escaping problem — do not change your escaping. Resend the "
+                "COMPLETE index.html via submit_game, and make it as compact "
+                "as you can: remove dead code, collapse duplication, and drop "
+                "needless comments/whitespace so the whole file fits in one "
+                "response."
+            )
+            if ask_result.tool_calls:
+                submission, extras = ask_result.tool_calls[0], ask_result.tool_calls[1:]
+                for extra in extras:
+                    messages.append({
+                        "role": "tool", "tool_call_id": extra.id,
+                        "content": "Ignored: submit one game per turn.",
+                    })
+                reject(submission.id, previous_failure)
+            else:
+                messages.append({"role": "user", "content": previous_failure})
+            record_attempt(attempt, "truncated", detail=previous_failure,
+                           input_tokens=ask_result.input_tokens,
+                           tokens_used=ask_result.output_tokens,
+                           duration_seconds=time.monotonic() - attempt_t0,
+                           raw_response=_redact_raw_response(
+                               ask_result.raw_response, keep_arguments=True))
+            if effort in ("high", "max"):
+                effort = "low"  # reclaim the shared reasoning budget for the retry
+            continue
+
         if not ask_result.tool_calls:
             previous_failure = "malformed submission: no submit_game tool call in reply"
             messages.append({
@@ -523,15 +572,23 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
             reject(submission.id, previous_failure)
             if previous_failure.startswith("safety violation"):
                 outcome = "safety_violation"
+                attempt_raw = redacted
             elif previous_failure.startswith("smoke test failed"):
                 outcome = "smoke_test_failed"
+                attempt_raw = redacted
             else:
+                # parse/validation failure (malformed JSON, missing field): the
+                # raw arguments ARE the evidence and the game was never written
+                # to disk, so keep them unredacted — this row is the only place
+                # the actual bytes the model produced can be inspected.
                 outcome = "ai_error"
+                attempt_raw = _redact_raw_response(
+                    ask_result.raw_response, keep_arguments=True)
             record_attempt(attempt, outcome, detail=previous_failure,
                            input_tokens=ask_result.input_tokens,
                            tokens_used=ask_result.output_tokens,
                            duration_seconds=time.monotonic() - attempt_t0,
-                           raw_response=redacted)
+                           raw_response=attempt_raw)
             continue
 
     return {

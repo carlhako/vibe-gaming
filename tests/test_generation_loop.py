@@ -148,6 +148,48 @@ def test_extra_tool_calls_are_answered_but_ignored(isolated_db, games_dir):
     assert "Ignored" in replies["call_2"]
 
 
+def _truncated_submission(tool_call_id="call_1"):
+    """A submit_game reply cut off mid-arguments — finish_reason == 'length',
+    the incomplete-JSON fragment DeepSeek returns when a big game overruns the
+    output-token ceiling."""
+    r = _submission('{"title": "Big", "description": "d", "html": "<!doctype html><div',
+                    tool_call_id=tool_call_id)
+    r.finish_reason = "length"
+    return r
+
+
+def test_truncated_submission_retries_with_size_notice_and_no_thinking(isolated_db, games_dir):
+    responses = [_truncated_submission(), _submission(_game_args(SAFE_HTML))]
+    seen_efforts = []
+
+    def scripted(messages, **kwargs):
+        seen_efforts.append(kwargs.get("effort"))
+        return responses[len(seen_efforts) - 1]
+
+    cfg = dict(CONFIG["newaiwebgame"], effort="high", max_attempts=3)
+    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        outcome = gg.run_generation_attempts(
+            description="desc", requested_by="web:t", system_prompt="system",
+            initial_user_prompt="make a game", cfg=cfg, games_dir=games_dir,
+            job_id="job1")
+
+    assert outcome["success"]
+    assert outcome["attempts"] == 2
+    # First attempt runs at the configured "high" (thinking) effort; the retry
+    # after a length-truncation drops thinking to reclaim the reasoning budget.
+    assert seen_efforts[0] == "high"
+    assert seen_efforts[1] not in ("high", "max")
+
+    # The model is told this is a size limit, not an escaping bug.
+    attempts = db.get_generation_attempts("job1")
+    assert attempts[0]["outcome"] == "truncated"
+    assert "truncated" in attempts[0]["detail"]
+    # The raw (cut-off) arguments are preserved unredacted for inspection.
+    assert "<!doctype html><div" in attempts[0]["raw_response"]
+    assert "stripped" not in attempts[0]["raw_response"]
+
+
 # ---------------------------------------------------------------------------
 # parse_submission
 # ---------------------------------------------------------------------------
