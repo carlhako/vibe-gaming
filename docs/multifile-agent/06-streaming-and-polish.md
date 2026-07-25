@@ -1,0 +1,60 @@
+# Sprint 6 — Streaming Polish + Stretch (optional)
+
+See [00-overview.md](00-overview.md). Everything here is **optional** and
+independently valuable — pull items forward or drop them based on how the
+pilot (Sprint 5) feels. Nothing below is required for the initiative to be
+"done"; Sprints 1–5 deliver the working system.
+
+## Candidate items
+
+### A. Token-level streaming (true live feel)
+
+- v1 shows steps as they *complete* (per-turn granularity via polling). To
+  get the token-by-token Claude-chat feel, switch the agent's model calls to
+  DeepSeek's streaming API (`stream=True`) and forward partial tokens.
+- Transport: this is where **SSE** (Server-Sent Events) earns its keep —
+  a `GET /api/jobs/<job_id>/stream` that pushes deltas. Weigh against
+  gunicorn worker occupancy (long-lived connections tie up a sync worker);
+  may want a dedicated async worker or a cap on concurrent streams. Keep the
+  polling endpoint as the durable fallback and for replay-on-reload.
+
+### B. Job controls
+
+- **Cancel:** a stop button that flips the job to a `cancelled` state the
+  agent loop checks between steps (cooperative cancellation), rolling back
+  the half-written fork directory.
+- **Per-job cost:** surface cumulative input/output tokens and a cost
+  estimate live in the conversation pane (reuse the admin history's
+  `_attach_token_costs` math).
+
+### C. Targeted diff edits (only once whole-module rewrites are proven)
+
+- Add a `replace_in_file(path, old, new)` tool for surgical edits, cutting
+  output further on tiny changes. Gate it behind exact-match validation
+  (reject ambiguous/zero/multi matches with a clear message) so it fails
+  loudly rather than corrupting a module. Whole-module `write_file` stays the
+  reliable default; diffs are an optimization for large modules where a
+  one-line change shouldn't rewrite the file.
+
+### D. Module-size hygiene
+
+- A soft lint in the agent/build step: warn (in the transcript) when a
+  module drifts past a target size, nudging the agent to split it — keeps
+  every module comfortably under the ceiling as the game keeps growing.
+
+### E. Probe the real output ceiling
+
+- Resolve the overview's open question: one API call requesting
+  `max_tokens=200000` to learn whether 65,536 is a hard max or a raisable
+  default. Tune `max_module_bytes` accordingly. Low effort, informs the
+  guard threshold; does not change the architecture either way.
+
+## Acceptance criteria (per item, if taken)
+
+- Streaming: tokens appear progressively in the conversation pane; polling
+  fallback and reload-replay still work; no worker-starvation regression
+  under `gunicorn --workers N`.
+- Cancel: an in-flight job stops within one step and leaves no partial game
+  directory.
+- Diffs: `replace_in_file` either applies exactly or is rejected with an
+  actionable message — never a silent wrong-match edit; covered by tests.
