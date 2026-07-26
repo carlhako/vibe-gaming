@@ -5,6 +5,17 @@ independently valuable — pull items forward or drop them based on how the
 pilot (Sprint 5) feels. Nothing below is required for the initiative to be
 "done"; Sprints 1–5 deliver the working system.
 
+**Status (2026-07-26):** step 1 (investigate the Sprint 5 pilot's high
+token usage, not itself a lettered item below but pulled forward first)
+found and fixed two real bugs plus a major unrelated ceiling
+miscalibration — see
+[05-migration-and-pilot.md's "Sprint 6 step 1" section](05-migration-and-pilot.md#sprint-6-step-1-token-pruning-fixes--a-new-open-reliability-bug-2026-07-26)
+for the full writeup. That same investigation also surfaced a **new,
+unfixed, and still-open reliability bug** (stub-content writes during
+`explode_game`, root cause unconfirmed) — read that section before picking
+this sprint back up, since it may be worth resolving before continuing
+into items A-D below.
+
 ## Candidate items
 
 ### A. Token-level streaming (true live feel)
@@ -42,12 +53,20 @@ pilot (Sprint 5) feels. Nothing below is required for the initiative to be
   module drifts past a target size, nudging the agent to split it — keeps
   every module comfortably under the ceiling as the game keeps growing.
 
-### E. Probe the real output ceiling
+### E. Probe the real output ceiling — DONE (2026-07-26, pulled forward into step 1 of this sprint)
 
-- Resolve the overview's open question: one API call requesting
-  `max_tokens=200000` to learn whether 65,536 is a hard max or a raisable
-  default. Tune `max_module_bytes` accordingly. Low effort, informs the
-  guard threshold; does not change the architecture either way.
+Resolved the overview's open question. 65,536 was self-confirming, not a
+real ceiling — every prior check passed that exact value as `max_tokens`
+and observed truncation at exactly that value, without ever asking for
+more. A live probe requesting `max_tokens` as high as 384001 was never
+rejected, and a forced long deterministic generation with
+`max_tokens=150000` produced exactly 150000 output tokens without stopping
+early (`finish_reason == "length"`) — the real ceiling is at least 150000;
+DeepSeek's docs claim 384K. `ai_client.MAX_OUTPUT_TOKENS` is now 150000,
+and `max_module_bytes` (3x that) is now 450000 — see
+`ai_client.py`/`agent.py`'s updated comments and
+`05-migration-and-pilot.md`'s pilot-results section for the full probe
+transcript.
 
 ## Acceptance criteria (per item, if taken)
 

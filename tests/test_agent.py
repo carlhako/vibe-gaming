@@ -189,6 +189,107 @@ def test_oversized_write_rejected_then_smaller_write_succeeds(isolated_db, games
 
 
 # ---------------------------------------------------------------------------
+# 2b. Context pruning (Sprint 6, docs/multifile-agent/06-streaming-and-polish.md):
+#     the Sprint 5 pilot found the agent path used 5-12x more input tokens
+#     than the single-file baseline, dominated by write_file calls' own
+#     arguments (the complete new file contents) never being pruned out of
+#     the resent-every-turn conversation. These tests cover the fix.
+# ---------------------------------------------------------------------------
+
+def test_successful_write_file_arguments_are_squashed_out_of_history(isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})]),
+        _turn([("read_file", {"path": "style.css"})]),
+        _turn([("finish", {"summary": "done"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+
+    # seen[-1] is the conversation as sent for the LAST scripted response —
+    # i.e. after both the write_file turn and a further read_file turn have
+    # already been processed, so this proves the squash isn't undone or
+    # skipped by later turns.
+    later_turn = seen[-1]
+    write_call_msg = next(
+        m for m in later_turn
+        if m.get("role") == "assistant"
+        and any(tc["id"] == "call_0_write_file" for tc in (m.get("tool_calls") or []))
+    )
+    tc = next(tc for tc in write_call_msg["tool_calls"] if tc["id"] == "call_0_write_file")
+    arguments = json.loads(tc["function"]["arguments"])
+    assert NEW_CORE_JS not in json.dumps(arguments)
+    assert "omitted from history" in arguments["contents"]
+    # "path" MUST survive the squash — a real pilot re-run found a
+    # path-less placeholder taught the model to omit "path" itself on
+    # later write_file calls, since it pattern-matches its own history.
+    assert arguments["path"] == "core.js"
+
+
+def test_rejected_write_file_arguments_are_also_squashed(isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    huge = "x" * 500
+    small_cfg = {
+        "game_web": CONFIG["game_web"],
+        "multifile_agent": dict(CONFIG["multifile_agent"], max_module_bytes=100),
+    }
+    responses = [
+        _turn([("write_file", {"path": "core.js", "contents": huge})]),
+        _turn([
+            ("write_file", {"path": "core.js", "contents": NEW_CORE_JS[:50]}),
+            ("finish", {"summary": "shrunk core.js"}),
+        ]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses, config=small_cfg)
+
+    assert result["success"], result["error"]
+
+    write_call_msg = next(
+        m for m in seen[-1]
+        if m.get("role") == "assistant"
+        and any(tc["id"] == "call_0_write_file" for tc in (m.get("tool_calls") or []))
+    )
+    tc = next(tc for tc in write_call_msg["tool_calls"] if tc["id"] == "call_0_write_file")
+    arguments = json.loads(tc["function"]["arguments"])
+    assert huge not in json.dumps(arguments)
+    assert "omitted from history" in arguments["contents"]
+    assert arguments["path"] == "core.js"
+
+
+def test_stale_read_file_result_is_pruned_after_configured_step_age(isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    style_css = (games_dir / "click-counter-src" / "src" / "style.css").read_text()
+    small_cfg = {
+        "game_web": CONFIG["game_web"],
+        "multifile_agent": dict(CONFIG["multifile_agent"], context_prune_after_steps=2),
+    }
+    responses = [
+        _turn([("read_file", {"path": "style.css"})]),   # step 1: read, never rewritten
+        _turn([("read_map", {})]),                        # step 2: filler, not yet stale (2-1=1 < 2)
+        _turn([("read_map", {})]),                        # step 3: now stale (3-1=2 >= 2) -> pruned
+        _turn([("finish", {"summary": "no changes needed"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses, config=small_cfg)
+
+    assert result["success"], result["error"]
+
+    tool_result = next(
+        m for m in seen[-1]
+        if m.get("role") == "tool" and m.get("tool_call_id") == "call_0_read_file"
+    )
+    assert style_css not in tool_result["content"]
+    assert "pruned" in tool_result["content"]
+    assert "steps ago" in tool_result["content"]
+
+
+# ---------------------------------------------------------------------------
 # 3. Smoke-test failure on first finish -> failure observation fed back ->
 #    a second finish after an edit passes.
 # ---------------------------------------------------------------------------

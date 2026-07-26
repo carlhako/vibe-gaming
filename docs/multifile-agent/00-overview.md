@@ -3,9 +3,13 @@
 ## Why
 
 One game (Sorcerer With A Minigun, the minigun/skeletons fork chain) is
-already ~230 KB of inlined HTML — right at DeepSeek's hard **output-token ceiling**
-of 65,536 (`ai_client.MAX_OUTPUT_TOKENS` ≈ ~260 KB of HTML at ~4 chars/
-token). The current pipeline requires the model to re-emit the *complete*
+already ~230 KB of inlined HTML — right at what was then believed to be
+DeepSeek's hard **output-token ceiling** of 65,536
+(`ai_client.MAX_OUTPUT_TOKENS` ≈ ~260 KB of HTML at ~4 chars/token). *(That
+belief turned out to be wrong — see the resolved open question below; the
+real ceiling is at least 150000/~590 KB. The rest of this section is the
+original, since-revised problem statement that motivated the initiative.)*
+The current pipeline requires the model to re-emit the *complete*
 `index.html` on every generation and every enhancement. We shipped
 truncation handling (detect `finish_reason == "length"`, drop thinking mode
 on retry, compactness nudge) as a stopgap, but the owner intends to keep
@@ -68,11 +72,21 @@ be forced to read all of it either.** Two mechanisms enforce this:
 
 ## Open questions (resolve during the sprints, not blocking to start)
 
-- **Is 65,536 a hard model max or a raisable default?** It sets the
-  per-module ceiling guard. Cheap to probe (one API call requesting
-  `max_tokens=200000`; see the 65536 discussion). Even if raisable, the
-  multi-file structure still wins on input cost, so this only tunes the guard
-  threshold — it doesn't change the plan.
+- ~~**Is 65,536 a hard model max or a raisable default?**~~ **Resolved,
+  Sprint 6 (2026-07-26): raisable, and it was never really 65,536 to begin
+  with.** Every prior "verification" of that number passed
+  `max_tokens=65536` explicitly and then observed truncation at exactly
+  65536 — self-confirming, since nobody had tried asking for more. A real
+  probe requesting up to `max_tokens=384001` was never rejected, and a
+  forced long deterministic generation with `max_tokens=150000` produced
+  exactly 150000 output tokens without stopping early
+  (`finish_reason == "length"`, still generating) — i.e. the real ceiling
+  is at least 150000, confirmed live; DeepSeek's own docs claim 384K.
+  `ai_client.MAX_OUTPUT_TOKENS` is now 150000 (see that constant's comment).
+  This doesn't remove the motivation for this initiative — a multi-file
+  source still avoids a whole-game read+write on every enhancement even at
+  the higher ceiling — but it does mean single-file games have much more
+  headroom before hitting the wall this initiative exists to solve.
 - **Context-pruning strategy for long agent runs.** Superseded file contents
   should be dropped/summarized from the running message list so a 10-step
   edit doesn't balloon input. Sprint 2 picks the concrete policy.

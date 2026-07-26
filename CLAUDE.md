@@ -254,8 +254,12 @@ for the forced choice and tolerates the occasional no-tool-call reply
 with a nudge. Non-thinking mode honors the forced choice.
 
 Both `ask()` and `ask_with_tools()` pin `max_tokens` to
-`ai_client.MAX_OUTPUT_TOKENS` (65536 — DeepSeek V4's hard completion
-ceiling) and surface the response's `finish_reason`. In thinking mode this
+`ai_client.MAX_OUTPUT_TOKENS` (150000 as of 2026-07-26 — see that
+constant's comment in `ai_client.py`: the original 65536 figure was never
+DeepSeek's real ceiling, just a self-confirming number nobody had tried
+exceeding; a real probe this session got clean, non-`"length"`-truncated
+generations up to 150000 output tokens, and DeepSeek's own docs claim
+384K) and surface the response's `finish_reason`. In thinking mode this
 budget is *shared* with `reasoning_content` tokens, so a large
 enhancement's chain-of-thought can push the actual game source past the
 cap: the reply is cut off mid-stream (`finish_reason == "length"`),
@@ -275,11 +279,18 @@ source is on disk.
 
 This is the "multi-file agent" initiative (`docs/multifile-agent/`,
 6 sprints), built to get around a hard structural limit: one game
-(Sorcerer With A Minigun) grew past DeepSeek's ~65,536-completion-token
-ceiling, past which the model can never re-emit a whole `index.html` again
-in one response, by any trick. The fix has two parts — a format that never
-requires a whole-game read/write, and a live transcript UI so an
-edit-by-edit agent run is still legible to the requester.
+(Sorcerer With A Minigun) grew past what was believed to be DeepSeek's
+~65,536-completion-token ceiling, past which the model could never
+re-emit a whole `index.html` again in one response, by any trick. Sprint 6
+found that ceiling was largely self-imposed (see `ai_client.py`'s
+`MAX_OUTPUT_TOKENS` comment — the real figure is at least 150000, possibly
+384K) and raised it, which lifts the single-file path's practical size
+limit substantially without removing the motivation for this initiative:
+even at a higher ceiling, a whole-file resubmit still costs a full-game
+read+write on every enhancement, where a multi-file source only ever
+touches the modules a change actually requires. The fix has two parts — a
+format that never requires a whole-game read/write, and a live transcript
+UI so an edit-by-edit agent run is still legible to the requester.
 
 **Format.** A multi-file game's *source* is split on disk:
 `games/<slug>/game.md` (a prose description plus a table of every `src/`
@@ -309,7 +320,24 @@ forks exactly like `game_enhancer.enhance_game()` (new `games/<slug>/`,
 the half-written fork) — it's the multi-file-source counterpart
 `job_runner.py` dispatches to instead of `game_enhancer.enhance_game()`.
 Config lives under `multifile_agent:` in `config.yaml` (model/effort/
-max_steps/max_verification_retries/max_module_bytes).
+max_steps/max_verification_retries/max_module_bytes/
+context_prune_after_steps).
+
+Because `ai_client.ask_with_tools()` is stateless, `_run_react_loop`
+resends its whole `messages` list on every turn — so anything left in
+there forever gets rebilled every turn for the rest of the run. Sprint 5's
+real pilot (`docs/multifile-agent/05-migration-and-pilot.md`) measured
+this costing 5-12x more input tokens than the single-file baseline for
+comparable changes; Sprint 6 traced it mostly to a write_file call's own
+arguments (the complete new file contents, JSON-escaped) never being
+pruned from the assistant message that made the call, and fixed it by
+squashing those arguments down to a short placeholder immediately after
+each write_file executes (success or rejection alike) — the model already
+generated that content and the tool result already reports the outcome;
+`read_file` is there if it needs the current bytes again. A second, milder
+fix prunes a `read_file` result once it's gone stale (outstanding more
+than `context_prune_after_steps` turns without being rewritten), on top of
+the pre-existing same-path-rewrite pruning.
 
 **The agent event stream + live chat UI.** Every think/act/observe/verify
 step is emitted through an `emit(role, content, data)` callback

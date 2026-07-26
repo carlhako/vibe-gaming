@@ -60,7 +60,8 @@ multifile_agent:
   timeout_seconds: 1800        # per ai_client.ask_with_tools() call
   max_steps: 40                # hard cap on read/write/finish turns before giving up
   max_verification_retries: 3  # finish() calls that fail build->scan->smoke before giving up
-  max_module_bytes: 196608     # 3x ai_client.MAX_OUTPUT_TOKENS bytes; see agent.py
+  max_module_bytes: 450000     # 3x ai_client.MAX_OUTPUT_TOKENS bytes; see agent.py
+  context_prune_after_steps: 3 # steps a read_file result rides along before being pruned
 
 job_runner:
   workers: 1                 # poll-loop threads per process (dev) / per gunicorn worker (prod)

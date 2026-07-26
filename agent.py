@@ -70,15 +70,16 @@ import safety
 
 _logger = logging.getLogger(__name__)
 
-# ai_client.MAX_OUTPUT_TOKENS (65536) is DeepSeek's hard per-response
-# completion-token ceiling — at ~4 chars/token that's ~256KB of raw HTML
-# (see docs/multifile-agent/00-overview.md). A write_file call has to emit
-# its contents as a JSON-escaped tool-call argument (quotes/backslashes/
-# newlines all cost extra bytes over the raw source), and in thinking mode
-# the same budget is shared with reasoning_content, so this default sits at
-# 3x MAX_OUTPUT_TOKENS bytes rather than the full ~256KB raw figure —
-# comfortable headroom, not a hard physical limit. Configurable per-call via
-# cfg["max_module_bytes"].
+# ai_client.MAX_OUTPUT_TOKENS (150000 as of Sprint 6 — see ai_client.py's
+# comment on that constant for how the original 65536 figure turned out to
+# be self-imposed, not DeepSeek's real ceiling) is the per-response
+# completion-token budget — at ~4 chars/token that's ~590KB of raw HTML. A
+# write_file call has to emit its contents as a JSON-escaped tool-call
+# argument (quotes/backslashes/newlines all cost extra bytes over the raw
+# source), and in thinking mode the same budget is shared with
+# reasoning_content, so this default sits at 3x MAX_OUTPUT_TOKENS bytes
+# rather than the full raw-HTML figure — comfortable headroom, not a hard
+# physical limit. Configurable per-call via cfg["max_module_bytes"].
 DEFAULT_MAX_MODULE_BYTES = ai.MAX_OUTPUT_TOKENS * 3
 
 _MAX_NO_PROGRESS_STEPS = 5
@@ -549,6 +550,47 @@ def _build_explode_user_prompt() -> str:
 # The ReAct loop
 # ---------------------------------------------------------------------------
 
+def _squash_write_call_arguments(assistant_msg: dict, tool_call_id: str, observation: str) -> None:
+    """A write_file call's own arguments carry the COMPLETE new file
+    contents (potentially tens of KB) inside the assistant message that
+    requested it — unlike a read_file *result*, which the pre-Sprint-6
+    pruning already handled, this full payload was never pruned, so it
+    rode along resent in full on every subsequent turn for the rest of the
+    run. Measured in the Sprint 5 pilot (docs/multifile-agent/
+    05-migration-and-pilot.md): this dominated the multi-file agent path's
+    5-12x-larger-than-baseline input token cost, well ahead of stale reads.
+    The model already generated this content and the tool result already
+    reports the outcome (byte count, success/rejection); read_file is
+    available if it ever needs the current bytes again. Applies whether
+    the write succeeded or was rejected — a rejected write's oversized
+    arguments are, if anything, the single biggest offender. Mutates the
+    assistant message in place; a no-op if the call isn't found (shouldn't
+    happen, but this must never raise into the loop).
+
+    The placeholder MUST keep the original "path" key rather than dropping
+    it: a real-pilot re-run (Sprint 6) surfaced the model repeatedly
+    emitting write_file calls missing "path" right after this squash ran —
+    almost certainly the model pattern-matching its own prior tool-call
+    shape from further up the same conversation, and a path-less
+    placeholder taught it that shape. Keeping "path" (and only squashing
+    "contents") preserves the one structural detail worth preserving."""
+    for entry in assistant_msg.get("tool_calls") or []:
+        if entry.get("id") != tool_call_id:
+            continue
+        function = entry.setdefault("function", {})
+        path = None
+        try:
+            path = json.loads(function.get("arguments") or "{}").get("path")
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        function["arguments"] = json.dumps({
+            "path": path,
+            "contents": f"[omitted from history after execution: {observation}; "
+                        "call read_file to see current contents]",
+        })
+        return
+
+
 def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                      cfg: dict, job_id: str | None, db_conn, emit: Callable | None = None) -> dict:
     """Drive the read_map/list_files/read_file/write_file/finish loop
@@ -571,10 +613,25 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     defaults to a DB-writing emitter keyed on job_id (a no-op if job_id is
     None). Every call is wrapped in _safe_emit so a raising emitter can't
     fail the run.
+
+    Context pruning (Sprint 6, following up on the Sprint 5 pilot's token
+    measurements — see docs/multifile-agent/05-migration-and-pilot.md):
+    `ask_with_tools()` is stateless, so every turn resends the whole
+    `messages` list built up so far. Two things are pruned down to a short
+    placeholder once they're no longer needed, both in place so the
+    resent-every-turn cost stops growing without bound:
+      - every write_file call's own arguments (see
+        _squash_write_call_arguments), immediately after that call
+        executes, success or rejection alike;
+      - a read_file result, once either the same path is later rewritten
+        (unchanged from Sprint 2) or it's simply gone stale — outstanding
+        for more than `cfg["context_prune_after_steps"]` steps (default 3)
+        without being rewritten.
     """
     max_steps = cfg.get("max_steps", 40)
     max_verification_retries = cfg.get("max_verification_retries", 3)
     max_module_bytes = cfg.get("max_module_bytes", DEFAULT_MAX_MODULE_BYTES)
+    max_read_age_steps = cfg.get("context_prune_after_steps", 3)
     model = cfg.get("model", "")
     effort = cfg.get("effort", "high")
     ai_timeout = cfg.get("timeout_seconds", 120)
@@ -593,6 +650,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     verification_attempts = 0
     tokens_at_last_attempt = (0, 0)
     last_read_message: dict[str, dict] = {}
+    last_read_step: dict[str, int] = {}
     consecutive_no_progress = 0
     summary = ""
     error = None
@@ -609,7 +667,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
             )
         tokens_at_last_attempt = (total_input_tokens, total_output_tokens)
 
-    for _step in range(1, max_steps + 1):
+    for step_num in range(1, max_steps + 1):
         try:
             ask_result = ai.ask_with_tools(
                 messages, tools=AGENT_TOOLS, tool_choice="auto",
@@ -624,6 +682,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         last_model = ask_result.model or "default"
         last_effort = ask_result.effort
         messages.append(ask_result.message)
+        assistant_msg = ask_result.message
 
         thought = _reasoning_content(ask_result)
         if thought:
@@ -660,14 +719,29 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
             messages.append(msg)
             if tc.name == "read_file" and touched_path and not content.startswith("ERROR:"):
                 last_read_message[touched_path] = msg
-            elif tc.name == "write_file" and touched_path and content.startswith("OK:"):
-                made_progress = True
-                stale = last_read_message.pop(touched_path, None)
-                if stale is not None:
-                    stale["content"] = (
-                        f"[pruned: {touched_path} was rewritten by a later "
-                        "write_file — re-read it if you need the current contents]"
-                    )
+                last_read_step[touched_path] = step_num
+            elif tc.name == "write_file":
+                _squash_write_call_arguments(assistant_msg, tc.id, content)
+                if touched_path and content.startswith("OK:"):
+                    made_progress = True
+                    stale = last_read_message.pop(touched_path, None)
+                    last_read_step.pop(touched_path, None)
+                    if stale is not None:
+                        stale["content"] = (
+                            f"[pruned: {touched_path} was rewritten by a later "
+                            "write_file — re-read it if you need the current contents]"
+                        )
+
+        stale_paths = [
+            path for path, read_at in last_read_step.items()
+            if step_num - read_at >= max_read_age_steps
+        ]
+        for path in stale_paths:
+            read_at = last_read_step.pop(path)
+            last_read_message.pop(path)["content"] = (
+                f"[pruned: {path} was read {step_num - read_at} steps ago — "
+                "re-read it if you need the current contents]"
+            )
 
         for extra in finish_calls[1:]:
             messages.append({

@@ -54,16 +54,32 @@ BASE_URL = "https://api.deepseek.com"
 MODEL_DEFAULT = "deepseek-v4-flash"  # 284B total / 13B active MoE, 1M ctx — fast + cheap
 MODEL_PRO = "deepseek-v4-pro"        # 1.6T total / 49B active MoE, 1M ctx — best quality
 
-# DeepSeek V4's hard per-response completion ceiling (verified live 2026-07-25:
-# a big single-file game truncated at exactly completion_tokens == 65536 with
-# finish_reason == "length"). We pin max_tokens to it so the ceiling is
-# explicit and can't silently regress if the API default drops — and so the
-# generation loop's finish_reason == "length" truncation handling has a stable
-# number to reason about. In thinking mode this budget is SHARED with
-# reasoning_content tokens, so chain-of-thought eats into what's left for the
-# actual answer (the reason large enhancements truncate — see game_generator's
-# run_generation_attempts, which drops thinking mode on a truncation retry).
-MAX_OUTPUT_TOKENS = 65536
+# DeepSeek V4's per-response completion ceiling, pinned explicitly so it's
+# stable and the generation loop's finish_reason == "length" truncation
+# handling has a known number to reason about. In thinking mode this budget
+# is SHARED with reasoning_content tokens, so chain-of-thought eats into
+# what's left for the actual answer (a large enhancement's truncation risk —
+# see game_generator's run_generation_attempts, which drops thinking mode on
+# a truncation retry).
+#
+# CORRECTED 2026-07-26 (Sprint 6 of docs/multifile-agent/, prompted by a
+# real pilot re-run stalling in a way that pointed at this): the original
+# 65536 here was NOT DeepSeek's actual ceiling — it was self-confirming.
+# Every prior "verification" always passed max_tokens=65536 explicitly (this
+# constant, unconditionally, since every caller's default IS this constant),
+# so of course every truncation landed at exactly 65536; nobody had tried
+# asking for more. A direct probe this session (see
+# docs/multifile-agent/05-migration-and-pilot.md) requested max_tokens as
+# high as 384001 and every request was accepted (never rejected for
+# exceeding some server-side cap), and a forced long deterministic
+# generation with max_tokens=150000 produced exactly 150000 output tokens
+# (finish_reason == "length", still generating, not stopping early) — i.e.
+# the real ceiling is AT LEAST 150000, confirmed live. DeepSeek's own docs
+# (api-docs.deepseek.com, fetched the same day) claim 384K for both
+# deepseek-v4-flash and deepseek-v4-pro, in both thinking and non-thinking
+# modes, but that number itself hasn't been independently verified live the
+# way 150000 has, so this constant only claims what's actually been proven:
+MAX_OUTPUT_TOKENS = 150000
 
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 
