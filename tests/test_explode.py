@@ -210,6 +210,82 @@ def test_explode_announce_completion_false_emits_note_not_final(isolated_db, gam
 
 
 # ---------------------------------------------------------------------------
+# Sprint 6 step 2: explode must SPLIT, not just reformat. A real run produced
+# one 151KB core.js for a 159KB game -- passing every gate while leaving a
+# later edit exactly as expensive as before the split, which is the whole
+# cost this initiative exists to remove.
+# ---------------------------------------------------------------------------
+
+def test_explode_enforces_its_own_tighter_module_ceiling(isolated_db, games_dir):
+    """The explode pass runs under explode_max_module_bytes, well below the
+    ordinary max_module_bytes -- a module that would sail through a normal
+    edit is rejected here, with the existing "split it" guidance."""
+    _setup_single_file_source(games_dir)
+    cfg = {
+        "game_web": CONFIG["game_web"],
+        "multifile_agent": dict(
+            CONFIG["multifile_agent"],
+            max_module_bytes=100_000,      # an ordinary edit would allow this...
+            explode_max_module_bytes=500,  # ...but explode must not.
+        ),
+    }
+    oversized = "// " + "x" * 2000
+    responses = [
+        _turn([("write_file", {"path": "index.html", "contents": SPLIT_INDEX_HTML})]),
+        _turn([("write_file", {"path": "style.css", "contents": SPLIT_STYLE_CSS})]),
+        _turn([("write_file", {"path": "everything.js", "contents": oversized})]),
+        _turn([("write_file", {"path": "core.js", "contents": SPLIT_CORE_JS})]),
+        _turn([("write_file", {"path": "game.md", "contents": SPLIT_GAME_MD})]),
+        _turn([("finish", {"summary": "split into modules"})]),
+    ]
+    seen = []
+
+    def scripted(messages, **_kwargs):
+        seen.append(copy.deepcopy(messages))
+        return responses[len(seen) - 1]
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result = agent.explode_game(SOURCE_GAME_ID, "web:t", cfg, games_dir=games_dir)
+
+    assert result["success"], result["error"]
+
+    # The oversized module was rejected and never written...
+    assert not (games_dir / result["slug"] / "src" / "everything.js").exists()
+    # ...and the rejection told the model to split rather than shrink.
+    notes = " ".join(
+        m["content"] for m in seen[-1]
+        if m.get("role") == "assistant" and isinstance(m.get("content"), str)
+    )
+    assert "REJECTED" in notes
+    assert "500-byte" in notes
+    assert "Split this module" in notes
+
+
+def test_explode_prompt_demands_several_modules_not_one(isolated_db, games_dir):
+    """The prompt is the primary lever here; the ceiling is only a backstop.
+    The previous wording listed exactly one JS module by name
+    (write_file("core.js", ...)) as its worked example, and a real run
+    reproduced precisely that four-file shape with all logic in core.js --
+    the same imitate-the-example failure as the stub-write bug."""
+    source_html = "<html>" + "y" * 150_000 + "</html>"
+    prompt = agent._build_explode_system_prompt("Big Game", source_html, 60_000)
+
+    # States the enforced ceiling and a plural, size-derived module target.
+    assert "60,000 bytes" in prompt
+    target = agent._explode_target_module_count(len(source_html))
+    assert target >= 5
+    assert f"{target} " in prompt
+    # Names several distinct modules rather than anchoring on a single one.
+    for name in ("entities.js", "render.js", "input.js"):
+        assert name in prompt
+    assert "DEFEATS THE ENTIRE PURPOSE" in prompt
+
+    # Small sources still get a sane floor rather than 0 or 1 modules.
+    assert agent._explode_target_module_count(1_000) == 3
+
+
+# ---------------------------------------------------------------------------
 # Part B: enhance_game_auto_format()
 # ---------------------------------------------------------------------------
 

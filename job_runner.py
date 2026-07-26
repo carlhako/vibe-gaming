@@ -61,6 +61,17 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
                 db_conn=conn, games_dir=games_dir, job_id=job_id,
                 new_title=job.get("new_title"), creator_uid=job.get("creator_uid"),
             )
+        elif job["kind"] == "explode":
+            # Admin-triggered format conversion (/admin/stats' Games tab):
+            # the same explode pass enhance_game_auto_format runs internally
+            # for an oversized single-file source, but requested on its own
+            # so the resulting multi-file fork is a visible arcade entry
+            # rather than a hidden intermediate.
+            result = agent.explode_game(
+                job["source_game_id"], job["requested_by"], config,
+                db_conn=conn, games_dir=games_dir, job_id=job_id,
+                new_title=job.get("new_title"), creator_uid=job.get("creator_uid"),
+            )
         else:
             raise ValueError(f"unknown job kind: {job['kind']!r}")
     except Exception as exc:  # noqa: BLE001 - a job must never take the worker thread down

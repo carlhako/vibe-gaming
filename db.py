@@ -526,7 +526,9 @@ def get_generation_history(limit=20, offset=0, conn=None):
     vg_uid has a users row. Also pulls in the most recent attempt's raw
     DeepSeek response payload (NULL if every attempt errored before a
     response came back, e.g. a transport failure) for the admin history
-    page's "JSON" detail dialog."""
+    page's "JSON" detail dialog, and a has_agent_events flag so the page
+    can offer a transcript replay only for the ReAct-agent jobs that have
+    one (single-file jobs emit no agent_events at all)."""
     c = _c(conn)
     rows = c.execute(
         """
@@ -543,7 +545,9 @@ def get_generation_history(limit=20, offset=0, conn=None):
                 ORDER BY ga.attempt_number DESC LIMIT 1) AS last_raw_response,
                (SELECT ga.attempt_number FROM generation_attempts ga
                 WHERE ga.job_id = gr.job_id AND ga.raw_response IS NOT NULL
-                ORDER BY ga.attempt_number DESC LIMIT 1) AS last_raw_response_attempt
+                ORDER BY ga.attempt_number DESC LIMIT 1) AS last_raw_response_attempt,
+               EXISTS(SELECT 1 FROM agent_events ae
+                      WHERE ae.job_id = gr.job_id) AS has_agent_events
         FROM generation_requests gr
         LEFT JOIN web_games wg ON wg.game_id = gr.result_game_id
         LEFT JOIN users u ON u.uid = gr.creator_uid
@@ -732,7 +736,8 @@ def get_web_games(sort="alpha", conn=None):
 
 def create_generation_request(job_id, kind, prompt, requested_by, source_game_id=None,
                                new_title=None, creator_uid=None, ip_address=None, conn=None):
-    """Insert a new queued job. kind is 'create' or 'enhance'."""
+    """Insert a new queued job. kind is 'create', 'enhance', or 'explode'
+    (the admin-triggered single-file -> multi-file conversion)."""
     c = _c(conn)
     now = _now()
     c.execute(
@@ -1115,19 +1120,29 @@ def release_enhance_lock(game_id, lock_token, conn=None) -> bool:
     return cur.rowcount > 0
 
 
+def get_active_job_for_game(source_game_id, kinds=("enhance",), conn=None):
+    """The most recent queued/generating job of any of `kinds` whose SOURCE
+    is source_game_id, or None. Every job kind that forks a game (enhance,
+    explode) reads the same source directory and mints a new fork from it,
+    so callers use this to keep two such jobs off one game at a time."""
+    c = _c(conn)
+    placeholders = ",".join("?" * len(kinds))
+    row = c.execute(
+        f"SELECT * FROM generation_requests "
+        f"WHERE kind IN ({placeholders}) AND source_game_id=? "
+        f"AND status IN ('queued', 'generating') "
+        f"ORDER BY created_at DESC LIMIT 1",
+        (*kinds, source_game_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def get_active_enhance_job(source_game_id, conn=None):
     """The in-flight enhance job for source_game_id, if any (phase B lock —
     the game is being generated, regardless of whether the submitter's tab
     is still open). None if no enhance job is currently queued/generating
     for this game."""
-    c = _c(conn)
-    row = c.execute(
-        "SELECT * FROM generation_requests "
-        "WHERE kind='enhance' AND source_game_id=? AND status IN ('queued', 'generating') "
-        "ORDER BY created_at DESC LIMIT 1",
-        (source_game_id,),
-    ).fetchone()
-    return dict(row) if row else None
+    return get_active_job_for_game(source_game_id, kinds=("enhance",), conn=conn)
 
 
 # ---------------------------------------------------------------------------

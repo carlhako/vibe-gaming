@@ -82,6 +82,21 @@ _logger = logging.getLogger(__name__)
 # physical limit. Configurable per-call via cfg["max_module_bytes"].
 DEFAULT_MAX_MODULE_BYTES = ai.MAX_OUTPUT_TOKENS * 3
 
+# The explode pass needs a much tighter ceiling than an ordinary edit.
+# DEFAULT_MAX_MODULE_BYTES exists to stop a write that physically cannot be
+# re-emitted; it is not a target, and a 159KB game splits "successfully"
+# into one 151KB module well under it. That passes every gate and buys
+# nothing — enhancing that fork still means rewriting 151KB, which is the
+# whole-file cost this initiative exists to remove (Sprint 6 step 2 pilot,
+# docs/multifile-agent/05-migration-and-pilot.md).
+#
+# So explode enforces its own ceiling, and the prompt states both the
+# ceiling and a target module count derived from the source size — the
+# ceiling is the backstop, the target is what actually shapes the split.
+# Overridable via cfg["explode_max_module_bytes"].
+DEFAULT_EXPLODE_MAX_MODULE_BYTES = 60_000
+EXPLODE_TARGET_MODULE_BYTES = 25_000
+
 _MAX_NO_PROGRESS_STEPS = 5
 
 # Marks every placeholder this module leaves in the conversation where real
@@ -551,7 +566,15 @@ def _build_user_prompt(description: str) -> str:
     return f"Enhance/fix this game per this request: {description}"
 
 
-def _build_explode_system_prompt(source_title: str, source_html: str) -> str:
+def _explode_target_module_count(source_bytes: int) -> int:
+    """Roughly how many JS modules a source of this size should split into.
+    Deliberately a range-anchor for the prompt, not a rule the loop
+    enforces — the enforced number is the byte ceiling."""
+    return max(3, round(source_bytes / EXPLODE_TARGET_MODULE_BYTES))
+
+
+def _build_explode_system_prompt(source_title: str, source_html: str,
+                                  max_module_bytes: int = DEFAULT_EXPLODE_MAX_MODULE_BYTES) -> str:
     """Sprint 5's explode pass (docs/multifile-agent/05-migration-and-pilot.md
     Part A): the model is handed the ENTIRE original single-file game as
     plain input context (reading it costs input tokens only, never subject
@@ -567,20 +590,40 @@ def _build_explode_system_prompt(source_title: str, source_html: str) -> str:
         "game is left completely untouched.\n\n"
         "## Task\n"
         "Split the single index.html below into a shell src/index.html "
-        "plus cohesive src/style.css and src/*.js modules, and author "
-        "game.md (a prose description of the game plus a table of every "
-        "src/ file and its purpose). This MUST be behavior-preserving: "
+        "plus src/style.css and SEVERAL cohesive src/*.js modules, and "
+        "author game.md (a prose description of the game plus a table of "
+        "every src/ file and its purpose). This MUST be behavior-preserving: "
         "every mechanic, visual, and control must work identically to the "
         "original — you are re-organizing the code, not rewriting the "
         "game, adding features, or fixing bugs you happen to notice.\n\n"
-        "Use write_file(path, contents) for every file you create — e.g. "
-        "write_file(\"index.html\", ...) for the src/ shell, "
-        "write_file(\"style.css\", ...), write_file(\"core.js\", ...), and "
-        "write_file(\"game.md\", ...) for the map. Paths are already rooted "
+        "## How many modules\n"
+        f"This game's source is {len(source_html):,} bytes. Split its "
+        f"JavaScript across roughly {_explode_target_module_count(len(source_html))} "
+        f"modules, none larger than {max_module_bytes:,} bytes — that ceiling "
+        "is enforced, and an oversized write_file is rejected. Divide along "
+        "the seams the code already has, one module per subsystem: "
+        "constants/config, entity definitions, world or level generation, "
+        "combat, input handling, the update loop, rendering, UI/HUD, and a "
+        "small entry point that wires them together are typical. Name each "
+        "file for what it holds.\n\n"
+        "Putting all the logic into one big module DEFEATS THE ENTIRE "
+        "PURPOSE of this conversion. The point is that a later edit only "
+        "has to read and rewrite the one module it touches; a single "
+        "large module leaves that edit exactly as expensive as it was "
+        "before the split.\n\n"
+        "Use write_file(path, contents) for every file you create — the "
+        "src/ shell as write_file(\"index.html\", ...), the stylesheet as "
+        "write_file(\"style.css\", ...), each logic module under its own "
+        "descriptive name (write_file(\"entities.js\", ...), "
+        "write_file(\"render.js\", ...), write_file(\"input.js\", ...), and "
+        "so on), and the map as write_file(\"game.md\", ...). Paths are already rooted "
         "at src/, so write bare filenames and never a \"src/\" prefix; "
         "src/index.html must likewise reference its siblings by bare "
-        "filename (<link rel=\"stylesheet\" href=\"style.css\">, "
-        "<script src=\"core.js\"></script>), never \"src/style.css\". You may use "
+        "filename, one <script> tag per module in dependency order "
+        "(<link rel=\"stylesheet\" href=\"style.css\">, then "
+        "<script src=\"entities.js\"></script>"
+        "<script src=\"render.js\"></script> and so on), never "
+        "\"src/style.css\". You may use "
         "read_file(path)/list_files() to check back on files you've "
         "already written. Call finish(summary) only once EVERY file "
         "(including src/index.html and game.md) has been written — it "
@@ -607,7 +650,8 @@ def _build_explode_system_prompt(source_title: str, source_html: str) -> str:
 
 def _build_explode_user_prompt() -> str:
     return (
-        "Split this game into the multi-file format described above. Do "
+        "Split this game into the multi-file format described above, across "
+        "several cohesive modules rather than one large one. Do "
         "not add, remove, or change any feature, visual, or control — the "
         "played game must behave exactly as it does now."
     )
@@ -713,10 +757,13 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     game_generator.run_generation_attempts() vs. its callers.
 
     `emit(role, content=None, data=None)` (Sprint 3) is called at every
-    think/act/observe/verify step for the durable agent_events transcript;
-    defaults to a DB-writing emitter keyed on job_id (a no-op if job_id is
-    None). Every call is wrapped in _safe_emit so a raising emitter can't
-    fail the run.
+    think/act/observe/verify step for the durable agent_events transcript,
+    plus a 'usage' event per LLM call carrying that call's own token counts
+    and the run's running totals (the job row only gets a total at the very
+    end, and generation_attempts only gets a row per finish() verification,
+    so 'usage' is the only per-call accounting there is). Defaults to a
+    DB-writing emitter keyed on job_id (a no-op if job_id is None). Every
+    call is wrapped in _safe_emit so a raising emitter can't fail the run.
 
     Context pruning (Sprint 6, following up on the Sprint 5 pilot's token
     measurements — see docs/multifile-agent/05-migration-and-pilot.md):
@@ -748,7 +795,12 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     max_read_age_steps = cfg.get("context_prune_after_steps", 3)
     model = cfg.get("model", "")
     effort = cfg.get("effort", "high")
-    ai_timeout = cfg.get("timeout_seconds", 120)
+    # 1800s, matching config.yaml.example and the two single-file pipelines —
+    # NOT ai_client's own 120s default. A config.yaml predating the
+    # multifile_agent block (this repo's own did) silently got 120s here,
+    # which is short enough to time out a thinking-mode turn emitting a large
+    # write_file argument; real explode runs emit 100KB+ in a single call.
+    ai_timeout = cfg.get("timeout_seconds", 1800)
     if emit is None:
         emit = _make_emitter(job_id, db_conn)
 
@@ -797,6 +849,29 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         last_effort = ask_result.effort
         messages.append(ask_result.message)
         assistant_msg = ask_result.message
+
+        # One 'usage' event per LLM call, carrying that call's own token
+        # counts and the run's running totals. The generation_requests row
+        # only gets a total once the whole job is over, and
+        # generation_attempts only records a row per finish() verification,
+        # so without this a long agent run's token spend is invisible until
+        # it ends — and invisible per-turn even then.
+        _safe_emit(
+            emit, "usage",
+            f"LLM call {step_num}: {ask_result.input_tokens:,} in / "
+            f"{ask_result.output_tokens:,} out "
+            f"(running total {total_input_tokens + total_output_tokens:,})",
+            {
+                "step": step_num,
+                "call_input_tokens": ask_result.input_tokens,
+                "call_output_tokens": ask_result.output_tokens,
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+                "tokens_used": total_input_tokens + total_output_tokens,
+                "model": last_model,
+                "effort": last_effort,
+            },
+        )
 
         thought = _reasoning_content(ask_result)
         if thought:
@@ -1171,11 +1246,22 @@ def explode_game(source_game_id: str, requested_by: str, config: dict, db_conn=N
     dest_dir = games_dir / dest_slug
     dest_dir.mkdir(parents=True, exist_ok=False)
 
+    # Explode runs under its own, much tighter module ceiling than an
+    # ordinary edit — see DEFAULT_EXPLODE_MAX_MODULE_BYTES. Overriding the
+    # key the loop already reads keeps _run_react_loop unaware of which pass
+    # it's driving.
+    explode_max_module_bytes = cfg.get(
+        "explode_max_module_bytes", DEFAULT_EXPLODE_MAX_MODULE_BYTES
+    )
+    explode_cfg = dict(cfg, max_module_bytes=explode_max_module_bytes)
+
     outcome = _run_react_loop(
         game_dir=dest_dir,
-        system_prompt=_build_explode_system_prompt(source_row["title"], source_html),
+        system_prompt=_build_explode_system_prompt(
+            source_row["title"], source_html, explode_max_module_bytes
+        ),
         user_prompt=_build_explode_user_prompt(),
-        cfg=cfg, job_id=job_id, db_conn=db_conn, emit=emit,
+        cfg=explode_cfg, job_id=job_id, db_conn=db_conn, emit=emit,
     )
     duration = time.monotonic() - t0
 

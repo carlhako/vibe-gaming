@@ -64,6 +64,11 @@ multifile_agent:
                                # nothing and ships nothing, so leave real headroom.
   max_verification_retries: 3  # finish() calls that fail build->scan->smoke before giving up
   max_module_bytes: 450000     # 3x ai_client.MAX_OUTPUT_TOKENS bytes; see agent.py
+  explode_max_module_bytes: 60000  # much tighter ceiling for the explode pass only: the
+                               # 450000 above is a "can this be re-emitted at all" limit,
+                               # not a target, and a 159KB game once split "successfully"
+                               # into a single 151KB module under it -- which passes every
+                               # gate but leaves later edits as expensive as before the split
   context_prune_after_steps: 3 # steps a read_file result rides along before being pruned
 
 job_runner:

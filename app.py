@@ -32,6 +32,7 @@ from flask import (
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+import builder
 import db
 import game_generator
 import safety
@@ -181,6 +182,10 @@ def _build_manifest(games_dir: Path) -> list[dict]:
             "parent_game_id": meta.get("parent_game_id"),
             "root_game_id": meta.get("root_game_id"),
             "prompt": meta.get("prompt", ""),
+            # "multi-file" (exploded into src/ modules) or "single-file".
+            # Resolved through builder so the admin page can never disagree
+            # with what the build/enhance paths actually treat the game as.
+            "format": "multi-file" if builder.is_multi_file(entry) else "single-file",
         })
 
     titles_by_id = {g["game_id"]: g["title"] for g in games if g["game_id"]}
@@ -1006,6 +1011,17 @@ def create_app(games_dir=None) -> Flask:
             "kind": job["kind"],
             "events": events,
             "result": result,
+            # Job-level totals, written when the job finishes (they stay
+            # null while it runs — the live per-call figures come from the
+            # 'usage' events instead).
+            "model": job["model"],
+            "effort": job["effort"],
+            "attempts": job["attempts"],
+            "duration_seconds": job["duration_seconds"],
+            "input_tokens": job["input_tokens"],
+            "output_tokens": job["output_tokens"],
+            "tokens_used": job["tokens_used"],
+            "error": job["error"],
         })
 
     @app.before_request
@@ -1212,6 +1228,56 @@ def create_app(games_dir=None) -> Flask:
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
         return redirect(url_for("admin_stats", token=request.args.get("token")))
+
+    @app.post("/admin/games/<game_id>/explode")
+    @require_admin_token
+    def admin_explode_game(game_id):
+        """Queue an explode job (single-file -> multi-file) for one game.
+
+        Returns the job_id as JSON rather than redirecting: the caller is
+        the Games tab's progress dialog, which then follows the run live on
+        /api/jobs/<job_id>/events like the job status page does. The work
+        itself goes through the same generation_requests queue as every
+        other AI job, so its model/effort/tokens/cost land in the History
+        tab automatically and the AI kill switch still applies.
+
+        Explode forks rather than converting in place — the single-file
+        original stays exactly as it was, and the multi-file version is a
+        new arcade entry (unlike enhance_game_auto_format's internal
+        explode, which hides its intermediate fork because the requester
+        asked for an enhancement, not a format change)."""
+        if not _GAME_ID_RE.match(game_id):
+            abort(404)
+        conn = get_db()
+        game = db.get_web_game(game_id, conn=conn)
+        if game is None:
+            abort(404)
+
+        game_dir = games_dir / game["slug"]
+        if not (game_dir / "index.html").is_file():
+            return jsonify(error="This game has no index.html on disk."), 404
+        if builder.is_multi_file(game_dir):
+            return jsonify(error="This game is already multi-file."), 409
+        active = db.get_active_job_for_game(
+            game_id, kinds=("enhance", "explode"), conn=conn)
+        if active is not None:
+            return jsonify(
+                error=f"A {active['kind']} job for this game is already "
+                      f"{active['status']}.",
+                job_id=active["job_id"],
+            ), 409
+        if not db.is_ai_generation_enabled(conn=conn):
+            return jsonify(error="AI generation is currently disabled."), 503
+
+        job_id = uuid.uuid4().hex
+        db.create_generation_request(
+            job_id=job_id, kind="explode",
+            prompt=f"explode: split '{game['title']}' into multi-file modules "
+                   f"(behavior-preserving)",
+            requested_by="admin", source_game_id=game_id,
+            ip_address=request.remote_addr or "unknown", conn=conn,
+        )
+        return jsonify(job_id=job_id, title=game["title"]), 202
 
     @app.get("/admin/reports")
     @require_admin_token

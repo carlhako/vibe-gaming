@@ -372,10 +372,19 @@ first `finish` attempt in 9 turns / 405K input tokens, where the same run
 before these fixes burned 40 turns and 2.5M input tokens without ever
 reaching verification. The built artifact's JS is byte-identical to the
 original ignoring whitespace (122,333 non-whitespace bytes, all 365
-declarations intact). **Known gap:** that successful run split the game into
-a single 151KB `core.js` rather than cohesive modules — it passes every gate
-but buys nothing over staying single-file, since enhancing it still means
-rewriting a 151KB module. See the Sprint 6 step 2 doc's closing section.
+declarations intact).
+
+That successful run split the game into a single 151KB `core.js` rather than
+cohesive modules — passing every gate while buying nothing over staying
+single-file. Cause: the same imitate-the-example mechanism as the stub bug.
+The explode prompt described "cohesive modules" in prose while demonstrating
+a four-file split with exactly one JS module named `core.js`, and the model
+reproduced the demonstration. Explode now names several modules in its
+example, states a size-derived target count (`source_bytes / 25,000`, min 3)
+and why one big module defeats the purpose, and enforces its own tighter
+`explode_max_module_bytes` ceiling (60,000, vs `max_module_bytes`'s 450,000)
+via a cfg override, so `_run_react_loop` stays unaware of which pass it
+drives. Not yet verified live.
 
 **The agent event stream + live chat UI.** Every think/act/observe/verify
 step is emitted through an `emit(role, content, data)` callback
@@ -392,6 +401,40 @@ the attempt number, and a terminal `final` event renders the notes plus a
 Play link. Legacy single-file jobs have no agent events at all — the pane
 just shows "No live transcript for this job" and the left pane alone
 carries the whole experience, exactly as before this feature existed.
+
+A `usage` event is also emitted once per LLM call, carrying that call's own
+token counts plus the run's running totals. It's the only per-call
+accounting there is: the `generation_requests` row only gets a total when
+the whole job ends, and `generation_attempts` only gets a row per `finish()`
+verification, so without it a 60-turn agent run's spend is invisible until
+it's over. `agent_chat.js` has no renderer for the role and silently skips
+it, so the job status page is unchanged.
+
+**Exploding a game from the admin page.** `/admin/stats`' Games tab shows a
+per-game **Fmt** badge (`S` single-file / `E` exploded) resolved through
+`builder.is_multi_file()`, and an Explode button on every single-file game
+with a `game_id`. It posts to `POST /admin/games/<game_id>/explode` (behind
+`require_admin_token`), which queues a `kind='explode'` `generation_requests`
+row and returns the `job_id` as JSON instead of redirecting; `job_runner.py`
+dispatches that kind to `agent.explode_game()`. Going through the normal job
+queue is the point — the AI kill switch, the worker's crash sweep, and the
+History tab's model/effort/token/cost accounting all apply to it with no
+special-casing. The button's dialog (`static/admin_explode.js`) then follows
+the run on the same `/api/jobs/<job_id>/events` feed, rendering the
+transcript plus a live token/cost readout off the `usage` events; the
+endpoint also returns the job-level totals for the terminal summary. A 409
+from an already-in-flight job comes back with that job's `job_id`, so the
+dialog attaches to the running job rather than erroring. Unlike
+`enhance_game_auto_format`'s internal explode, this fork is **not** hidden —
+the admin asked for the format change itself, so the multi-file version is a
+visible arcade entry (the same row's Hide toggle is right there). The
+single-file original is untouched either way.
+
+History rows for a job that has agent events get a **Transcript** button
+that replays it into the same dialog — otherwise a finished agent run's
+transcript is only reachable from `/status/<job_id>` while it's still live.
+`db.get_generation_history()` returns a `has_agent_events` flag so the
+button isn't offered on single-file jobs, which would open an empty dialog.
 
 **Explode + the dual-format enhance policy** (`agent.explode_game()`,
 `agent.enhance_game_auto_format()`) convert an *existing single-file* game
@@ -451,9 +494,11 @@ app.py                 Flask site: menu, /games/new, /games/<id>/enhance,
                         rate endpoint, report endpoint, /signup,
                         /u/<uid> (sign-in link), /signin, /account, /profile,
                         /leaderboard, access-log middleware, /admin/stats,
-                        /admin/games/download, /admin/reports
+                        /admin/games/download, /admin/games/<id>/explode,
+                        /admin/reports
 job_runner.py           DB-polling background worker: claims generation_requests,
-                        dispatches to game_generator/agent.enhance_game_auto_format
+                        dispatches to game_generator/agent.enhance_game_auto_format/
+                        agent.explode_game (kind='explode')
 game_generator.py       generate_game() + shared run_generation_attempts() retry loop,
                         run_moderation_pass() (shared with game_enhancer/agent)
 game_enhancer.py        enhance_game(): forks a new game_id/slug, links parent/root
@@ -485,16 +530,21 @@ templates/account.html  set username, show /u/<uid> sign-in link + token
 templates/signin.html   paste-a-token form (alternative to the /u/<uid> link)
 templates/profile.html  own games w/ hide toggle, play/like stats, recent plays
 templates/leaderboard.html  public all-users ranking by total thumbs_up
-templates/admin_stats.html  access-log/usage dashboard, behind ADMIN_TOKEN
+templates/admin_stats.html  access-log/usage dashboard, behind ADMIN_TOKEN;
+                        Games tab has the Fmt (S/E) column + Explode button,
+                        History tab the Transcript button
 templates/admin_reports.html  open-reports review page, behind ADMIN_TOKEN
 static/style.css        arcade-cabinet styling + two-pane job-shell/chat-log styling
 static/app.js           play-on-click, thumbs-vote, report-this-game, sort toggle behavior
 static/status.js        polls /api/status/<job_id> until success/failed
 static/agent_chat.js    polls /api/jobs/<job_id>/events, renders the live agent transcript
+static/admin_explode.js  admin Games-tab explode button + its live progress/token
+                        dialog, and the History tab's transcript replay
 games/block-dodge/      bundled game (game_id committed in meta.json)
 games/connect-4-4/      bundled game (game_id committed in meta.json)
 tests/                  pytest suite: db.py, startup disk-sync, fork linkage, reports,
-                        builder, agent (ReAct loop), explode/dual-format, job UI
+                        builder, agent (ReAct loop), explode/dual-format, job UI,
+                        admin explode control
 config.yaml.example     copy to config.yaml
 .env.example            copy to .env: DEEPSEEK_API_KEY, ADMIN_TOKEN
 ```

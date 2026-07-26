@@ -508,22 +508,56 @@ one 650-byte `<style>` block — Darkhold Arena is canvas-rendered, and
 158,352 of its 159KB is inline JS. Worth knowing before reading module sizes
 as evidence of anything.)
 
-### Open: explode produces one giant module, not cohesive ones
+### Explode produced one giant module, not cohesive ones — and why
 
 Run 2 succeeded by writing a **single 151,899-byte `core.js`** holding all
 the game logic, plus a 349-byte shell and the 613-byte stylesheet. That
-satisfies the format and passes every gate — it is comfortably under
+satisfies the format and passes every gate — comfortably under
 `max_module_bytes` (450,000) — but it defeats the point of the initiative:
 enhancing that fork still means reading and rewriting a 151KB module, which
 is the whole-file resubmit cost the multi-file path exists to avoid.
 
-Notably run 1, which *failed*, split into 12 cohesive modules
-(`map.js`/`combat.js`/`render.js`/…). So the model can do it; nothing in the
-prompt or the tools currently makes it. The explode prompt asks for
-"cohesive src/style.css and src/\*.js modules" without any upper bound that
-would force a split. Options, unexplored: a much smaller
-`max_module_bytes` for the explode pass specifically (the rejection message
-already says "split this module into smaller, cohesive files instead of
-shrinking it", which is exactly the needed nudge), or an explicit
-target-module-count instruction. Worth fixing before the dual-format path is
-relied on, since a one-module explode buys nothing over staying single-file.
+**The cause is the same imitate-the-example mechanism as the stub bug.** The
+explode prompt's worked example listed exactly four `write_file` calls, with
+exactly one JS module, named `core.js`:
+
+```
+write_file("index.html", ...) for the src/ shell,
+write_file("style.css", ...), write_file("core.js", ...), and
+write_file("game.md", ...) for the map.
+```
+
+Run 2 produced exactly that shape, with the JS module named `core.js` — and
+said so in its own summary ("src/index.html (shell), src/style.css, src/core.js
+(all game logic), src/game.md"). Notably run 1, which *failed* for unrelated
+reasons, split into 12 cohesive modules (`map.js`/`combat.js`/`render.js`/…),
+so the model is perfectly capable of splitting; nothing was asking it to.
+The prompt said "cohesive ... modules" in prose while demonstrating a
+one-module split, and demonstration beats description.
+
+Fixed on three levels:
+
+- **The example no longer anchors on one module.** It now names several
+  (`entities.js`, `render.js`, `input.js`, "and so on"), and the shell's
+  ref example shows one `<script>` tag per module. `core.js` appears nowhere
+  in the prompt — including in the path-guidance sentence, which had quietly
+  re-anchored it.
+- **An explicit, size-derived target.** The prompt states the source's byte
+  count and asks for roughly `source_bytes / 25,000` modules (min 3) — 6 for
+  Darkhold Arena — naming typical subsystem seams, and says plainly that one
+  big module "DEFEATS THE ENTIRE PURPOSE of this conversion" and why.
+- **An enforced ceiling, as backstop.** `DEFAULT_EXPLODE_MAX_MODULE_BYTES`
+  (60,000, config `explode_max_module_bytes`) applies to the explode pass
+  only, via a cfg override so `_run_react_loop` stays unaware of which pass
+  it drives. The existing rejection message ("split this module into
+  smaller, cohesive files instead of shrinking it") is already exactly the
+  right nudge. The prompt states the ceiling up front so the model plans
+  around it rather than discovering it by rejection — a rejected 151KB write
+  wastes a whole ~40K-token generation.
+
+Covered by `tests/test_explode.py::test_explode_enforces_its_own_tighter_module_ceiling`
+and `::test_explode_prompt_demands_several_modules_not_one`.
+
+**Not yet verified live** — no explode run has been done since these three
+changes, so "the split now produces ~6 cohesive modules" remains a
+prediction, not a measurement.

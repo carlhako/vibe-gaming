@@ -149,12 +149,29 @@
             Hidden games are dropped from the shelf on the main page but stay
             playable at their direct link — use "Play" below to reach one.
           </p>
+          <p class="form-hint">
+            <strong>Fmt</strong> is the game's source format:
+            <span class="fmt-badge fmt-single">S</span> single-file (one
+            <code>index.html</code>) or
+            <span class="fmt-badge fmt-multi">E</span> exploded into
+            <code>src/</code> modules, which edits far more cheaply.
+            "Explode" queues that conversion as a normal AI job — it
+            <em>forks</em>, so the single-file original is left untouched and
+            the multi-file version appears here as a new row you can hide.
+          </p>
           <table class="stats-table">
-            <thead><tr><th>Game</th><th>Visibility</th><th></th><th></th></tr></thead>
+            <thead><tr><th>Game</th><th title="Source format">Fmt</th><th>Visibility</th><th></th><th></th><th></th></tr></thead>
             <tbody>
               {% for g in all_games %}
               <tr class="{{ 'is-hidden-row' if g.hidden }}">
                 <td>{{ g.title }}</td>
+                <td>
+                  {% if g.format == 'multi-file' %}
+                  <span class="fmt-badge fmt-multi" title="multi-file (exploded into src/ modules)">E</span>
+                  {% else %}
+                  <span class="fmt-badge fmt-single" title="single-file (one index.html)">S</span>
+                  {% endif %}
+                </td>
                 <td>
                   {% if g.game_id %}
                   <form class="visibility-form" method="post"
@@ -178,6 +195,12 @@
                   {% if g.game_id %}
                   <button type="button" class="rename-btn"
                           data-game-id="{{ g.game_id }}" data-title="{{ g.title }}">Rename</button>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if g.game_id and g.format != 'multi-file' %}
+                  <button type="button" class="explode-btn"
+                          data-game-id="{{ g.game_id }}" data-title="{{ g.title }}">Explode</button>
                   {% endif %}
                 </td>
                 <td><a class="game-row-play-link" href="{{ url_for('play', slug=g.slug) }}" target="_blank" rel="noopener">Play &#8599;</a></td>
@@ -227,7 +250,7 @@
               {% for r in history_rows %}
               <tr class="{{ 'is-hidden-row' if r.status == 'failed' }}">
                 <td><span class="local-ts" data-utc="{{ r.created_at }}">{{ r.created_at[:19].replace('T', ' ') }}</span></td>
-                <td>{{ 'new' if r.kind == 'create' else r.kind }}{% if r.kind == 'enhance' and r.source_title %} <span class="form-hint">of {{ r.source_title }}</span>{% endif %}</td>
+                <td>{{ 'new' if r.kind == 'create' else r.kind }}{% if r.kind in ('enhance', 'explode') and r.source_title %} <span class="form-hint">of {{ r.source_title }}</span>{% endif %}</td>
                 <td>{{ r.result_title or r.new_title or (r.prompt[:60] ~ ('…' if r.prompt|length > 60 else '')) }}</td>
                 <td>{{ r.creator_username or (r.creator_uid[:8] ~ '…' if r.creator_uid else r.requested_by) }}</td>
                 <td title="{{ r.error or '' }}">{{ r.status }}{% if r.status == 'failed' and r.error %} &#9432;{% endif %}</td>
@@ -242,6 +265,11 @@
                     {% if r.result_slug %}<a class="game-row-play-link" href="{{ url_for('play', slug=r.result_slug) }}" target="_blank" rel="noopener">Play &#8599;</a>{% endif %}
                     <button type="button" class="link-btn history-prompt-btn" data-job-id="{{ r.job_id }}">Prompt</button>
                     <button type="button" class="link-btn history-json-btn" data-job-id="{{ r.job_id }}">JSON</button>
+                    {% if r.has_agent_events %}
+                    <button type="button" class="link-btn transcript-btn"
+                            data-job-id="{{ r.job_id }}"
+                            data-title="{{ r.result_title or r.source_title or r.kind }}">Transcript</button>
+                    {% endif %}
                     <button type="button" class="link-btn history-detail-btn"
                       data-job-id="{{ r.job_id }}"
                       data-kind="{{ r.kind }}"
@@ -311,6 +339,23 @@
     <p class="form-hint" id="history-detail-error" hidden></p>
     <div class="dialog-actions">
       <button type="button" id="history-detail-close">Close</button>
+    </div>
+  </dialog>
+
+  <dialog id="explode-dialog" class="rename-dialog explode-dialog"
+          data-admin-token="{{ admin_token }}"
+          data-input-cost-per-million="{{ input_cost_per_million }}"
+          data-output-cost-per-million="{{ output_cost_per_million }}">
+    <h3 id="explode-heading">Explode game</h3>
+    <p class="form-hint" id="explode-intro"></p>
+    <div class="explode-status">
+      <span class="explode-state" id="explode-state">…</span>
+      <span class="explode-usage" id="explode-usage"></span>
+    </div>
+    <div class="chat-log explode-log" id="explode-log"></div>
+    <div class="dialog-actions">
+      <button type="button" id="explode-start">Explode this game</button>
+      <button type="button" id="explode-close">Close</button>
     </div>
   </dialog>
 
@@ -553,5 +598,6 @@
 
     showTab((location.hash || "#traffic").slice(1));
   </script>
+  <script src="{{ url_for('static', filename='admin_explode.js') }}" defer></script>
 </body>
 </html>
