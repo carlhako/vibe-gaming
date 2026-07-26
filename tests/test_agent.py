@@ -175,14 +175,16 @@ def test_oversized_write_rejected_then_smaller_write_succeeds(isolated_db, games
 
     assert result["success"], result["error"]
 
-    # The rejection for the first (oversized) write is fed back as this
-    # call's own tool result before the second turn is sent.
+    # The rejection for the first (oversized) write reaches the second turn.
+    # The write call itself is compacted out of history (see
+    # _compact_write_calls), so the rejection rides along in the assistant
+    # note that replaces it rather than in a tool-result message.
     second_turn = seen[1]
-    rejection = next(m for m in second_turn if m.get("role") == "tool"
-                      and m.get("tool_call_id") == "call_0_write_file")
-    assert "REJECTED" in rejection["content"]
-    assert "500 bytes" in rejection["content"]
-    assert "100-byte" in rejection["content"]
+    assert not any(m.get("tool_call_id") == "call_0_write_file" for m in second_turn)
+    note = next(m for m in second_turn if m.get("role") == "assistant")["content"]
+    assert "REJECTED" in note
+    assert "500 bytes" in note
+    assert "100-byte" in note
 
     fork_dir = games_dir / result["slug"]
     assert (fork_dir / "src" / "core.js").read_text() == NEW_CORE_JS[:50]
@@ -193,10 +195,20 @@ def test_oversized_write_rejected_then_smaller_write_succeeds(isolated_db, games
 #     the Sprint 5 pilot found the agent path used 5-12x more input tokens
 #     than the single-file baseline, dominated by write_file calls' own
 #     arguments (the complete new file contents) never being pruned out of
-#     the resent-every-turn conversation. These tests cover the fix.
+#     the resent-every-turn conversation. These tests cover the fix, and
+#     step 2's correction to it: the pruning must REMOVE those calls, not
+#     leave a placeholder in the arguments slot, because the model reads
+#     anything left there as an example of a valid call and copies it.
 # ---------------------------------------------------------------------------
 
-def test_successful_write_file_arguments_are_squashed_out_of_history(isolated_db, games_dir):
+def _assistant_notes(messages):
+    return " ".join(
+        m["content"] for m in messages
+        if m.get("role") == "assistant" and isinstance(m.get("content"), str)
+    )
+
+
+def test_successful_write_file_is_compacted_out_of_history(isolated_db, games_dir):
     _setup_source_game(games_dir)
     responses = [
         _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})]),
@@ -211,25 +223,19 @@ def test_successful_write_file_arguments_are_squashed_out_of_history(isolated_db
 
     # seen[-1] is the conversation as sent for the LAST scripted response —
     # i.e. after both the write_file turn and a further read_file turn have
-    # already been processed, so this proves the squash isn't undone or
+    # already been processed, so this proves the compaction isn't undone or
     # skipped by later turns.
     later_turn = seen[-1]
-    write_call_msg = next(
-        m for m in later_turn
-        if m.get("role") == "assistant"
-        and any(tc["id"] == "call_0_write_file" for tc in (m.get("tool_calls") or []))
-    )
-    tc = next(tc for tc in write_call_msg["tool_calls"] if tc["id"] == "call_0_write_file")
-    arguments = json.loads(tc["function"]["arguments"])
-    assert NEW_CORE_JS not in json.dumps(arguments)
-    assert "omitted from history" in arguments["contents"]
-    # "path" MUST survive the squash — a real pilot re-run found a
-    # path-less placeholder taught the model to omit "path" itself on
-    # later write_file calls, since it pattern-matches its own history.
-    assert arguments["path"] == "core.js"
+    blob = json.dumps(later_turn)
+    assert NEW_CORE_JS not in blob
+    # Neither the call nor its tool result survives anywhere.
+    assert "call_0_write_file" not in blob
+    # ...but the observation does, as a plain assistant note.
+    assert "OK: wrote" in _assistant_notes(later_turn)
+    assert "core.js" in _assistant_notes(later_turn)
 
 
-def test_rejected_write_file_arguments_are_also_squashed(isolated_db, games_dir):
+def test_rejected_write_file_is_also_compacted_out_of_history(isolated_db, games_dir):
     _setup_source_game(games_dir)
     huge = "x" * 500
     small_cfg = {
@@ -249,16 +255,177 @@ def test_rejected_write_file_arguments_are_also_squashed(isolated_db, games_dir)
 
     assert result["success"], result["error"]
 
-    write_call_msg = next(
+    blob = json.dumps(seen[-1])
+    assert huge not in blob
+    assert "call_0_write_file" not in blob
+    assert "REJECTED" in _assistant_notes(seen[-1])
+
+
+def test_no_turn_ever_carries_a_synthetic_write_file_arguments_payload(isolated_db, games_dir):
+    """The Sprint 6 step 2 regression guard. The first version of this
+    pruning kept each write_file call and swapped its "contents" argument
+    for a ~113-byte placeholder, leaving history showing an assistant call
+    with tiny "contents" whose tool result read "OK: wrote 4840 bytes". Real
+    pilot runs then had the model reproducing exactly that shape — stub
+    writes of ~113-120 bytes for multi-KB modules, the stub's contents being
+    the placeholder text itself. So: every write_file call that survives in
+    any turn's history must carry the model's own real, unmodified
+    arguments — no synthesized ones, ever."""
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})]),
+        _turn([("write_file", {"path": "style.css", "contents": "body { margin: 0; }\n"})]),
+        _turn([("read_file", {"path": "core.js"})]),
+        _turn([("finish", {"summary": "done"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+
+    real_payloads = {NEW_CORE_JS, "body { margin: 0; }\n"}
+    for messages in seen:
+        for m in messages:
+            if m.get("role") != "assistant":
+                continue
+            for entry in m.get("tool_calls") or []:
+                if entry["function"]["name"] != "write_file":
+                    continue
+                args = json.loads(entry["function"]["arguments"])
+                # A surviving write call is one the loop hasn't executed yet,
+                # so its contents must be verbatim what the model produced.
+                assert args["contents"] in real_payloads
+                assert agent._PRUNE_SENTINEL not in args["contents"]
+
+
+def test_src_prefixed_paths_collapse_instead_of_nesting(isolated_db, games_dir):
+    """Agent paths are already rooted at src/. A real pilot run wrote its
+    shell to BOTH 'index.html' and 'src/index.html' and every module to
+    'src/*.js', producing two competing shells (src/index.html and
+    src/src/index.html) with the modules under src/src/ — where the shell
+    builder actually reads couldn't reference them. Both spellings must
+    resolve to the same file."""
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("write_file", {"path": "src/core.js", "contents": NEW_CORE_JS})]),
+        _turn([("read_file", {"path": "core.js"})]),
+        _turn([("finish", {"summary": "done"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+
+    fork_dir = games_dir / result["slug"]
+    assert (fork_dir / "src" / "core.js").read_text() == NEW_CORE_JS
+    assert not (fork_dir / "src" / "src").exists(), "src/ prefix nested a second level"
+
+    # The read of the bare name sees what the src/-prefixed write wrote...
+    read_back = next(
         m for m in seen[-1]
-        if m.get("role") == "assistant"
-        and any(tc["id"] == "call_0_write_file" for tc in (m.get("tool_calls") or []))
+        if m.get("role") == "tool" and m.get("tool_call_id") == "call_0_read_file"
     )
-    tc = next(tc for tc in write_call_msg["tool_calls"] if tc["id"] == "call_0_write_file")
-    arguments = json.loads(tc["function"]["arguments"])
-    assert huge not in json.dumps(arguments)
-    assert "omitted from history" in arguments["contents"]
-    assert arguments["path"] == "core.js"
+    assert read_back["content"] == NEW_CORE_JS
+    # ...and the write's own observation reports the canonical (collapsed) path.
+    assert "to core.js" in _assistant_notes(seen[1])
+
+
+def test_compaction_note_states_the_write_succeeded(isolated_db, games_dir):
+    """The note replaces a real tool result, so its wording is load-bearing.
+    Saying the calls were "dropped" read to the model as "the write did not
+    happen" — the pilot burned 38 of 40 turns re-checking state and never
+    reached finish()."""
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})]),
+        _turn([("finish", {"summary": "done"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    note = _assistant_notes(seen[-1])
+    assert "COMPLETED SUCCESSFULLY" in note
+    assert "on disk" in note
+    assert "OK: wrote" in note
+
+
+def test_compaction_leaves_every_sent_conversation_structurally_valid(isolated_db, games_dir):
+    """Compaction deletes tool calls AND their result messages. Get that
+    pairing wrong and the real API 400s — but every test here mocks
+    ask_with_tools, so nothing else would notice. Assert the invariant the
+    API enforces: each assistant tool_call has exactly one matching tool
+    result after it, each tool message answers a preceding call, and no
+    message is left empty of both content and tool calls."""
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("read_map", {})]),
+        # Mixed turn: a write (compacted away) alongside a read (retained).
+        _turn([
+            ("write_file", {"path": "core.js", "contents": NEW_CORE_JS}),
+            ("read_file", {"path": "style.css"}),
+        ]),
+        # Write-only turn: the assistant message loses tool_calls entirely.
+        _turn([("write_file", {"path": "style.css", "contents": "body{}\n"})]),
+        _turn([("finish", {"summary": "done"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+
+    for messages in seen:
+        answered = set()
+        for i, m in enumerate(messages):
+            role = m.get("role")
+            if role == "assistant":
+                calls = m.get("tool_calls") or []
+                assert calls or (m.get("content") or "").strip(), \
+                    "assistant message with neither content nor tool calls"
+                assert "tool_calls" not in m or calls, "empty tool_calls list"
+                for entry in calls:
+                    matches = [
+                        n for n in messages[i + 1:]
+                        if n.get("role") == "tool" and n.get("tool_call_id") == entry["id"]
+                    ]
+                    assert len(matches) == 1, f"unpaired tool call {entry['id']}"
+                    answered.add(entry["id"])
+            elif role == "tool":
+                assert m["tool_call_id"] in answered, \
+                    f"tool result {m['tool_call_id']} answers no preceding call"
+
+
+def test_write_of_a_pruning_placeholder_is_rejected_not_written_to_disk(isolated_db, games_dir):
+    """Belt-and-braces for the same bug: if the model ever does copy a
+    pruning placeholder into a write_file call, that must be rejected with
+    an actionable message rather than silently corrupting the module — which
+    is what turned the original stub bug into a self-reinforcing loop (the
+    stub was written, read back, and re-copied) that burned 1-2.6M input
+    tokens and shipped nothing."""
+    _setup_source_game(games_dir)
+    stub = f"{agent._PRUNE_SENTINEL} core.js was read 3 steps ago — re-read it."
+    responses = [
+        _turn([("write_file", {"path": "core.js", "contents": stub})]),
+        _turn([
+            ("write_file", {"path": "core.js", "contents": NEW_CORE_JS}),
+            ("finish", {"summary": "wrote the real core.js"}),
+        ]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+
+    note = _assistant_notes(seen[1])
+    assert "REJECTED" in note
+    assert "context-pruning placeholder" in note
+    # The real edit landed; the stub never reached disk.
+    assert (games_dir / result["slug"] / "src" / "core.js").read_text() == NEW_CORE_JS
 
 
 def test_stale_read_file_result_is_pruned_after_configured_step_age(isolated_db, games_dir):

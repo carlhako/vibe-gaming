@@ -58,7 +58,10 @@ multifile_agent:
   model: "deepseek-v4-flash"
   effort: "high"
   timeout_seconds: 1800        # per ai_client.ask_with_tools() call
-  max_steps: 40                # hard cap on read/write/finish turns before giving up
+  max_steps: 60                # hard cap on read/write/finish turns before giving up.
+                               # Exploding a 159KB game took 12 module writes; a run
+                               # that hits this cap before calling finish() verifies
+                               # nothing and ships nothing, so leave real headroom.
   max_verification_retries: 3  # finish() calls that fail build->scan->smoke before giving up
   max_module_bytes: 450000     # 3x ai_client.MAX_OUTPUT_TOKENS bytes; see agent.py
   context_prune_after_steps: 3 # steps a read_file result rides along before being pruned

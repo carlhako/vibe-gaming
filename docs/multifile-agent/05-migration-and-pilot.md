@@ -210,7 +210,7 @@ ever hitting the wall this initiative exists to solve. See
 `00-overview.md`'s now-resolved open question and `ai_client.py`'s comment
 on `MAX_OUTPUT_TOKENS` for the full detail.
 
-### Open, NOT fixed: stub-content writes during explode
+### Stub-content writes during explode (ROOT-CAUSED AND FIXED in step 2 below — this section is the evidence as it was recorded, including two conclusions that turned out to be wrong)
 
 Across three real re-runs of the same explode tonight — before any fix,
 after the path fix, and after raising the output ceiling — the model
@@ -244,6 +244,14 @@ by either fix above. All three re-runs eventually stall out (`agent gave
 up without a passing finish` / no-progress budget exhausted) with 1-2.6M
 input tokens burned and nothing shipped.
 
+> **Correction (step 2).** Two claims in the paragraph above are wrong, and
+> they're what kept this open. It is *not* a confabulation — the model had
+> read the stub file back, and the stub's contents literally contained the
+> sentence "OK: wrote 4840 bytes". And "nothing yet squashed/pruned" is
+> true only of *that file*; other files' write calls had already been
+> squashed earlier in the same conversation, which is where the stub text
+> came from. See the next section.
+
 Leading hypothesis, unverified: DeepSeek's thinking mode shares one output
 budget between `reasoning_content` and the actual response (including
 tool-call arguments — see `ai_client.py`). `explode_game`'s system prompt
@@ -271,3 +279,251 @@ efficient). Suggested starting points for whoever picks this up:
   prunable early message, or chunk it) — independent of whether it turns
   out to be the actual cause, it's the single biggest fixed cost in every
   turn of that specific path.
+
+## Sprint 6 step 2: the stub-write bug, root-caused (2026-07-26)
+
+**The stub content *was* the pruning placeholder, copied back by the
+model.** The thinking-mode output-budget hypothesis above was wrong, and no
+API calls were needed to establish that — the arithmetic settles it.
+
+Step 1's `_squash_write_call_arguments` replaced an executed `write_file`
+call's arguments with:
+
+```
+[omitted from history after execution: OK: wrote 4840 bytes to src/map.js; call read_file to see current contents]
+```
+
+That string is **exactly 114 bytes**. Built from a 113-byte write it is
+**exactly 113 bytes**. Across plausible filenames and byte counts the
+placeholder spans **110–118 bytes** — precisely the reported "~100-120 byte
+stub" band, hitting both observed values (113, 114) on the nose. The
+generating expression is `79 + len(observation)`, and the observation is
+itself `OK: wrote <n> bytes to <path>`.
+
+With that, every line of the transcript excerpt above reads literally, with
+no confabulation anywhere:
+
+- `[73] write_file('src/map.js', 114 bytes)` — the model copied the
+  placeholder text into the `contents` argument.
+- `[77] Read src/map.js (114 bytes)` — reading it back returns that
+  placeholder text, because that is now genuinely the file's content.
+- `[78] "Wait, it said 'OK: wrote 4840 bytes' now!"` — **the file's own
+  contents contain that sentence.** The model is quoting the file it just
+  read.
+- `[81] "read_file is returning the history of writes rather than the
+  actual content"` — the model was *correct*. The pruning code had put
+  write-history text in the `contents` slot; the model wrote it to disk;
+  `read_file` faithfully returned it.
+
+### Why it was self-reinforcing
+
+The loop has a fixed point. A 113-byte stub write produces the observation
+`OK: wrote 113 bytes to src/map.js`, whose placeholder is itself exactly
+113 bytes — so the next copy reproduces the same size forever. That is the
+mechanism behind "1-2.6M input tokens burned and nothing shipped": the run
+could not converge, because every corrective attempt was seeded with the
+artifact of the previous one.
+
+### Why it survived all three re-runs
+
+It was introduced by step 1's own fix, and all three re-runs had that fix
+active. "Before any fix" in the section above meant *before the `path`
+fix* — the first re-pilot already ran the first version of the squash. That
+also disposes of the "first writes of brand-new files, nothing yet
+squashed" reasoning: *other* files' write calls had been squashed earlier in
+the same conversation, and that history is what the model was imitating.
+
+### The actual defect, stated generally
+
+This is the same failure mode as step 1's dropped-`path` bug, one level
+deeper: **the model treats anything sitting in a tool call's arguments as a
+worked example of what a valid call looks like.** Step 1 diagnosed that
+correctly for `path` and then re-committed it for `contents`. Worse, the
+squashed history was actively *misleading* — an assistant call with a
+113-byte `contents` paired with a tool result reading "OK: wrote 4840
+bytes" teaches that a short placeholder-shaped argument is how you produce
+a multi-KB file.
+
+The general rule, now encoded in `_compact_write_calls`' docstring: **the
+only safe quantity of synthesized tool-call arguments to leave in history
+is zero.** Rewriting them in place cannot be made safe, because every
+possible replacement string is still a string in the `contents` slot.
+
+### The fix
+
+`_squash_write_call_arguments` is replaced by `agent._compact_write_calls`,
+which **removes** each executed `write_file` call from the conversation
+outright — the tool call *and* its paired tool-result message — leaving a
+short plain-text note on the assistant message carrying the observation
+verbatim. This keeps step 1's entire token-cost win (the file contents
+still stop being resent every turn) while putting nothing fake in an
+arguments slot. An assistant message whose calls were all writes keeps the
+note as its `content`, an ordinary assistant turn.
+
+Defense in depth, since a placeholder can still be echoed from elsewhere in
+the conversation: every placeholder this module emits now carries a
+`_PRUNE_SENTINEL` marker, and `_write_file` **rejects** any write whose
+contents contain it, with a message telling the model to `read_file` and
+write the real contents. A silent corruption becomes a self-correcting
+error — which by itself would have broken the loop above.
+
+Also closed while here: the same transcript shows the model calling
+`write_file('src/map.js')`, which nests to `src/src/map.js` since agent
+paths are already rooted at `src/`. It self-corrects (builder.py resolves
+`index.html`'s refs relative to `src/` too, so a mismatch surfaces as a
+retryable build failure) but the tool schemas now say so explicitly rather
+than leaving it to inference.
+
+### Regression tests
+
+In `tests/test_agent.py`:
+- `::test_no_turn_ever_carries_a_synthetic_write_file_arguments_payload` —
+  the direct guard. Any `write_file` call surviving in any turn's history
+  must carry the model's own real, unmodified arguments.
+- `::test_write_of_a_pruning_placeholder_is_rejected_not_written_to_disk` —
+  the sentinel guard, including that the stub never reaches disk.
+- `::test_compaction_leaves_every_sent_conversation_structurally_valid` —
+  compaction deletes tool calls *and* their result messages; get that
+  pairing wrong and the real API 400s, but every test here mocks
+  `ask_with_tools`, so nothing else would catch it.
+- `::test_successful_write_file_is_compacted_out_of_history` and
+  `::test_rejected_write_file_is_also_compacted_out_of_history` — step 1's
+  two squash tests, rewritten for removal semantics.
+
+### What this says about the earlier hypotheses
+
+- **Thinking-mode output budget: not implicated.** The stub arguments were
+  well-formed JSON that parsed cleanly. Budget exhaustion produces
+  `finish_reason == "length"` and a *truncated* fragment — the failure mode
+  `run_generation_attempts` already handles. Nothing here was truncated.
+- **Source size / conversation length: not causal.** Any run long enough to
+  execute two `write_file` calls could trigger this, at any source size.
+  Large sources correlated only because they take more writes to explode.
+- **Moving the source out of `explode_game`'s system prompt: not done, and
+  now looks actively wrong.** It was proposed as a cost fix, not a
+  correctness one. A stable system-prompt prefix is the best case for
+  DeepSeek's automatic prefix caching; moving that ~150KB behind churning
+  conversation would forfeit cache hits on it every turn without removing a
+  single resent byte.
+
+### Live re-run: the stub bug is gone, and what it exposed underneath
+
+Re-ran the exact failing explode against the fix — same downloaded 159KB
+Darkhold Arena source, `deepseek-v4-flash`, thinking mode on, isolated DB
+and games dir. **Zero writes in the stub band**, against 12 `write_file`
+calls:
+
+```
+      607 bytes  index.html          15,158 bytes  src/map.js
+      613 bytes  src/style.css       37,052 bytes  src/update.js
+    4,207 bytes  src/constants.js   101,293 bytes  src/render.js
+    9,085 bytes  src/input.js        22,106 bytes  src/ui.js
+   11,210 bytes  src/entities.js      9,660 bytes  src/game.js
+   12,962 bytes  src/combat.js
+```
+
+`src/map.js` — the file that produced 113/114-byte stubs on all three prior
+runs — came out at 15,158 bytes of real content. A **101,293-byte** single
+tool-call argument, emitted on turn ~30 of a conversation carrying the whole
+159KB source in its system prompt, independently buries the thinking-mode
+output-budget hypothesis: nothing about a long tool loop prevents the model
+from emitting a 100KB argument.
+
+**The run still failed, for an unrelated reason now measured rather than
+guessed.** It used exactly 40 turns — `max_steps` — and called `finish`
+**zero** times, so verification never ran (`attempts: 0`) and the fork was
+rolled back. The turn budget went to re-verification: 12 `write_file`
+against **17 `list_files` + 21 `read_file`**. Two causes, both introduced by
+the step 2 fix itself, both fixed now:
+
+- **The compaction note's wording.** "write_file call(s) ... were dropped
+  from the conversation to save context" read to the model as *the writes
+  did not take effect* — three separate "it seems like my write_file calls
+  are being dropped" reasoning turns, each triggering a `list_files` sweep.
+  The note now leads with the call having COMPLETED SUCCESSFULLY and the
+  files being on disk, with only the bulky argument trimmed. Covered by
+  `::test_compaction_note_states_the_write_succeeded`.
+- **`src/`-prefixed paths nesting a second level.** Agent paths are already
+  rooted at `src/`, so `write_file("src/map.js")` wrote `src/src/map.js`.
+  The model wrote its shell to *both* `index.html` and `src/index.html`,
+  leaving two competing shells — and `builder.build_game` only ever reads
+  `src/index.html`, which here was the one whose sibling refs pointed at
+  files that had landed under `src/src/`. Step 2 first tried to fix this in
+  the tool-schema wording; the model ignored it. `_normalize_agent_path` now
+  collapses a leading `src/` structurally, so both spellings are one file,
+  and observations/pruning keys report the canonical name. The explode
+  prompt also pins the shell to bare-filename refs so builder resolution
+  stays consistent. Covered by
+  `::test_src_prefixed_paths_collapse_instead_of_nesting`.
+
+`max_steps` also went 40 -> 60. There is no partial credit in this loop —
+hitting the cap before `finish()` throws the whole run away — and 12 module
+writes plus exploration plus verification retries does not fit in 40 with
+any comfort.
+
+Cost note: 2.5M input / 75.7K output tokens over 433s. The input figure is
+in the same range as the stalled runs, but it bought a complete 12-module
+split rather than a stub loop.
+
+### Second re-run, with the turn-budget fixes: explode completes
+
+Same source, same settings. **Passed verification on the first `finish`
+attempt.**
+
+| | run 1 (stub fix only) | run 2 (all fixes) |
+|---|---|---|
+| success | no — hit `max_steps` | **yes** |
+| turns used | 40 (the cap) | **9** |
+| `finish` calls | 0 | 1, passed first try |
+| input tokens | 2,503,141 | **404,535** |
+| output tokens | 75,697 | 57,813 |
+| `list_files` / `read_file` | 17 / 21 | 2 / 1 |
+| "my writes are being dropped" turns | 3 | **0** |
+| writes in the stub band | 0 | 0 |
+
+A **6.2x drop in input tokens** and a completed run, from two wording/path
+fixes. That also finally lands the Sprint 5 pilot's original goal: this run
+cost *less* input than the single-file baseline it was measured against,
+rather than 5-12x more.
+
+**Behavior preservation, checked properly.** Build + smoke only prove
+"assembles, no console errors" — they'd wave through a dropped stylesheet or
+a quietly rewritten mechanic. Comparing the built artifact against the
+original directly:
+
+- JS **byte-identical ignoring whitespace**: 122,333 non-whitespace bytes in
+  both. The -6,453 byte raw delta is entirely re-indentation (the original
+  was indented inside its `<script>` tags).
+- All **365** top-level declarations present; none missing, none added.
+- CSS identical ignoring whitespace (538 bytes both); every element `id`
+  still present; the single `<canvas>` preserved.
+
+That is much stronger evidence than this pipeline can normally produce, but
+it is still not a play-test — it proves the *code* survived, not that the
+game feels the same.
+
+(One earlier worry, resolved: `src/style.css` at 613 bytes looked like a
+silently dropped stylesheet and isn't. This game's *entire* original CSS is
+one 650-byte `<style>` block — Darkhold Arena is canvas-rendered, and
+158,352 of its 159KB is inline JS. Worth knowing before reading module sizes
+as evidence of anything.)
+
+### Open: explode produces one giant module, not cohesive ones
+
+Run 2 succeeded by writing a **single 151,899-byte `core.js`** holding all
+the game logic, plus a 349-byte shell and the 613-byte stylesheet. That
+satisfies the format and passes every gate — it is comfortably under
+`max_module_bytes` (450,000) — but it defeats the point of the initiative:
+enhancing that fork still means reading and rewriting a 151KB module, which
+is the whole-file resubmit cost the multi-file path exists to avoid.
+
+Notably run 1, which *failed*, split into 12 cohesive modules
+(`map.js`/`combat.js`/`render.js`/…). So the model can do it; nothing in the
+prompt or the tools currently makes it. The explode prompt asks for
+"cohesive src/style.css and src/\*.js modules" without any upper bound that
+would force a split. Options, unexplored: a much smaller
+`max_module_bytes` for the explode pass specifically (the rejection message
+already says "split this module into smaller, cohesive files instead of
+shrinking it", which is exactly the needed nudge), or an explicit
+target-module-count instruction. Worth fixing before the dual-format path is
+relied on, since a one-module explode buys nothing over staying single-file.

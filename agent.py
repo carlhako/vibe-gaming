@@ -84,6 +84,14 @@ DEFAULT_MAX_MODULE_BYTES = ai.MAX_OUTPUT_TOKENS * 3
 
 _MAX_NO_PROGRESS_STEPS = 5
 
+# Marks every placeholder this module leaves in the conversation where real
+# material was pruned away (compacted write calls, dropped read results).
+# Two jobs: it makes those placeholders unmistakably bookkeeping rather than
+# content, and _write_file rejects any write whose contents contain it — the
+# guard against the model copying one back into a real file (Sprint 6 step 2;
+# see _compact_write_calls for the run that made this necessary).
+_PRUNE_SENTINEL = "[context-pruned]"
+
 
 class AgentError(Exception):
     """Recoverable failure inside one tool call. Never escapes the loop —
@@ -93,6 +101,16 @@ class AgentError(Exception):
 # ---------------------------------------------------------------------------
 # Tools exposed to the model
 # ---------------------------------------------------------------------------
+
+# Paths are already rooted at src/, so a "src/" prefix nests a second level
+# ("src/map.js" -> src/src/map.js). A real pilot run did exactly that. It's
+# caught downstream — builder.py resolves index.html's refs relative to src/
+# too, so a mismatch surfaces as a build failure the loop can retry — but
+# saying so up front is free.
+_PATH_ARG_DESCRIPTION = (
+    "Relative to src/, e.g. 'core.js' — do NOT prefix it with 'src/'. "
+    "The one exception is 'game.md', which sits alongside src/."
+)
 
 READ_MAP_TOOL = {
     "type": "function",
@@ -124,13 +142,13 @@ READ_FILE_TOOL = {
     "function": {
         "name": "read_file",
         "description": (
-            "Read the full current contents of one file: a src/ module "
-            "path (e.g. 'core.js') or 'game.md'."
+            "Read the full current contents of one file: a module path "
+            "relative to src/ (e.g. 'core.js') or 'game.md'."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "e.g. 'core.js' or 'game.md'."},
+                "path": {"type": "string", "description": _PATH_ARG_DESCRIPTION},
             },
             "required": ["path"],
         },
@@ -153,7 +171,7 @@ WRITE_FILE_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "e.g. 'core.js' or 'game.md'."},
+                "path": {"type": "string", "description": _PATH_ARG_DESCRIPTION},
                 "contents": {"type": "string", "description": "The complete new file contents."},
             },
             "required": ["path", "contents"],
@@ -191,14 +209,42 @@ AGENT_TOOLS = [READ_MAP_TOOL, LIST_FILES_TOOL, READ_FILE_TOOL, WRITE_FILE_TOOL, 
 # Path resolution — same escape/absolute-path discipline as builder.py
 # ---------------------------------------------------------------------------
 
-def _resolve_agent_path(game_dir: Path, path: str) -> Path:
+def _normalize_agent_path(path: str) -> str:
+    """Canonical form of a model-supplied path: no './' prefix, no
+    redundant 'src/' prefix (see _resolve_agent_path). Every observation and
+    every pruning-bookkeeping key uses this, so 'src/core.js' and 'core.js'
+    can't be mistaken for two different files."""
     path = path.strip()
     if not path:
         raise AgentError("empty path")
-    if path in ("game.md", "./game.md"):
-        return game_dir / "game.md"
     if path.startswith("/"):
         raise AgentError(f"absolute path not allowed: {path!r}")
+    if path.startswith("./"):
+        path = path[2:]
+    while path.startswith("src/"):
+        path = path[4:]
+    if not path:
+        raise AgentError("empty path")
+    return path
+
+
+def _resolve_agent_path(game_dir: Path, path: str) -> Path:
+    """Map a model-supplied path onto a real file. A leading 'src/' is
+    collapsed (see _normalize_agent_path) because agent paths are ALREADY
+    rooted at src/, so 'src/core.js' would otherwise nest to src/src/core.js.
+
+    Sprint 6 step 2's pilot showed why this can't be left to prompt wording
+    (it was, and the model ignored it): the run wrote its shell to BOTH
+    'index.html' and 'src/index.html', landing two competing shells at
+    src/index.html and src/src/index.html with every module under src/src/.
+    builder.build_game only ever reads src/index.html, so the shell it would
+    have built from was the one whose sibling refs pointed nowhere — and the
+    model burned 17 list_files calls trying to reconcile a tree it had no
+    way to see straight. Collapsing makes the tree single-rooted: 'core.js'
+    and 'src/core.js' are the same file, last write wins."""
+    path = _normalize_agent_path(path)
+    if path == "game.md":
+        return game_dir / "game.md"
     src_dir = (game_dir / "src").resolve()
     resolved = (game_dir / "src" / path).resolve()
     try:
@@ -290,6 +336,22 @@ def _read_file(game_dir: Path, path: str) -> str:
 def _write_file(game_dir: Path, path: str, contents: str, max_module_bytes: int) -> str:
     file_path = _resolve_agent_path(game_dir, path)
     size = len(contents.encode("utf-8"))
+    if _PRUNE_SENTINEL in contents:
+        # Defense in depth against the Sprint 6 step 2 stub-write bug (see
+        # _compact_write_calls): every placeholder this module puts into the
+        # conversation carries _PRUNE_SENTINEL, so contents echoing one back
+        # means the model has copied bookkeeping text into a real file
+        # instead of authoring it. Reject loudly and tell it what to do —
+        # silently writing it is what turned that bug into a multi-hundred-
+        # thousand-token stall with a corrupt module on disk.
+        return (
+            f"REJECTED: the contents you passed for {path!r} are a "
+            "context-pruning placeholder from this conversation's history, "
+            "not real file contents. Those placeholders mark where earlier "
+            "material was dropped to save context — never copy one into a "
+            "file. Call read_file to see what's currently on disk, then "
+            "write the complete, real contents."
+        )
     if size > max_module_bytes:
         return (
             f"REJECTED: {path!r} is {size} bytes, over the {max_module_bytes}-byte "
@@ -314,10 +376,11 @@ def _execute_tool(tc: ai.ToolCall, game_dir: Path, max_module_bytes: int) -> tup
         if tc.name == "list_files":
             return _list_files(game_dir), None
         if tc.name == "read_file":
-            path = _parse_path_arg(tc.arguments)
+            path = _normalize_agent_path(_parse_path_arg(tc.arguments))
             return _read_file(game_dir, path), path
         if tc.name == "write_file":
             path, contents = _parse_write_args(tc.arguments)
+            path = _normalize_agent_path(path)
             return _write_file(game_dir, path, contents, max_module_bytes), path
         return f"ERROR: unknown tool {tc.name!r}", None
     except AgentError as exc:
@@ -513,7 +576,11 @@ def _build_explode_system_prompt(source_title: str, source_html: str) -> str:
         "Use write_file(path, contents) for every file you create — e.g. "
         "write_file(\"index.html\", ...) for the src/ shell, "
         "write_file(\"style.css\", ...), write_file(\"core.js\", ...), and "
-        "write_file(\"game.md\", ...) for the map. You may use "
+        "write_file(\"game.md\", ...) for the map. Paths are already rooted "
+        "at src/, so write bare filenames and never a \"src/\" prefix; "
+        "src/index.html must likewise reference its siblings by bare "
+        "filename (<link rel=\"stylesheet\" href=\"style.css\">, "
+        "<script src=\"core.js\"></script>), never \"src/style.css\". You may use "
         "read_file(path)/list_files() to check back on files you've "
         "already written. Call finish(summary) only once EVERY file "
         "(including src/index.html and game.md) has been written — it "
@@ -550,45 +617,82 @@ def _build_explode_user_prompt() -> str:
 # The ReAct loop
 # ---------------------------------------------------------------------------
 
-def _squash_write_call_arguments(assistant_msg: dict, tool_call_id: str, observation: str) -> None:
-    """A write_file call's own arguments carry the COMPLETE new file
-    contents (potentially tens of KB) inside the assistant message that
-    requested it — unlike a read_file *result*, which the pre-Sprint-6
-    pruning already handled, this full payload was never pruned, so it
-    rode along resent in full on every subsequent turn for the rest of the
-    run. Measured in the Sprint 5 pilot (docs/multifile-agent/
-    05-migration-and-pilot.md): this dominated the multi-file agent path's
-    5-12x-larger-than-baseline input token cost, well ahead of stale reads.
-    The model already generated this content and the tool result already
-    reports the outcome (byte count, success/rejection); read_file is
-    available if it ever needs the current bytes again. Applies whether
-    the write succeeded or was rejected — a rejected write's oversized
-    arguments are, if anything, the single biggest offender. Mutates the
-    assistant message in place; a no-op if the call isn't found (shouldn't
-    happen, but this must never raise into the loop).
+def _compact_write_calls(messages: list[dict], assistant_msg: dict,
+                          records: list[tuple[str, str]]) -> None:
+    """Drop executed write_file calls out of the conversation entirely,
+    replacing them with a short plain-text note on the assistant message
+    that made them.
 
-    The placeholder MUST keep the original "path" key rather than dropping
-    it: a real-pilot re-run (Sprint 6) surfaced the model repeatedly
-    emitting write_file calls missing "path" right after this squash ran —
-    almost certainly the model pattern-matching its own prior tool-call
-    shape from further up the same conversation, and a path-less
-    placeholder taught it that shape. Keeping "path" (and only squashing
-    "contents") preserves the one structural detail worth preserving."""
-    for entry in assistant_msg.get("tool_calls") or []:
-        if entry.get("id") != tool_call_id:
-            continue
-        function = entry.setdefault("function", {})
-        path = None
-        try:
-            path = json.loads(function.get("arguments") or "{}").get("path")
-        except (json.JSONDecodeError, AttributeError):
-            pass
-        function["arguments"] = json.dumps({
-            "path": path,
-            "contents": f"[omitted from history after execution: {observation}; "
-                        "call read_file to see current contents]",
-        })
+    Why they must go: a write_file call's own arguments carry the COMPLETE
+    new file contents (potentially tens of KB) inside the assistant message
+    that requested it. `ask_with_tools()` is stateless, so anything left in
+    `messages` is resent on every subsequent turn for the rest of the run —
+    the Sprint 5 pilot measured this dominating the agent path's
+    5-12x-larger-than-baseline input token cost, well ahead of stale reads.
+    The model already generated that content, and the observation (byte
+    count, success/rejection) is preserved in the note; read_file is there
+    if it ever needs the current bytes again.
+
+    Why they're REMOVED rather than squashed in place: Sprint 6's first
+    attempt kept the tool call and only replaced its "contents" argument
+    with a short placeholder string. That placeholder was ~113 bytes, and
+    it sat in history paired with a tool result reading "OK: wrote 4840
+    bytes" — which taught the model, by example from its own prior turns,
+    that a ~113-byte placeholder-shaped "contents" is a legitimate call
+    that produces a multi-KB file. Real pilot runs then had it emitting
+    exactly that: ~113-120 byte stub writes for modules meant to be several
+    KB, whose contents were the placeholder text itself, in a
+    self-reinforcing loop that burned 1-2.6M input tokens and shipped
+    nothing. (The same run's "confabulated" reasoning — the model insisting
+    a tool result said "wrote 4840 bytes" when it plainly said 114 — was
+    not confabulation at all: it had read the stub file back, and the
+    stub's contents literally contained that sentence.) See
+    docs/multifile-agent/05-migration-and-pilot.md. An earlier variant of
+    the same placeholder, which also dropped the "path" key, taught the
+    model to omit "path" the same way. Both are the identical failure mode:
+    anything left in the arguments slot is read as an example of what a
+    valid call looks like. The only safe amount of fake tool-call arguments
+    to leave in history is none.
+
+    Removing a tool call means also removing its tool-result message, or
+    the API's assistant-tool_calls/tool-result pairing breaks. Both happen
+    here. An assistant message left with no tool calls at all keeps the
+    note as its `content`, which is a perfectly ordinary assistant turn.
+    Mutates `messages` and `assistant_msg` in place; a no-op when there are
+    no write calls to compact."""
+    if not records:
         return
+    ids = {call_id for call_id, _ in records}
+    remaining = [e for e in (assistant_msg.get("tool_calls") or []) if e.get("id") not in ids]
+    if remaining:
+        assistant_msg["tool_calls"] = remaining
+    else:
+        assistant_msg.pop("tool_calls", None)
+
+    # Wording matters more than it looks. The first version said the calls
+    # "were dropped from the conversation to save context", and the Sprint 6
+    # step 2 pilot showed the model reading that as "my writes did not take
+    # effect" — three separate "it seems like my write_file calls are being
+    # dropped" reasoning turns, each kicking off a list_files/read_file sweep
+    # to re-check state. That run spent 38 of its 40 turns on exploration and
+    # ran out of budget before ever calling finish. So: lead with the write
+    # having SUCCEEDED, and be explicit that only the bulky argument was
+    # trimmed and that the file is on disk.
+    note = (
+        f"{_PRUNE_SENTINEL} The write_file call(s) below COMPLETED SUCCESSFULLY and "
+        "the files are on disk. Only the bulky 'contents' argument has been trimmed "
+        "from this transcript, to save context. Results: "
+        + "; ".join(observation for _, observation in records)
+        + ". There is no need to re-write or re-check these files; call read_file "
+          "only if you need to see their current contents again."
+    )
+    existing = (assistant_msg.get("content") or "").strip()
+    assistant_msg["content"] = f"{existing}\n{note}" if existing else note
+
+    messages[:] = [
+        m for m in messages
+        if not (m.get("role") == "tool" and m.get("tool_call_id") in ids)
+    ]
 
 
 def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
@@ -617,18 +721,28 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     Context pruning (Sprint 6, following up on the Sprint 5 pilot's token
     measurements — see docs/multifile-agent/05-migration-and-pilot.md):
     `ask_with_tools()` is stateless, so every turn resends the whole
-    `messages` list built up so far. Two things are pruned down to a short
-    placeholder once they're no longer needed, both in place so the
-    resent-every-turn cost stops growing without bound:
-      - every write_file call's own arguments (see
-        _squash_write_call_arguments), immediately after that call
-        executes, success or rejection alike;
-      - a read_file result, once either the same path is later rewritten
-        (unchanged from Sprint 2) or it's simply gone stale — outstanding
-        for more than `cfg["context_prune_after_steps"]` steps (default 3)
-        without being rewritten.
+    `messages` list built up so far. Two things stop riding along once
+    they're no longer needed, so the resent-every-turn cost stops growing
+    without bound:
+      - every executed write_file call is removed from the conversation
+        outright — the tool call and its result both — leaving only a short
+        plain-text note carrying the observation (see _compact_write_calls,
+        and note carefully why this removes rather than rewrites them);
+      - a read_file result is replaced with a _PRUNE_SENTINEL placeholder
+        once either the same path is later rewritten (unchanged from
+        Sprint 2) or it's simply gone stale — outstanding for more than
+        `cfg["context_prune_after_steps"]` steps (default 3) without being
+        rewritten.
     """
-    max_steps = cfg.get("max_steps", 40)
+    # 40 was too tight for a real explode: Sprint 6 step 2's pilot split a
+    # 159KB game into 12 modules and hit the cap having never once called
+    # finish, so it verified nothing and shipped nothing despite every write
+    # succeeding. There's no partial credit here — running out of steps
+    # before finish() throws away the whole run — and the dominant fix is
+    # cutting wasted exploration turns (see _compact_write_calls' note
+    # wording and _normalize_agent_path), but the cap needs real headroom
+    # above "one write per module" too.
+    max_steps = cfg.get("max_steps", 60)
     max_verification_retries = cfg.get("max_verification_retries", 3)
     max_module_bytes = cfg.get("max_module_bytes", DEFAULT_MAX_MODULE_BYTES)
     max_read_age_steps = cfg.get("context_prune_after_steps", 3)
@@ -709,6 +823,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         other_calls = [tc for tc in ask_result.tool_calls if tc.name != "finish"]
         made_progress = False
 
+        write_records: list[tuple[str, str]] = []
         for tc in other_calls:
             call_content, call_data = _summarize_tool_call(tc)
             _safe_emit(emit, "tool_call", call_content, call_data)
@@ -721,16 +836,17 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                 last_read_message[touched_path] = msg
                 last_read_step[touched_path] = step_num
             elif tc.name == "write_file":
-                _squash_write_call_arguments(assistant_msg, tc.id, content)
+                write_records.append((tc.id, content))
                 if touched_path and content.startswith("OK:"):
                     made_progress = True
                     stale = last_read_message.pop(touched_path, None)
                     last_read_step.pop(touched_path, None)
                     if stale is not None:
                         stale["content"] = (
-                            f"[pruned: {touched_path} was rewritten by a later "
-                            "write_file — re-read it if you need the current contents]"
+                            f"{_PRUNE_SENTINEL} {touched_path} was rewritten by a later "
+                            "write_file — re-read it if you need the current contents."
                         )
+        _compact_write_calls(messages, assistant_msg, write_records)
 
         stale_paths = [
             path for path, read_at in last_read_step.items()
@@ -739,8 +855,8 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         for path in stale_paths:
             read_at = last_read_step.pop(path)
             last_read_message.pop(path)["content"] = (
-                f"[pruned: {path} was read {step_num - read_at} steps ago — "
-                "re-read it if you need the current contents]"
+                f"{_PRUNE_SENTINEL} {path} was read {step_num - read_at} steps ago — "
+                "re-read it if you need the current contents."
             )
 
         for extra in finish_calls[1:]:

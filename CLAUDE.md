@@ -330,14 +330,52 @@ real pilot (`docs/multifile-agent/05-migration-and-pilot.md`) measured
 this costing 5-12x more input tokens than the single-file baseline for
 comparable changes; Sprint 6 traced it mostly to a write_file call's own
 arguments (the complete new file contents, JSON-escaped) never being
-pruned from the assistant message that made the call, and fixed it by
-squashing those arguments down to a short placeholder immediately after
-each write_file executes (success or rejection alike) — the model already
-generated that content and the tool result already reports the outcome;
-`read_file` is there if it needs the current bytes again. A second, milder
-fix prunes a `read_file` result once it's gone stale (outstanding more
-than `context_prune_after_steps` turns without being rewritten), on top of
-the pre-existing same-path-rewrite pruning.
+pruned from the assistant message that made the call. `_compact_write_calls`
+fixes that by **removing** each executed write_file call from the
+conversation outright — the tool call *and* its paired tool-result message
+— leaving only a short plain-text note on the assistant message carrying
+the observation verbatim (success or rejection alike). The model already
+generated that content and the note still reports the outcome; `read_file`
+is there if it needs the current bytes again. A second, milder fix prunes a
+`read_file` result once it's gone stale (outstanding more than
+`context_prune_after_steps` turns without being rewritten), on top of the
+pre-existing same-path-rewrite pruning.
+
+**Never leave synthesized arguments in a tool call the model can see.** The
+first version of the above kept each write_file call and merely replaced
+its `contents` argument with a short placeholder. That placeholder was
+110-118 bytes, and real pilot runs then had the model *copying it back* as
+the contents of modules meant to be several KB — writing the bookkeeping
+text to disk, reading it back, and re-copying it, in a fixed-point loop
+that burned 1-2.6M input tokens and shipped nothing. (An identical earlier
+variant that dropped the `path` key taught the model to omit `path`.) The
+model reads anything in an arguments slot as a worked example of a valid
+call, so rewriting arguments in place cannot be made safe — only removal
+can. Every placeholder the agent does emit now carries `_PRUNE_SENTINEL`,
+and `_write_file` rejects any write whose contents contain it, turning a
+silent corruption into a self-correcting error. Full write-up:
+`docs/multifile-agent/05-migration-and-pilot.md`, "Sprint 6 step 2".
+
+Two related lessons from the same pilot, both about the agent reading its
+own transcript literally. The compaction note's wording is load-bearing: an
+earlier draft said the write calls "were dropped from the conversation" and
+the model read that as *the writes didn't happen*, re-checking state until
+it exhausted its turn budget — it now leads with the call having completed
+and the file being on disk. And `_normalize_agent_path` collapses a leading
+`src/` on any agent path, because paths are already rooted there and
+`write_file("src/map.js")` otherwise nests to `src/src/map.js`; prompt
+wording alone did not stop the model doing this, and it left two competing
+`index.html` shells where `builder.build_game` reads only one.
+
+Verified live: exploding the 159KB Darkhold Arena source now passes on the
+first `finish` attempt in 9 turns / 405K input tokens, where the same run
+before these fixes burned 40 turns and 2.5M input tokens without ever
+reaching verification. The built artifact's JS is byte-identical to the
+original ignoring whitespace (122,333 non-whitespace bytes, all 365
+declarations intact). **Known gap:** that successful run split the game into
+a single 151KB `core.js` rather than cohesive modules — it passes every gate
+but buys nothing over staying single-file, since enhancing it still means
+rewriting a 151KB module. See the Sprint 6 step 2 doc's closing section.
 
 **The agent event stream + live chat UI.** Every think/act/observe/verify
 step is emitted through an `emit(role, content, data)` callback
