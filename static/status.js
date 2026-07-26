@@ -2,6 +2,7 @@
   const panel = document.getElementById("status-panel");
   const jobId = panel.dataset.jobId;
   const heading = document.getElementById("status-heading");
+  const sourceEl = document.getElementById("status-source");
   const promptEl = document.getElementById("status-prompt");
   const detail = document.getElementById("status-detail");
   const eta = document.getElementById("status-eta");
@@ -64,6 +65,11 @@
 
   function render(job) {
     heading.textContent = LABELS[job.status] || job.status;
+
+    if (sourceEl.hidden && job.source_title) {
+      sourceEl.textContent = `Enhancing "${job.source_title}" (v${job.source_version})`;
+      sourceEl.hidden = false;
+    }
 
     if (promptEl.hidden && job.prompt) {
       const verb = job.kind === "enhance" ? "Enhancing" : "Request";

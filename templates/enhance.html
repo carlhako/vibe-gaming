@@ -33,7 +33,7 @@
            data-ping-url="{{ url_for('enhance_lock_ping', game_id=game.game_id) }}"
            data-release-url="{{ url_for('enhance_lock_release', game_id=game.game_id) }}">
         <a class="back-link" href="{{ url_for('index') }}">&larr; back to the shelf</a>
-        <h1>Enhance &ldquo;{{ game.title }}&rdquo;</h1>
+        <h1>Enhance &ldquo;{{ game.title }}&rdquo; <span class="version-badge">v{{ game.version }}</span></h1>
         <p class="form-hint">
           Describe the change or fix you want. This creates a brand-new
           entry in the arcade with your changes — the original game is

@@ -830,6 +830,19 @@ body {
   margin-bottom: 10px;
 }
 
+.version-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 6px;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
 .form-hint {
   color: var(--muted);
   font-size: 13px;

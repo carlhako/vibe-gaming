@@ -950,6 +950,14 @@ def create_app(games_dir=None) -> Flask:
                 result_slug = game["slug"]
                 result_title = game["title"]
 
+        source_title = None
+        source_version = None
+        if job["source_game_id"]:
+            source_game = db.get_web_game(job["source_game_id"], conn=conn)
+            if source_game:
+                source_title = source_game["title"]
+                source_version = source_game["version"]
+
         queue_position = None
         eta_seconds = None
         avg_duration_seconds = db.get_average_duration(kind=job["kind"], conn=conn)
@@ -979,6 +987,8 @@ def create_app(games_dir=None) -> Flask:
             "tokens_used": job["tokens_used"],
             "duration_seconds": job["duration_seconds"],
             "source_game_id": job["source_game_id"],
+            "source_title": source_title,
+            "source_version": source_version,
         })
 
     @app.get("/api/jobs/<job_id>/events")
