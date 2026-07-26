@@ -49,18 +49,22 @@ SPLIT_CORE_JS = (
 )
 SPLIT_GAME_MD = "# Old School Arcade\n\n| file | purpose |\n| --- | --- |\n"
 
+# Same program as the scripted split, just inline — explode's
+# declaration-parity gate fails a split that loses any name the original
+# declared, so the fixture has to be an honest split of this source.
+SINGLE_FILE_HTML = (
+    '<!doctype html><html><head><style>' + SPLIT_STYLE_CSS + '</style></head>'
+    '<body><div id="count">0</div><button id="btn">Click</button>'
+    '<script>' + SPLIT_CORE_JS + '</script></body></html>'
+)
+
 
 def _setup_single_file_source(games_dir, game_id=SINGLE_GAME_ID,
                                title="Old School Arcade"):
     slug = f"old-school-arcade-{game_id[:4]}"
     game_dir = games_dir / slug
     game_dir.mkdir(parents=True)
-    (game_dir / "index.html").write_text(
-        "<!doctype html><html><body><div id='count'>0</div>"
-        "<button id='btn'>Click</button><script>"
-        "var c=0;document.getElementById('btn').onclick=function(){"
-        "c+=1;document.getElementById('count').textContent=c;};"
-        "</script></body></html>", encoding="utf-8")
+    (game_dir / "index.html").write_text(SINGLE_FILE_HTML, encoding="utf-8")
     (game_dir / "meta.json").write_text(json.dumps({
         "game_id": game_id, "title": title, "description": "d",
         "requested_by": "web:a", "created_at": db.now_iso(), "version": 1,
@@ -317,6 +321,33 @@ def test_every_llm_call_emits_a_usage_event_with_running_totals(
     assert usage[-1]["data"]["tokens_used"] == result["tokens_used"]
 
 
+def test_a_long_planning_thought_survives_into_the_stored_transcript(
+        isolated_db, games_dir):
+    """Reasoning is truncated before it's stored, so whatever the cap trims
+    is lost from the replay as well as the live view. A real explode's
+    opening plan runs to several thousand characters — it has to survive."""
+    _setup_single_file_source(games_dir)
+    job_id = "9" * 32
+    db.create_generation_request(
+        job_id=job_id, kind="explode", prompt="explode it",
+        requested_by="admin", source_game_id=SINGLE_GAME_ID,
+    )
+    long_plan = "I will split this game into modules. " * 400   # ~14,800 chars
+    turns = _successful_explode_turns()
+    turns[0].message["reasoning_content"] = long_plan
+    turns[0].raw_response["choices"][0]["reasoning_content"] = long_plan
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=turns), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result = agent.explode_game(
+            SINGLE_GAME_ID, "admin", CONFIG, games_dir=games_dir, job_id=job_id)
+    assert result["success"], result["error"]
+
+    thoughts = [e for e in db.get_agent_events(job_id) if e["role"] == "thought"]
+    assert thoughts, "the reasoning block should have been emitted"
+    assert thoughts[0]["content"] == long_plan.strip()   # emitted verbatim, untruncated
+
+
 def test_events_endpoint_exposes_job_token_totals_for_the_dialog(
         isolated_db, games_dir, monkeypatch):
     _setup_single_file_source(games_dir)
@@ -390,3 +421,36 @@ def test_history_offers_a_transcript_replay_only_for_jobs_that_have_one(
     transcript_jobs = re.findall(
         r'class="link-btn transcript-btn"\s+data-job-id="([0-9a-f]{32})"', html)
     assert transcript_jobs == [agent_job]
+
+    # Every row also links to /status/<job_id> — the literal page the
+    # requester watched, which replays in full from the same durable
+    # agent_events rows no matter how long ago the job ran.
+    assert f'href="/status/{agent_job}"' in html
+    assert f'href="/status/{plain_job}"' in html
+
+
+def test_a_finished_jobs_status_page_replays_the_whole_transcript(
+        isolated_db, games_dir, monkeypatch):
+    """The requester's screen is rebuildable after the fact because the chat
+    pane renders purely from agent_events, and emit() truncates before
+    storing — so what was shown and what was kept are the same bytes."""
+    job_id = "d" * 32
+    db.create_generation_request(
+        job_id=job_id, kind="enhance", prompt="make it faster",
+        requested_by="web:abc", source_game_id=None,
+    )
+    db.add_agent_event(job_id, "thought", "planning the change")
+    db.add_agent_event(job_id, "tool_call", "read_file('core.js')",
+                       {"tool": "read_file", "path": "core.js"})
+    db.add_agent_event(job_id, "build", "Verification passed",
+                       {"outcome": "success", "attempt": 1})
+    db.update_generation_request(job_id, status="success", attempts=1)
+
+    client = make_client(games_dir, monkeypatch)
+    page = client.get(f"/status/{job_id}").get_data(as_text=True)
+    assert f'id="chat-pane" data-job-id="{job_id}"' in page
+
+    replay = client.get(f"/api/jobs/{job_id}/events?since=0").get_json()
+    assert [e["role"] for e in replay["events"]] == ["thought", "tool_call", "build"]
+    assert replay["events"][0]["content"] == "planning the change"
+    assert replay["status"] == "success"

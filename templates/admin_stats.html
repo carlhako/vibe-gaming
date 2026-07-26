@@ -263,6 +263,9 @@
                 <td>
                   <div class="history-actions">
                     {% if r.result_slug %}<a class="game-row-play-link" href="{{ url_for('play', slug=r.result_slug) }}" target="_blank" rel="noopener">Play &#8599;</a>{% endif %}
+                    <a class="game-row-play-link" href="{{ url_for('job_status_page', job_id=r.job_id) }}"
+                       target="_blank" rel="noopener"
+                       title="The exact status page the requester saw, replayed">Status &#8599;</a>
                     <button type="button" class="link-btn history-prompt-btn" data-job-id="{{ r.job_id }}">Prompt</button>
                     <button type="button" class="link-btn history-json-btn" data-job-id="{{ r.job_id }}">JSON</button>
                     {% if r.has_agent_events %}

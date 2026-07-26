@@ -561,3 +561,239 @@ and `::test_explode_prompt_demands_several_modules_not_one`.
 **Not yet verified live** — no explode run has been done since these three
 changes, so "the split now produces ~6 cohesive modules" remains a
 prediction, not a measurement.
+
+### Live verification of the splitting fix: it splits, and that exposed a second bug
+
+Two live runs against the same 159,312-byte Darkhold Arena source
+(`deepseek-v4-flash`, thinking mode, the repo's real `config.yaml`).
+
+**Run A — the split works, the split game does not.** The prediction above
+held: the model wrote 8 JS modules (`config.js`, `map.js`, `entities.js`,
+`combat.js`, `input.js`, `update.js`, `render-core.js`, `render-draw.js`)
+plus `game.js`, instead of one 151KB `core.js`. Then all three
+verification attempts failed and the fork was rolled back:
+
+| attempt | failure |
+| --- | --- |
+| 1 | `build failed: referenced local file not found: 'render.js'` |
+| 2 | `CFG is not defined`; `Identifier 'STUCK_CHECK_INTERVAL' has already been declared`; `generateMap is not defined` |
+| 3 | `Identifier 'STUCK_CHECK_INTERVAL' has already been declared`; `window.mulberry32 is not a function` |
+
+1,859,544 input / 110,978 output tokens, 608s, ~$0.29, nothing shipped.
+
+Attempt 1 is a shell-desync: the model wrote `index.html` early, listing the
+modules it *planned*, then had `render.js` (76,060 bytes) rejected by the new
+60,000-byte ceiling, split it into `render-core.js` + `render-draw.js`, and
+never revised the shell. The size-rejection message now says explicitly that
+splitting a module obliges you to rewrite `src/index.html`'s `<script>` tags,
+not just `game.md`'s table.
+
+Attempts 2 and 3 are one root cause, and it is the more interesting one: **the
+original game is a single `(function () { ... })();` wrapping its entire
+program.** Nothing in it is global. Splitting that across sibling `<script>`
+blocks is the hard case, and the explode prompt said nothing at all about
+scope — so the model improvised, inconsistently: it kept per-module IIFEs
+(hence `CFG is not defined`, `generateMap is not defined`), declared the same
+constant in two modules (`STUCK_CHECK_INTERVAL` — a fatal redeclaration, not a
+per-file shadow), and invented `window.mulberry32` bridges for names declared
+as top-level `const`, which never become window properties.
+
+None of this was visible before, because the one-giant-module outcome had
+exactly one scope and therefore no cross-module linkage to get wrong. Fixing
+the splitting is what surfaced it. The prompt now has a `## One shared scope`
+section stating the four rules directly: delete the original's single outer
+IIFE rather than giving each module its own; declare every identifier exactly
+once across all modules; never bridge via `window.foo`; order the `<script>`
+tags so load-time reads follow their declarations, entry point last.
+
+**Run B — passes every gate, ships a broken game.** With the scope section
+added, run B split into 9 JS modules (largest 49,909 bytes) and passed on the
+third verification attempt: 3,015,813 input / 135,177 output tokens, 823s,
+~$0.46. The scope fix clearly worked — none of run A's simultaneous
+redeclaration/`window.*`/per-module-IIFE failures recurred; the two failures
+it did hit were single, sequential, and self-diagnosed using the new rules.
+
+But the behaviour-preservation check did not come back clean:
+
+```
+original JS (no ws): 122,333   built JS (no ws): 124,396   identical: False
+declarations: original 365, built 365, missing: ['screenX', 'screenY']
+```
+
+`function screenX(wx) { return wx - camera.x; }` and its `screenY` twin are
+**absent from the fork entirely**, while 22 call sites survive. Confirmed in
+a real browser against the built artifact:
+
+```
+load-time page errors: NONE          <- the smoke test passes
+typeof screenX in page: number
+value of screenX      : 0
+calling it            : TypeError: screenX is not a function
+```
+
+`screenX`/`screenY` are read-only `Window` built-ins. Inside the original's
+single IIFE those names were safe locals; dropping the IIFE moved them into
+global scope, where they collide. The model resolved the collision by
+deleting the declarations — and because the name still *resolves* (to the
+built-in number), nothing throws at load. It throws at call time, in world
+rendering, which a bare page-load smoke test never executes. Green build,
+broken game.
+
+This is the sharpest available demonstration that **build → safety scan →
+smoke test is structurally incapable of verifying this pass**: it checks that
+the page loads, not that the program is intact. Prompt text can't be trusted
+to hold the line either — run B had already been told to preserve behaviour.
+
+So explode now runs a deterministic gate of its own. `_explode_declaration_check`
+compares the set of names declared by the original's inline scripts against
+the built result's, and fails the finish with the exact missing list plus the
+rename-don't-delete remedy. It is wired in via a new optional `extra_verify`
+hook on `_run_react_loop`, so the loop stays unaware of which pass it drives.
+Replayed against the real run-B artifact it returns `['screenX', 'screenY']`
+— it would have caught this on the first attempt.
+
+Two supporting changes, neither sufficient alone:
+
+- **`explode_max_module_bytes` 60,000 -> 120,000.** A ceiling the model has
+  to dodge is worse than a loose one: it shrinks to fit instead of splitting,
+  and drops code doing so. Run B wrote `render.js` at 49,874 bytes — just
+  under 60,000 — and that is where `renderCharacterSelect` went missing; the
+  complete version came to 72,660. Re-emittability doesn't object at 120,000
+  (~30-40K tokens against a 150,000-token ceiling). Accepted trade-off: the
+  backstop is now inert below ~250KB of source, leaving the prompt's target
+  count as the only thing preventing one-giant-module there.
+- **Two prompt rules**: rename a built-in collision at declaration and every
+  call site rather than deleting it (noting that a deleted one won't error on
+  load); and never omit, abbreviate or stub code to fit the ceiling — split
+  instead, because the split is checked.
+
+Regression tests: `test_explode_rejects_a_split_that_drops_a_declaration`
+(the run-B failure in miniature, with the smoke test mocked green so only the
+parity gate stands between it and a broken game),
+`::test_explode_declaration_check_ignores_pure_reorganisation`, and
+`::test_explode_declaration_check_names_every_missing_symbol`.
+
+**Still not verified live:** no explode run has been done since the parity
+gate, the 120,000 ceiling, and the two prompt rules landed. Run B validated
+the scope fix at 60,000, nothing more.
+
+### Runs C and D: two ways to spend everything and ship nothing
+
+Both ran on `deepseek-v4-flash` with the 120,000 ceiling and the parity gate
+in place. Neither ever called `finish`, so neither produced anything at all —
+and a run that never verifies discards every module it wrote.
+
+**Run C** wrote the cleanest split of any run to that point: 9 JS modules,
+largest 52,028 bytes, and for the first time **zero ceiling rejections** (the
+60,000 -> 120,000 change removing all of run B's churn). It then spent five
+consecutive turns re-reading its own modules for consistency and was killed
+by the no-progress guard, which counts only a successful `write_file` as
+progress and so cannot distinguish a careful final review from a stall. The
+irony is direct: the "your split is checked for missing declarations" prompt
+rule added after run B is what encouraged the review that killed it.
+2,372,551 input / 84,018 output tokens, 527s, ~$0.36.
+
+A detail worth recording from run C's transcript: at one turn the model
+emitted, as its own assistant prose, a verbatim-looking copy of a
+`_compact_write_calls` note — "`[context-pruned] The write_file call(s) below
+COMPLETED SUCCESSFULLY ... Results: OK: wrote 48207`" — while actually
+calling only `list_files`. No 48,207-byte write exists anywhere in that job's
+`agent_events`. This is the same imitate-the-transcript mechanism as the stub
+bug and the `core.js` anchoring, surfacing a third time, here in narration
+rather than in a tool argument. It cost one wasted turn and self-corrected
+(`list_files` showed the file missing, and it rewrote it); `_write_file`'s
+`_PRUNE_SENTINEL` rejection still guards the dangerous version, where that
+text reaches disk.
+
+Fix: on hitting the no-progress threshold, a run that has written something
+now spends one nudge — "reading cannot verify anything, only finish() runs
+the build; call it now" — and only aborts if the stall survives it.
+
+**Run D** then exposed that the nudge was necessary but nowhere near
+sufficient. It burned all 60 steps and never called `finish`: 4,478,681 input
+/ 84,018 output tokens, ~$0.66, nothing shipped. It was not stuck — it wrote
+`render.js` at 79,318 bytes (accepted; the same module run A had rejected at
+76,060 under the old ceiling, which is the clearest single vindication of
+raising it) and then spent turn after turn auditing its own split for
+functions that were called but never defined, and for constants declared in
+two modules. The new "never omit code" and scope rules had made it thorough
+to the point of paralysis.
+
+The no-progress guard structurally cannot catch this: **any successful write
+resets it**, and a model alternating read/write indefinitely never trips it.
+So the loop now also watches the step budget directly — with a quarter of the
+steps left and still no `finish` attempt, it says plainly that a run ending
+without a passing finish ships nothing, and that machine verification checks
+the split far more strictly than re-reading the modules can. Sent once, and
+never once verification has already run, so a run working through a
+legitimate rejection isn't hurried into a worse one.
+
+Covered by `test_a_review_pass_before_finish_gets_nudged_not_killed`,
+`::test_the_finish_nudge_is_spent_once_and_a_real_stall_still_aborts`,
+`::test_a_run_that_never_wrote_anything_is_not_nudged`,
+`::test_a_run_running_out_of_steps_without_verifying_is_told_to_finish`, and
+`::test_the_budget_warning_is_not_sent_once_verification_has_run`.
+
+### Run E: explode works end-to-end, on v4-pro
+
+Same 159,312-byte Darkhold Arena source, 120,000 ceiling, parity gate and
+both nudges in place, model switched to `deepseek-v4-pro`. **Passed on the
+third verification attempt**: 2,309,556 input / 88,061 output tokens, 790s,
+~$0.35 — cheaper in absolute terms than run D's failed flash run ($0.66),
+because it converges instead of thrashing.
+
+The three attempts are a clean demonstration of why each gate exists:
+
+| attempt | rejected by | detail |
+| --- | --- | --- |
+| 1 | smoke test | `Identifier 'lastTime' has already been declared` (scope rule 2) |
+| 2 | **parity gate** | dropped 55 declarations incl. `drawPlayer`, `drawEnemy`, `drawMinion` |
+| 3 | — | passed |
+
+**Attempt 2 is the whole argument for the parity gate, observed live.** It
+passed build, safety scan *and* smoke test, and would have been recorded as a
+successful explode — shipping a game with no entity rendering whatsoever.
+Only the declaration check stood between that and the arcade.
+
+Final artifact: 8 real modules (`config.js` 4,937, `input.js` 2,856,
+`entities.js` 8,242, `game.js` 11,174, `map.js` 11,041, `combat.js` 18,725,
+`update.js` 30,301, `render.js` 74,877), against the one 151,899-byte
+`core.js` this section opened with.
+
+Behaviour checks beyond the pipeline's own:
+
+- `missing: []` — no declaration lost. `screenX`/`screenY` are present and,
+  in the built page, `typeof screenX === "function"` where the original
+  (having them inside its IIFE) reports the built-in `number`. Run B's exact
+  failure, inverted.
+- Play-tested in Chromium against the original side by side — click-through
+  character select, WASD, held-mouse attack, ~4s of game loop: **zero page
+  errors and a non-blank canvas for both.**
+- NOT byte-identical: +4,242 non-whitespace characters and +14 new
+  declarations (`toScreenX`, `toScreenY`, `mouseDown`, `scaleX`, …). Nothing
+  was lost, but this is not the pure reorganisation run 2 of the previous
+  session achieved, so subtle gameplay differences are not excluded. A human
+  play-test remains the only real proof, exactly as Part A always warned.
+
+Two cosmetic issues left alone deliberately, since every prompt addition in
+this sequence produced a behavioural surprise somewhere else:
+
+- The run left `render_ui.js` and `render_world.js` as 70-byte
+  "intentionally empty" comment stubs after consolidating rendering into
+  `render.js`. They are not referenced by `src/index.html`, so `build_game`
+  never reads them and the built artifact is unaffected — dead files, not a
+  defect.
+- `render.js` at 74,877 bytes is 46% of the JS. Better than one 151KB
+  module, short of the ~6 even modules the prompt asks for.
+
+**Model choice is now part of the recipe.** Every flash failure after the
+scope fix was a convergence failure, not a capability one — flash split the
+game sensibly every time and then failed to stop. `config.yaml.example` now
+recommends `deepseek-v4-pro` for `multifile_agent` only; `newaiwebgame` and
+`enhanceaiwebgame` are untouched.
+
+One caveat on attribution: run E changed the model *and* carried the budget
+warning. The warning fires at 15 steps remaining and run E reached finish at
+turn ~18, so it never triggered — reaching verification is attributable to
+the model, not to that fix. The fix still matters for flash and for larger
+sources; it just isn't what made this run pass.

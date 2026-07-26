@@ -94,10 +94,37 @@ DEFAULT_MAX_MODULE_BYTES = ai.MAX_OUTPUT_TOKENS * 3
 # ceiling and a target module count derived from the source size — the
 # ceiling is the backstop, the target is what actually shapes the split.
 # Overridable via cfg["explode_max_module_bytes"].
-DEFAULT_EXPLODE_MAX_MODULE_BYTES = 60_000
+#
+# 120_000, not the 60_000 this started at: a ceiling the model has to dodge
+# is actively dangerous, because it shrinks to fit rather than splitting.
+# The Darkhold pilot wrote render.js at 49,874 bytes — suspiciously just
+# under 60,000 — and that is exactly where it dropped renderCharacterSelect;
+# the complete version came to 72,660. Re-emittability doesn't object at
+# 120_000 either (~30-40K tokens, against a 150_000-token output ceiling),
+# and the target count below is what actually produces granularity. The
+# trade-off accepted here: at 120_000 the backstop is inert for sources
+# under ~250KB, so for those the prompt's target count is the only thing
+# holding the line against one-giant-module.
+DEFAULT_EXPLODE_MAX_MODULE_BYTES = 120_000
 EXPLODE_TARGET_MODULE_BYTES = 25_000
 
 _MAX_NO_PROGRESS_STEPS = 5
+
+# A run that never calls finish() ships NOTHING — every module written, every
+# token spent, discarded. Two consecutive real explode pilots died exactly
+# that way (docs/multifile-agent/05-migration-and-pilot.md): one was killed
+# mid-review by the no-progress guard, the next burned all 60 steps
+# self-auditing its split and never verified, at 4.5M tokens. The
+# no-progress guard cannot catch the second case — any successful write
+# resets it, and a model alternating read/write forever never trips it.
+#
+# So the loop also watches the step budget itself: with this many steps left
+# and still no finish attempt, tell the model plainly to stop auditing and
+# verify. Machine verification is both cheaper and stricter than the model
+# re-reading its own modules, and a rejection comes back with the exact
+# failure to fix.
+def _finish_nudge_threshold(max_steps: int) -> int:
+    return max(5, max_steps // 4)
 
 # Marks every placeholder this module leaves in the conversation where real
 # material was pruned away (compacted write calls, dropped read results).
@@ -371,8 +398,10 @@ def _write_file(game_dir: Path, path: str, contents: str, max_module_bytes: int)
         return (
             f"REJECTED: {path!r} is {size} bytes, over the {max_module_bytes}-byte "
             "module size ceiling. Split this module into smaller, cohesive "
-            "files instead of shrinking it — update game.md's file table to "
-            "match if you do."
+            "files instead of shrinking it. If you do, you MUST also rewrite "
+            "src/index.html so its <script> tags list the new files in place "
+            "of this one — a shell still pointing at a file you never wrote "
+            "fails the build — and update game.md's file table to match."
         )
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_text(contents, encoding="utf-8")
@@ -414,7 +443,16 @@ def _classify_failure(detail: str) -> str:
 # Event emission (Sprint 3) — durable, ordered think/act/observe transcript
 # ---------------------------------------------------------------------------
 
-_THOUGHT_MAX_CHARS = 4000
+# These caps apply *before* the event is stored, so the transcript a
+# requester watched and the transcript replayed months later are the same
+# bytes by construction — but anything trimmed here is gone from both. 4000
+# was too tight to review a run by: measured over a real explode pilot, 9 of
+# 10 reasoning blocks came in under 900 chars while the one that mattered
+# most — the up-front "here's how I'll split this game" plan — was the
+# single block that hit the ceiling and lost its tail. The chat panes
+# collapse anything past 240 chars into a <details>, so a longer thought
+# costs display space only when someone expands it.
+_THOUGHT_MAX_CHARS = 24000
 _ASSISTANT_MAX_CHARS = 2000
 
 
@@ -566,6 +604,67 @@ def _build_user_prompt(description: str) -> str:
     return f"Enhance/fix this game per this request: {description}"
 
 
+_INLINE_SCRIPT_RE = re.compile(
+    r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", re.S | re.I)
+_TOP_LEVEL_DECL_RE = re.compile(
+    r"\b(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)")
+
+
+def _declared_names(html: str) -> set[str]:
+    """Every name declared by the inline <script> blocks of `html`. Crude by
+    design — a regex, not a JS parser — because it's only ever used to
+    compare one program against a reorganized copy of itself, where a name
+    that vanishes entirely is the signal. Over-matching (a `const` inside a
+    function body) is harmless: it over-matches identically on both sides."""
+    return set(_TOP_LEVEL_DECL_RE.findall(
+        "".join(_INLINE_SCRIPT_RE.findall(html))))
+
+
+def _missing_declarations(source_html: str, built_html: str) -> list[str]:
+    return sorted(_declared_names(source_html) - _declared_names(built_html))
+
+
+def _explode_declaration_check(source_html: str):
+    """An extra explode-only verification gate: every name the single-file
+    original declared must still be declared somewhere in the split.
+
+    This exists because build->scan->smoke cannot catch the worst outcome
+    this pass has. Splitting a game whose whole program sat in one IIFE
+    moves its names into global scope, where some of them collide with
+    read-only Window built-ins — `screenX`, `screenY`, `name`, `status`,
+    `length`, `top`, `closed`, `origin`, and friends. The Darkhold pilot hit
+    exactly that, resolved the collision by DELETING
+    `function screenX(wx) {...}` and `function screenY(wy) {...}`, and still
+    passed every gate: `screenX` kept resolving — to the built-in number —
+    so the 22 surviving call sites raise TypeError at call time rather than
+    ReferenceError at load, and a page-load smoke test never runs world
+    rendering. The result was a green build and a game that breaks the
+    instant you start playing.
+
+    A name check is deterministic, needs no model, and turns that silent
+    class of failure into a precise, fixable message.
+    """
+    def check(game_dir, built_html):
+        missing = _missing_declarations(source_html, built_html)
+        if not missing:
+            return None
+        return (
+            "the split dropped "
+            f"{len(missing)} declaration(s) the original defined: "
+            + ", ".join(missing[:20])
+            + ("…" if len(missing) > 20 else "")
+            + ". Every function/const/let/class in the original must still be "
+              "declared exactly once somewhere in src/. If one was removed "
+              "because its name collides with a browser global once it's no "
+              "longer inside the original's IIFE (screenX, screenY, name, "
+              "status, length, top, …), RENAME it consistently at its "
+              "declaration and at every call site — do not delete it. Note "
+              "that a deleted one may not error on load: `screenX` still "
+              "resolves, to the built-in number, and only throws when called."
+        )
+    return check
+
+
 def _explode_target_module_count(source_bytes: int) -> int:
     """Roughly how many JS modules a source of this size should split into.
     Deliberately a range-anchor for the prompt, not a rule the loop
@@ -630,6 +729,50 @@ def _build_explode_system_prompt(source_title: str, source_html: str,
         "triggers a build + safety scan + smoke test of the assembled "
         "result; a failure comes back as this call's result so you can "
         "keep editing and call finish again.\n\n"
+        "## One shared scope — read this before you split anything\n"
+        "The build concatenates your modules into sibling <script> blocks in "
+        "the order src/index.html lists them. There is no module system, no "
+        "import/export, and NO per-file scope: every module's top-level "
+        "declarations land in one shared global scope. That makes four rules "
+        "non-negotiable.\n"
+        "1. If the original wraps its whole program in one IIFE — "
+        "`(function () { ... })();` around everything — DELETE that single "
+        "outer wrapper and distribute its body across your modules "
+        "unchanged. Do not give each module its own IIFE: names declared "
+        "inside one are invisible to every other module, which is the single "
+        "most common way this conversion fails.\n"
+        "2. Declare every identifier EXACTLY ONCE across all modules "
+        "combined. The same const/let/class name in two files is a fatal "
+        "redeclaration error that kills the entire game on load — it is not "
+        "a per-file shadow. If two subsystems both need a constant, it "
+        "belongs in exactly one module.\n"
+        "3. Never invent `window.foo = foo` bridges to pass things between "
+        "modules. Top-level const/let/class bindings never become window "
+        "properties, so `window.foo` reads undefined even where bare `foo` "
+        "works fine. Modules share a scope already — just use the bare name.\n"
+        "4. Order the <script> tags so anything executed at load time comes "
+        "after what it reads. Functions may call across modules freely once "
+        "everything has loaded, but a top-level const/let must be declared "
+        "before the first module that reads it while loading. Put the entry "
+        "point — the module that actually starts the game — last.\n"
+        "5. Dropping the outer IIFE puts every name into global scope, where "
+        "a few collide with read-only Window built-ins: screenX, screenY, "
+        "name, status, length, top, self, closed, origin, history, location, "
+        "focus, close, open, event. If the original declares one of those, "
+        "RENAME it (e.g. screenX -> toScreenX) at its declaration AND at "
+        "every call site. Never resolve such a collision by deleting the "
+        "declaration: the name still resolves — to the built-in — so nothing "
+        "fails on load and the game breaks only once that code actually "
+        "runs.\n\n"
+        "## Never drop code to fit\n"
+        "This conversion is behavior-preserving, and the module ceiling is "
+        "never a reason to omit anything. If a subsystem's code exceeds the "
+        "ceiling, SPLIT it across two modules (render_world.js + "
+        "render_ui.js) — never abbreviate it, summarize it, stub it, or "
+        "leave a function out to make the file fit. Every function and "
+        "constant in the original must appear exactly once across your "
+        "modules; the split is checked for this, and a missing declaration "
+        "fails verification.\n\n"
         "## Contract\n"
         "All HTML/CSS/JS stays inline within the src/ files (no separate "
         "asset files). You may load external JavaScript modules or "
@@ -740,7 +883,8 @@ def _compact_write_calls(messages: list[dict], assistant_msg: dict,
 
 
 def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
-                     cfg: dict, job_id: str | None, db_conn, emit: Callable | None = None) -> dict:
+                     cfg: dict, job_id: str | None, db_conn, emit: Callable | None = None,
+                     extra_verify: Callable | None = None) -> dict:
     """Drive the read_map/list_files/read_file/write_file/finish loop
     against game_dir until finish() passes build->scan->smoke, the
     verification-retry budget is exhausted, or the step budget runs out.
@@ -780,6 +924,14 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         Sprint 2) or it's simply gone stale — outstanding for more than
         `cfg["context_prune_after_steps"]` steps (default 3) without being
         rewritten.
+
+    `extra_verify(game_dir, built_html) -> str | None` is an optional gate
+    run only after build->scan->smoke has already passed; returning a string
+    turns that finish() into a failure carrying it as the detail. explode
+    uses it for the declaration-parity check (see
+    _explode_declaration_check), which catches a whole class of breakage the
+    standard gate structurally cannot. The loop itself stays unaware of
+    which pass it drives.
     """
     # 40 was too tight for a real explode: Sprint 6 step 2's pilot split a
     # 159KB game into 12 modules and hit the cap having never once called
@@ -818,6 +970,10 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     last_read_message: dict[str, dict] = {}
     last_read_step: dict[str, int] = {}
     consecutive_no_progress = 0
+    wrote_anything = False
+    nudged_to_finish = False
+    nudged_low_budget = False
+    finish_nudge_at = _finish_nudge_threshold(max_steps)
     summary = ""
     error = None
     success = False
@@ -914,6 +1070,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                 write_records.append((tc.id, content))
                 if touched_path and content.startswith("OK:"):
                     made_progress = True
+                    wrote_anything = True
                     stale = last_read_message.pop(touched_path, None)
                     last_read_step.pop(touched_path, None)
                     if stale is not None:
@@ -945,7 +1102,11 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
             call_content, call_data = _summarize_tool_call(finish_call)
             _safe_emit(emit, "tool_call", call_content, call_data)
             candidate_summary = _parse_finish_summary(finish_call.arguments)
-            passed, detail, _built_html = builder.build_and_verify(game_dir)
+            passed, detail, built_html = builder.build_and_verify(game_dir)
+            if passed and extra_verify is not None:
+                extra_detail = extra_verify(game_dir, built_html)
+                if extra_detail:
+                    passed, detail = False, extra_detail
             verification_attempts += 1
             if passed:
                 record_verification("success", None)
@@ -976,8 +1137,53 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
             })
             continue
 
+        # Running out of budget with nothing verified yet — independent of
+        # write cadence, which is why this is separate from the no-progress
+        # guard below (see _finish_nudge_threshold).
+        steps_left = max_steps - step_num
+        if (verification_attempts == 0 and wrote_anything
+                and not nudged_low_budget and steps_left <= finish_nudge_at):
+            nudged_low_budget = True
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"BUDGET WARNING: {steps_left} turn(s) remain, and you have "
+                    "not called finish yet. A run that ends without a passing "
+                    "finish ships NOTHING — every file you have written is "
+                    "discarded. Stop reviewing and call finish(summary) on your "
+                    "next turn. It runs the build, safety scan and smoke test, "
+                    "which check your split far more strictly than re-reading "
+                    "the modules can; if anything is wrong you get the exact "
+                    "failure back and can keep editing from there."
+                ),
+            })
+
         consecutive_no_progress = 0 if made_progress else consecutive_no_progress + 1
         if consecutive_no_progress >= _MAX_NO_PROGRESS_STEPS:
+            # Reading isn't writing, but it isn't necessarily stalling
+            # either: a run that has written files and is now re-reading
+            # them is doing a final consistency pass before finish. Killing
+            # that throws away a complete split for being careful — a real
+            # explode pilot wrote all 10 modules, spent its last turns
+            # reviewing them, and was aborted having never called finish
+            # (which the "your split is checked for missing declarations"
+            # prompt rule actively encourages). So spend one nudge before
+            # giving up; only a stall that survives the nudge is a stall.
+            if wrote_anything and not nudged_to_finish:
+                nudged_to_finish = True
+                consecutive_no_progress = 0
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"You have gone {_MAX_NO_PROGRESS_STEPS} turns without "
+                        "writing a file. Reading cannot verify anything — only "
+                        "finish(summary) runs the build, safety scan and smoke "
+                        "test. If every file is written, call finish(summary) "
+                        "NOW. If something is still missing or wrong, write it "
+                        "with write_file first, then call finish."
+                    ),
+                })
+                continue
             error = (
                 f"agent made no progress: {_MAX_NO_PROGRESS_STEPS} consecutive "
                 "turns without a successful write_file"
@@ -1262,6 +1468,7 @@ def explode_game(source_game_id: str, requested_by: str, config: dict, db_conn=N
         ),
         user_prompt=_build_explode_user_prompt(),
         cfg=explode_cfg, job_id=job_id, db_conn=db_conn, emit=emit,
+        extra_verify=_explode_declaration_check(source_html),
     )
     duration = time.monotonic() - t0
 

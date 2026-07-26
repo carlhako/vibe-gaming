@@ -381,10 +381,55 @@ The explode prompt described "cohesive modules" in prose while demonstrating
 a four-file split with exactly one JS module named `core.js`, and the model
 reproduced the demonstration. Explode now names several modules in its
 example, states a size-derived target count (`source_bytes / 25,000`, min 3)
-and why one big module defeats the purpose, and enforces its own tighter
-`explode_max_module_bytes` ceiling (60,000, vs `max_module_bytes`'s 450,000)
-via a cfg override, so `_run_react_loop` stays unaware of which pass it
-drives. Not yet verified live.
+and why one big module defeats the purpose, and enforces its own
+`explode_max_module_bytes` ceiling (120,000, vs `max_module_bytes`'s
+450,000) via a cfg override, so `_run_react_loop` stays unaware of which
+pass it drives. Verified live on the 159KB Darkhold Arena source: the split
+went from one 151KB `core.js` to 8 modules (largest 74,877), passing build,
+scan, smoke, the parity check below, and a side-by-side Chromium play-test
+against the original with zero runtime errors.
+
+That ceiling started at 60,000 and was raised, because **a ceiling the model
+has to dodge is worse than a loose one**: it shrinks a module to fit rather
+than splitting it, and drops code doing so. The pilot wrote `render.js` at
+49,874 bytes — just under 60,000 — and that is exactly where it lost
+`renderCharacterSelect`; the complete version came to 72,660. The target
+count, not the ceiling, is what actually produces granularity.
+
+**Splitting can silently delete code, and build→scan→smoke cannot catch
+it** — so explode runs one extra gate of its own,
+`_explode_declaration_check`, passed to `_run_react_loop` as `extra_verify`
+(an optional post-verification hook; the loop stays generic). It fails a
+finish whose built HTML no longer declares some name the single-file
+original declared. The reason it has to exist: a game whose whole program
+sits in one IIFE has names that are safe locally but collide with read-only
+`Window` built-ins once the IIFE is dropped — `screenX`, `screenY`, `name`,
+`status`, `length`, `top`. The Darkhold pilot resolved that collision by
+*deleting* `function screenX(wx){...}` and `screenY`, leaving 22 call
+sites, and still passed every gate: `screenX` kept resolving — to the
+built-in number — so the calls raise `TypeError` at call time rather than
+`ReferenceError` at load, and a page-load smoke test never reaches world
+rendering. Green build, game broken the instant you play it. The prompt
+also now tells the model to rename such a collision at every site rather
+than delete it, and never to omit code to fit the ceiling — but the
+deterministic check is what actually holds the line. It earned that live:
+the passing run's second attempt cleared build, scan AND smoke while having
+dropped 55 declarations including `drawPlayer`/`drawEnemy`/`drawMinion`, and
+only the parity check stopped a game with no entity rendering from shipping.
+
+**Explode runs on `deepseek-v4-pro`, not flash** (`multifile_agent.model`;
+the other two pipelines are untouched). Four flash runs failed on the hard
+case and every one was a *convergence* failure rather than a capability one —
+flash split the game sensibly each time, then audited its own modules until
+the step budget ran out without ever calling `finish`, shipping nothing.
+Pro reached verification in ~18 turns and passed, and was cheaper per run
+($0.35 vs $0.66) despite ~3.1x the token price. Two loop-level nudges back
+this up for flash and for bigger sources: one when a run has written files
+but gone `_MAX_NO_PROGRESS_STEPS` turns without writing (it's reviewing, not
+stalled — don't kill it, tell it to verify), and one when a quarter of the
+step budget remains with no `finish` attempt yet. A run that never calls
+`finish` discards everything it wrote, which is how two consecutive pilots
+burned ~$1 between them.
 
 **The agent event stream + live chat UI.** Every think/act/observe/verify
 step is emitted through an `emit(role, content, data)` callback
@@ -409,6 +454,21 @@ the whole job ends, and `generation_attempts` only gets a row per `finish()`
 verification, so without it a 60-turn agent run's spend is invisible until
 it's over. `agent_chat.js` has no renderer for the role and silently skips
 it, so the job status page is unchanged.
+
+**The transcript is the archive.** `agent_events` rows are never pruned or
+deleted, and the chat pane renders from nothing else, so `/status/<job_id>`
+replays a months-old enhance exactly as its requester watched it — the admin
+History tab links to it per row ("Status ↗"). The fidelity comes from
+`emit()` truncating *before* it stores: what was displayed and what was kept
+are the same bytes by construction. The flip side is that anything the caps
+trim is gone from both, which is why `_THOUGHT_MAX_CHARS` is 24000 and not
+its original 4000 — measured against a real explode run, 9 of 10 reasoning
+blocks were under 900 chars while the one that hit the ceiling was the
+opening "here's how I'll split this game" plan, i.e. exactly the block worth
+reviewing. Raw per-turn API payloads are still not stored for agent runs
+(unlike single-file jobs, where `generation_attempts.raw_response` holds
+them); that costs byte-exact model output and `finish_reason` for forensics,
+but nothing that any user ever saw on screen.
 
 **Exploding a game from the admin page.** `/admin/stats`' Games tab shows a
 per-game **Fmt** badge (`S` single-file / `E` exploded) resolved through

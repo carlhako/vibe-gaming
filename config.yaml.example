@@ -55,7 +55,17 @@ enhanceaiwebgame:
 # there's no output-ceiling-driven size note here the way LARGE_SOURCE_BYTES
 # exists for enhanceaiwebgame.
 multifile_agent:
-  model: "deepseek-v4-flash"
+  # v4-pro, not v4-flash, for this pass specifically. Exploding a 159KB
+  # single-IIFE game is the hardest thing the agent does, and v4-flash
+  # repeatedly failed to CONVERGE on it rather than failing on capability:
+  # it split sensibly but then audited its own modules until it ran out of
+  # steps, never once calling finish, so the run shipped nothing. v4-pro
+  # reached verification in ~18 turns and passed. It is ~3.1x the token
+  # price ($0.435/$0.87 vs $0.14/$0.28 per 1M) but was CHEAPER per run in
+  # practice -- $0.35 vs $0.66 -- because it converges instead of thrashing.
+  # See docs/multifile-agent/05-migration-and-pilot.md.
+  # model: "deepseek-v4-flash"
+  model: "deepseek-v4-pro"
   effort: "high"
   timeout_seconds: 1800        # per ai_client.ask_with_tools() call
   max_steps: 60                # hard cap on read/write/finish turns before giving up.
@@ -64,11 +74,17 @@ multifile_agent:
                                # nothing and ships nothing, so leave real headroom.
   max_verification_retries: 3  # finish() calls that fail build->scan->smoke before giving up
   max_module_bytes: 450000     # 3x ai_client.MAX_OUTPUT_TOKENS bytes; see agent.py
-  explode_max_module_bytes: 60000  # much tighter ceiling for the explode pass only: the
-                               # 450000 above is a "can this be re-emitted at all" limit,
-                               # not a target, and a 159KB game once split "successfully"
-                               # into a single 151KB module under it -- which passes every
-                               # gate but leaves later edits as expensive as before the split
+  explode_max_module_bytes: 120000  # ceiling for the explode pass only. The 450000 above
+                               # is a "can this be re-emitted at all" limit, not a target:
+                               # a 159KB game once split "successfully" into a single 151KB
+                               # module under it, passing every gate while leaving later
+                               # edits as expensive as before the split. This started at
+                               # 60000 and was raised because a ceiling the model has to
+                               # dodge is worse than a loose one -- it shrinks a module to
+                               # fit instead of splitting it, and drops code doing so
+                               # (see docs/multifile-agent/05-migration-and-pilot.md).
+                               # What actually drives granularity is the prompt's target
+                               # module count, source_bytes / 25000.
   context_prune_after_steps: 3 # steps a read_file result rides along before being pruned
 
 job_runner:

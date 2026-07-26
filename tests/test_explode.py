@@ -55,18 +55,23 @@ SPLIT_GAME_MD = (
 )
 
 
+# The single-file source is deliberately the SAME program the scripted
+# split re-emits, just inline: explode's declaration-parity gate rejects a
+# split that loses any name the original declared, so a fixture whose
+# "split" quietly renames things would (correctly) fail verification.
+SINGLE_FILE_HTML = (
+    '<!doctype html><html><head><style>' + SPLIT_STYLE_CSS + '</style></head>'
+    '<body><div id="count">0</div><button id="btn">Click</button>'
+    '<script>' + SPLIT_CORE_JS + '</script></body></html>'
+)
+
+
 def _setup_single_file_source(games_dir, html=None, title="Old School Arcade",
                                game_id=SOURCE_GAME_ID) -> dict:
     slug = f"old-school-arcade-{game_id[:4]}"
     game_dir = games_dir / slug
     game_dir.mkdir(parents=True)
-    html = html if html is not None else (
-        "<!doctype html><html><body><div id='count'>0</div>"
-        "<button id='btn'>Click</button><script>"
-        "var c=0;document.getElementById('btn').onclick=function(){"
-        "c+=1;document.getElementById('count').textContent=c;};"
-        "</script></body></html>"
-    )
+    html = html if html is not None else SINGLE_FILE_HTML
     (game_dir / "index.html").write_text(html, encoding="utf-8")
     (game_dir / "meta.json").write_text(json.dumps({
         "game_id": game_id, "title": title, "description": "d",
@@ -331,14 +336,10 @@ def test_auto_format_falls_back_to_legacy_for_small_singlefile_source(isolated_d
 
 
 def test_auto_format_explodes_then_enhances_large_singlefile_source(isolated_db, games_dir):
-    large_html = (
-        "<!doctype html><html><body><div id='count'>0</div>"
-        "<button id='btn'>Click</button><script>"
-        "var c=0;document.getElementById('btn').onclick=function(){"
-        "c+=1;document.getElementById('count').textContent=c;};"
-        "</script>" + ("<!-- padding " + "x" * 200 + " -->") * (ge.LARGE_SOURCE_BYTES // 200 + 1)
-        + "</body></html>"
-    )
+    large_html = SINGLE_FILE_HTML.replace(
+        "</body>",
+        ("<!-- padding " + "x" * 200 + " -->") * (ge.LARGE_SOURCE_BYTES // 200 + 1)
+        + "</body>")
     assert len(large_html.encode("utf-8")) >= ge.LARGE_SOURCE_BYTES
     _setup_single_file_source(games_dir, html=large_html)
 
@@ -426,3 +427,215 @@ def test_auto_format_falls_back_to_legacy_when_explode_fails(isolated_db, games_
     # Only the source + the one successful legacy fork should remain -- the
     # failed explode attempt's half-written directory must be cleaned up.
     assert len(after - before) == 1
+
+
+# ---------------------------------------------------------------------------
+# The declaration-parity gate: build -> safety scan -> smoke test structurally
+# cannot catch a split that silently drops code, so explode adds its own.
+# ---------------------------------------------------------------------------
+
+def test_explode_rejects_a_split_that_drops_a_declaration(isolated_db, games_dir):
+    """The Darkhold pilot's real failure, in miniature. The original wraps
+    everything in one IIFE and declares `screenX`; the split moves that into
+    global scope, where it collides with the read-only window.screenX
+    built-in, and the model resolves the collision by deleting the function
+    while leaving its call sites. Nothing errors on load — `screenX` still
+    resolves, to the built-in number — so a page-load smoke test is green and
+    the game breaks the moment that code path runs."""
+    source_js = (
+        '(function () {\n'
+        '  var camera = { x: 0 };\n'
+        '  function screenX(wx) { return wx - camera.x; }\n'
+        '  function draw() { return screenX(10); }\n'
+        '  draw();\n'
+        '})();\n'
+    )
+    _setup_single_file_source(games_dir, html=(
+        '<!doctype html><html><body><canvas id="c"></canvas>'
+        '<script>' + source_js + '</script></body></html>'))
+
+    # The split keeps every call site but loses the declaration itself.
+    lossy_core_js = (
+        'var camera = { x: 0 };\n'
+        'function draw() { return screenX(10); }\n'
+        'draw();\n'
+    )
+    responses = [
+        _turn([("write_file", {"path": "index.html", "contents":
+                '<!doctype html><html><body><canvas id="c"></canvas>'
+                '<script src="core.js"></script></body></html>'})]),
+        _turn([("write_file", {"path": "core.js", "contents": lossy_core_js})]),
+        _turn([("write_file", {"path": "game.md", "contents": SPLIT_GAME_MD})]),
+        _turn([("finish", {"summary": "split into modules"})]),
+        _turn([("finish", {"summary": "still split"})]),
+    ]
+
+    bad_cfg = copy.deepcopy(CONFIG)
+    bad_cfg["multifile_agent"]["max_verification_retries"] = 1
+    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result = agent.explode_game(
+            SOURCE_GAME_ID, "web:t", bad_cfg, games_dir=games_dir)
+
+    # The standard gate passed (mocked smoke test succeeds, safety scan is
+    # clean) — only the parity check stands between this and a broken game.
+    assert not result["success"]
+    assert "screenX" in result["error"]
+    assert "dropped" in result["error"]
+
+
+def test_explode_declaration_check_ignores_pure_reorganisation(isolated_db, games_dir):
+    """The gate must not fire on a legitimate split: same names, different
+    files, IIFE removed, whitespace and ordering changed."""
+    source = ('<!doctype html><html><body><script>'
+              '(function () { var a = 1; function go() { return a; } go(); })();'
+              '</script></body></html>')
+    built = ('<!doctype html><html><body><script>var a = 1;</script>'
+             '<script>\n  function go() {\n    return a;\n  }\n  go();\n</script>'
+             '</body></html>')
+    assert agent._missing_declarations(source, built) == []
+
+
+def test_explode_declaration_check_names_every_missing_symbol(isolated_db, games_dir):
+    source = ('<html><script>function alpha(){} const beta = 2; let gamma = 3;'
+              '</script></html>')
+    built = '<html><script>function alpha(){}</script></html>'
+    assert agent._missing_declarations(source, built) == ["beta", "gamma"]
+
+
+# ---------------------------------------------------------------------------
+# The no-progress guard must not abort a run that has written everything and
+# is doing a final read-through before finish().
+# ---------------------------------------------------------------------------
+
+def _reads(n):
+    """n turns that only read — no write, no finish."""
+    return [_turn([("read_file", {"path": "core.js"})]) for _ in range(n)]
+
+
+def test_a_review_pass_before_finish_gets_nudged_not_killed(isolated_db, games_dir):
+    """A real explode pilot wrote all 10 modules, spent its last turns
+    re-reading them for consistency, and was aborted by the no-progress guard
+    having never called finish — throwing away a complete split for being
+    careful. One nudge should recover it."""
+    _setup_single_file_source(games_dir)
+    responses = (
+        [_turn([("write_file", {"path": "index.html", "contents": SPLIT_INDEX_HTML})]),
+         _turn([("write_file", {"path": "style.css", "contents": SPLIT_STYLE_CSS})]),
+         _turn([("write_file", {"path": "core.js", "contents": SPLIT_CORE_JS})]),
+         _turn([("write_file", {"path": "game.md", "contents": SPLIT_GAME_MD})])]
+        + _reads(agent._MAX_NO_PROGRESS_STEPS)      # the review pass
+        + [_turn([("finish", {"summary": "split into modules"})])]
+    )
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result = agent.explode_game(SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir)
+
+    assert result["success"], result["error"]
+    assert builder.is_multi_file(games_dir / result["slug"])
+
+
+def test_the_finish_nudge_is_spent_once_and_a_real_stall_still_aborts(
+        isolated_db, games_dir):
+    """The nudge must not turn a genuinely stuck run into an unbounded one:
+    a second stall after the nudge still ends the run."""
+    _setup_single_file_source(games_dir)
+    responses = (
+        [_turn([("write_file", {"path": "core.js", "contents": SPLIT_CORE_JS})])]
+        + _reads(agent._MAX_NO_PROGRESS_STEPS * 2 + 4)
+    )
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result = agent.explode_game(SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir)
+
+    assert not result["success"]
+    assert "no progress" in result["error"]
+
+
+def test_a_run_that_never_wrote_anything_is_not_nudged(isolated_db, games_dir):
+    """The nudge tells the model to call finish because its files are on
+    disk. With nothing written that would be wrong, so the guard aborts at
+    the usual threshold."""
+    _setup_single_file_source(games_dir)
+    responses = _reads(agent._MAX_NO_PROGRESS_STEPS + 3)
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result = agent.explode_game(SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir)
+
+    assert not result["success"]
+    assert "no progress" in result["error"]
+
+
+def test_a_run_running_out_of_steps_without_verifying_is_told_to_finish(
+        isolated_db, games_dir):
+    """A run that never calls finish ships nothing — every module written is
+    discarded. A real pilot burned all 60 steps self-auditing its split and
+    never verified, at 4.5M tokens. The no-progress guard cannot catch that:
+    any successful write resets it, so a model alternating read/write never
+    trips it. The step budget itself has to be watched."""
+    _setup_single_file_source(games_dir)
+    cfg = copy.deepcopy(CONFIG)
+    cfg["multifile_agent"]["max_steps"] = 12          # nudge threshold: 5 left
+
+    sent = []
+
+    def scripted(messages, **_kwargs):
+        sent.append([m for m in messages if m.get("role") == "user"])
+        n = len(sent)
+        if n == 1:
+            return _turn([("write_file", {"path": "index.html", "contents": SPLIT_INDEX_HTML})])
+        if n == 2:
+            return _turn([("write_file", {"path": "style.css", "contents": SPLIT_STYLE_CSS})])
+        if n == 3:
+            return _turn([("write_file", {"path": "core.js", "contents": SPLIT_CORE_JS})])
+        if n == 4:
+            return _turn([("write_file", {"path": "game.md", "contents": SPLIT_GAME_MD})])
+        # Now alternate read/write forever: made_progress keeps resetting, so
+        # only the budget watcher can break this.
+        if n % 2 == 0:
+            return _turn([("write_file", {"path": "core.js", "contents": SPLIT_CORE_JS})])
+        return _turn([("read_file", {"path": "core.js"})])
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        agent.explode_game(SOURCE_GAME_ID, "web:t", cfg, games_dir=games_dir)
+
+    warnings = [m for turn in sent for m in turn
+                if "BUDGET WARNING" in (m.get("content") or "")]
+    assert warnings, "the run should have been warned before its budget ran out"
+    # Warned exactly once, however many turns it then took.
+    assert len({m["content"] for m in warnings}) == 1
+    assert "ships NOTHING" in warnings[0]["content"]
+
+
+def test_the_budget_warning_is_not_sent_once_verification_has_run(
+        isolated_db, games_dir):
+    """The warning is about never verifying. A run that already called finish
+    and is working through a rejection must not be hurried."""
+    _setup_single_file_source(games_dir)
+    cfg = copy.deepcopy(CONFIG)
+    cfg["multifile_agent"]["max_steps"] = 12
+    cfg["multifile_agent"]["max_verification_retries"] = 5
+
+    sent = []
+
+    def scripted(messages, **_kwargs):
+        sent.append([m for m in messages if m.get("role") == "user"])
+        n = len(sent)
+        if n == 1:
+            return _turn([("write_file", {"path": "index.html", "contents": SPLIT_INDEX_HTML})])
+        if n == 2:
+            return _turn([("write_file", {"path": "core.js", "contents": SPLIT_CORE_JS})])
+        if n == 3:
+            return _turn([("finish", {"summary": "done"})])   # fails: no game.md yet
+        return _turn([("read_file", {"path": "core.js"})])
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(False, "boom")):
+        agent.explode_game(SOURCE_GAME_ID, "web:t", cfg, games_dir=games_dir)
+
+    assert not [m for turn in sent for m in turn
+                if "BUDGET WARNING" in (m.get("content") or "")]
