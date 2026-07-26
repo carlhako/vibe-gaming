@@ -15,6 +15,7 @@
   const heading = document.getElementById("explode-heading");
   const intro = document.getElementById("explode-intro");
   const stateEl = document.getElementById("explode-state");
+  const stepEl = document.getElementById("explode-step");
   const usageEl = document.getElementById("explode-usage");
   const log = document.getElementById("explode-log");
   const startBtn = document.getElementById("explode-start");
@@ -54,6 +55,13 @@
            (outputTokens || 0) / 1e6 * outputCostPerMillion;
   }
 
+  function setStep(data) {
+    if (!data || data.step == null) return;
+    stepEl.textContent = data.model
+      ? `Step ${data.step} · ${data.model}`
+      : `Step ${data.step}`;
+  }
+
   function setUsage(data) {
     if (!data) {
       usageEl.textContent = "";
@@ -87,6 +95,7 @@
         // The running token/cost readout above is the headline; keep the
         // per-call line too so a run that stalls shows *where* it burned.
         setUsage(data);
+        setStep(data);
         return el("div", "chat-msg chat-msg-usage", "📊 " + (event.content || ""));
       case "tool_call": {
         const icon = TOOL_ICON[data.tool] || "🔧";
@@ -244,6 +253,7 @@
     stopPolling();
     log.replaceChildren();
     usageEl.textContent = "";
+    stepEl.textContent = "";
     stateEl.textContent = "ready";
     stateEl.className = "explode-state";
     heading.textContent = title;

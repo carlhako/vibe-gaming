@@ -1603,6 +1603,11 @@ body {
   color: var(--hue-2);
 }
 
+.explode-step {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .explode-usage {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
