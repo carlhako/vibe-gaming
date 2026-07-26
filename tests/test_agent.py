@@ -191,6 +191,58 @@ def test_oversized_write_rejected_then_smaller_write_succeeds(isolated_db, games
 
 
 # ---------------------------------------------------------------------------
+# 2a. Sprint 6 item D (docs/multifile-agent/06-streaming-and-polish.md): a
+#     write past module_warn_bytes still succeeds, but carries a soft lint
+#     note in its own observation so it survives compaction into the
+#     transcript. A write comfortably under the threshold carries no note.
+# ---------------------------------------------------------------------------
+
+def test_write_past_warn_threshold_succeeds_with_a_soft_lint_note(isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    small_cfg = {
+        "game_web": CONFIG["game_web"],
+        "multifile_agent": dict(CONFIG["multifile_agent"], max_module_bytes=100),
+    }
+    over_threshold = "x" * 60  # > module_warn_bytes (50 = half of 100), under the 100 ceiling
+    responses = [
+        _turn([("write_file", {"path": "core.js", "contents": over_threshold})]),
+        _turn([("finish", {"summary": "a large-ish edit"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses, config=small_cfg)
+
+    assert result["success"], result["error"]
+    # seen[-1] is the conversation as sent for the finish turn, i.e. after
+    # the write_file call has already been compacted out of history.
+    note = _assistant_notes(seen[-1])
+    assert "OK: wrote 60 bytes" in note
+    assert "getting large" in note
+    assert "100-byte ceiling" in note
+
+
+def test_write_under_warn_threshold_has_no_lint_note(isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    small_cfg = {
+        "game_web": CONFIG["game_web"],
+        "multifile_agent": dict(CONFIG["multifile_agent"], max_module_bytes=100),
+    }
+    under_threshold = "x" * 10  # well under module_warn_bytes (50)
+    responses = [
+        _turn([("write_file", {"path": "core.js", "contents": under_threshold})]),
+        _turn([("finish", {"summary": "a small edit"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses, config=small_cfg)
+
+    assert result["success"], result["error"]
+    note = _assistant_notes(seen[-1])
+    assert "OK: wrote 10 bytes" in note
+    assert "getting large" not in note
+
+
+# ---------------------------------------------------------------------------
 # 2b. Context pruning (Sprint 6, docs/multifile-agent/06-streaming-and-polish.md):
 #     the Sprint 5 pilot found the agent path used 5-12x more input tokens
 #     than the single-file baseline, dominated by write_file calls' own

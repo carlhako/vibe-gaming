@@ -91,6 +91,11 @@ multifile_agent:
                                # What actually drives granularity is the prompt's target
                                # module count, source_bytes / 25000.
   context_prune_after_steps: 3 # steps a read_file result rides along before being pruned
+  # module_warn_bytes: 225000   # soft lint threshold (transcript note only, never blocks
+                               # the write). Optional: defaults to half of whichever
+                               # max_module_bytes ceiling applies to the current pass
+                               # (agent.DEFAULT_MODULE_WARN_RATIO), so it also scales down
+                               # automatically during explode's tighter 120000 ceiling.
 
 job_runner:
   workers: 1                 # poll-loop threads per process (dev) / per gunicorn worker (prod)

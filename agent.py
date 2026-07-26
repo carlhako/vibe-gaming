@@ -82,6 +82,15 @@ _logger = logging.getLogger(__name__)
 # physical limit. Configurable per-call via cfg["max_module_bytes"].
 DEFAULT_MAX_MODULE_BYTES = ai.MAX_OUTPUT_TOKENS * 3
 
+# Sprint 6 item D: a soft lint, not a gate. DEFAULT_MAX_MODULE_BYTES stops a
+# write that can't be re-emitted at all; by the time a module is anywhere
+# near it, the game has already grown past the point a whole-module rewrite
+# stays cheap. Warning at half the applicable ceiling gives the model a
+# nudge to split proactively, on the next unrelated edit to that module,
+# well before it's forced to by a rejection. Never blocks the write.
+# Configurable per-call via cfg["module_warn_bytes"].
+DEFAULT_MODULE_WARN_RATIO = 0.5
+
 # The ReAct agent defaults to v4-pro where the rest of the app defaults to
 # ai.MODEL_DEFAULT (v4-flash) — this is the one pipeline with direct evidence
 # against flash. Exploding a 159KB single-IIFE game failed on flash four
@@ -391,7 +400,8 @@ def _read_file(game_dir: Path, path: str) -> str:
     return file_path.read_text(encoding="utf-8")
 
 
-def _write_file(game_dir: Path, path: str, contents: str, max_module_bytes: int) -> str:
+def _write_file(game_dir: Path, path: str, contents: str, max_module_bytes: int,
+                 warn_bytes: int) -> str:
     file_path = _resolve_agent_path(game_dir, path)
     size = len(contents.encode("utf-8"))
     if _PRUNE_SENTINEL in contents:
@@ -421,10 +431,21 @@ def _write_file(game_dir: Path, path: str, contents: str, max_module_bytes: int)
         )
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_text(contents, encoding="utf-8")
-    return f"OK: wrote {size} bytes to {path}"
+    ok = f"OK: wrote {size} bytes to {path}"
+    if size > warn_bytes:
+        # Soft lint only — the write already happened above. Folded into the
+        # same observation string (not a separate event) so it survives
+        # _compact_write_calls' note verbatim, same as the OK line itself.
+        ok += (
+            f". Note: {path!r} is getting large ({size} of a {max_module_bytes}-byte "
+            "ceiling) — consider splitting it into smaller cohesive modules on "
+            "your next pass through this file, before it forces a rejection."
+        )
+    return ok
 
 
-def _execute_tool(tc: ai.ToolCall, game_dir: Path, max_module_bytes: int) -> tuple[str, str | None]:
+def _execute_tool(tc: ai.ToolCall, game_dir: Path, max_module_bytes: int,
+                   warn_bytes: int) -> tuple[str, str | None]:
     """Run one non-finish tool call. Returns (observation, touched_path) —
     touched_path is the path read/written (for staleness pruning), or None
     for tools that don't target a single file. Never raises: an AgentError
@@ -441,7 +462,7 @@ def _execute_tool(tc: ai.ToolCall, game_dir: Path, max_module_bytes: int) -> tup
         if tc.name == "write_file":
             path, contents = _parse_write_args(tc.arguments)
             path = _normalize_agent_path(path)
-            return _write_file(game_dir, path, contents, max_module_bytes), path
+            return _write_file(game_dir, path, contents, max_module_bytes, warn_bytes), path
         return f"ERROR: unknown tool {tc.name!r}", None
     except AgentError as exc:
         return f"ERROR: {exc}", None
@@ -960,6 +981,9 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     max_steps = cfg.get("max_steps", 60)
     max_verification_retries = cfg.get("max_verification_retries", 3)
     max_module_bytes = cfg.get("max_module_bytes", DEFAULT_MAX_MODULE_BYTES)
+    module_warn_bytes = cfg.get(
+        "module_warn_bytes", int(max_module_bytes * DEFAULT_MODULE_WARN_RATIO)
+    )
     max_read_age_steps = cfg.get("context_prune_after_steps", 3)
     # `or` rather than a get() default, so an explicitly blank model in a
     # config still lands on the agent's own default instead of falling
@@ -1077,7 +1101,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         for tc in other_calls:
             call_content, call_data = _summarize_tool_call(tc)
             _safe_emit(emit, "tool_call", call_content, call_data)
-            content, touched_path = _execute_tool(tc, game_dir, max_module_bytes)
+            content, touched_path = _execute_tool(tc, game_dir, max_module_bytes, module_warn_bytes)
             obs_content, obs_data = _summarize_observation(tc.name, touched_path, content)
             _safe_emit(emit, "tool_result", obs_content, obs_data)
             msg = {"role": "tool", "tool_call_id": tc.id, "content": content}
