@@ -135,7 +135,13 @@ def build_and_verify(game_dir) -> tuple[bool, str, str]:
             return False, f"build failed: {exc}", ""
         (game_dir / "index.html").write_text(built_html, encoding="utf-8")
     else:
-        built_html = (game_dir / "index.html").read_text(encoding="utf-8")
+        index_path = game_dir / "index.html"
+        if not index_path.is_file():
+            # Reachable mid-explode (Sprint 5): the model can call finish()
+            # before src/index.html exists yet, and there's no legacy
+            # index.html either since this fork was never staged from one.
+            return False, "build failed: no src/index.html or index.html found yet", ""
+        built_html = index_path.read_text(encoding="utf-8")
 
     violations = safety.scan(built_html)
     if violations:

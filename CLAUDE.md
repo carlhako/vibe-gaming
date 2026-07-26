@@ -12,14 +12,22 @@ since grown its own web UI, background job runner, fork-on-enhance model,
 ratings, and access-log/admin-stats page across four sprints (see
 `docs/sprints/`).
 
-Every game is one `index.html` — canvas or DOM, all HTML/CSS/JS inline,
-optionally pulling a script/stylesheet from an allow-listed CDN. Games are
-served inside a sandboxed `<iframe>` (`sandbox="allow-scripts allow-forms
-allow-pointer-lock"`, no `allow-same-origin`), so a generated game gets an
-opaque origin and cannot reach cookies, localStorage, the parent frame, or
-other games. That sandbox is the primary security boundary; the safety
-scanner and smoke test below are defense-in-depth on top of it, not the
-main line of defense.
+Every game is **served** as one `index.html` — canvas or DOM, all HTML/CSS/JS
+inline, optionally pulling a script/stylesheet from an allow-listed CDN.
+Games are served inside a sandboxed `<iframe>` (`sandbox="allow-scripts
+allow-forms allow-pointer-lock"`, no `allow-same-origin`), so a generated
+game gets an opaque origin and cannot reach cookies, localStorage, the
+parent frame, or other games. That sandbox is the primary security
+boundary; the safety scanner and smoke test below are defense-in-depth on
+top of it, not the main line of defense.
+
+Most games are authored single-file too (the model emits one complete
+`index.html` directly). A game whose source is genuinely too large to ever
+re-emit in a single model response instead lives split across multiple
+files on disk (`game.md` + `src/index.html` + `src/style.css` + `src/*.js`)
+and gets deterministically inlined back into one served `index.html` by a
+no-AI build step — see "Multi-file games" below. Serving, the sandbox, and
+`safety.py`/`smoke_test.py` never know the difference.
 
 ## Commands
 
@@ -154,6 +162,18 @@ aspirational:
   gitignored, so this is what gives the bundled games working rate/Enhance
   controls on a fresh clone. A game directory with no `game_id` still
   lists and plays off the disk scan, but can't be rated or enhanced.
+- **Multi-file games + the ReAct editing agent** (`docs/multifile-agent/`):
+  a game whose source is too large to ever re-emit whole in one model
+  response is authored split across `game.md` + `src/index.html` +
+  `src/style.css` + `src/*.js`, and `builder.py` deterministically inlines
+  that split source back into the one served `index.html` — no AI
+  involved in the build step itself. Enhancing a multi-file game runs
+  `agent.py`'s ReAct loop (`read_map`/`list_files`/`read_file`/
+  `write_file`/`finish` tools) instead of the whole-file resubmit loop, so
+  the model only ever reads/rewrites the modules a change touches. See
+  "Multi-file games" below for the full picture, including the live agent
+  transcript UI and the explode/dual-format policy that converts an
+  existing single-file game into this format.
 
 ## Not done / explicitly out of scope
 
@@ -251,6 +271,88 @@ tool-call arguments *unredacted* in `generation_attempts.raw_response`
 bytes are inspectable) — successful attempts still strip them, since the
 source is on disk.
 
+## Multi-file games: format, the ReAct agent, the live chat UI, and explode
+
+This is the "multi-file agent" initiative (`docs/multifile-agent/`,
+6 sprints), built to get around a hard structural limit: one game
+(Sorcerer With A Minigun) grew past DeepSeek's ~65,536-completion-token
+ceiling, past which the model can never re-emit a whole `index.html` again
+in one response, by any trick. The fix has two parts — a format that never
+requires a whole-game read/write, and a live transcript UI so an
+edit-by-edit agent run is still legible to the requester.
+
+**Format.** A multi-file game's *source* is split on disk:
+`games/<slug>/game.md` (a prose description plus a table of every `src/`
+file and its purpose) and `games/<slug>/src/{index.html,style.css,*.js}`.
+`builder.build_game(src_dir)` inlines every local `<link rel="stylesheet">`
+and `<script src=...>` ref (in document order) into one HTML string —
+external CDN refs (`safety.ALLOWED_CDN_HOSTS`) are left alone;
+`builder.write_built_index()` writes that string to the game's real,
+served `index.html`. `builder.is_multi_file(game_dir)` tells the two
+formats apart (authoritative `meta.json["format"]`, falling back to
+"does `src/index.html` exist" for fixtures/mid-run forks that have no
+`meta.json` yet). `builder.build_and_verify(game_dir)` is the shared
+build → `safety.scan()` → `smoke_test.run_smoke_test()` gate both formats
+go through — a no-op passthrough (read the existing `index.html` straight
+through) for single-file games.
+
+**The ReAct agent** (`agent.py`) is what enhances a multi-file game.
+Instead of resubmitting the complete file, the model drives a bounded
+tool loop: `read_map()`, `list_files()`, `read_file(path)` to explore, then
+`write_file(path, contents)` to replace one whole module (rejected over
+`max_module_bytes` — split it instead of shrinking it), then
+`finish(summary)` to trigger `builder.build_and_verify()`; a failure comes
+back as `finish`'s tool result so the model keeps editing and calls
+`finish` again, up to `max_verification_retries`. `agent.enhance_multifile_game()`
+forks exactly like `game_enhancer.enhance_game()` (new `games/<slug>/`,
+`parent_game_id`/`root_game_id`, source untouched, a failed run deletes
+the half-written fork) — it's the multi-file-source counterpart
+`job_runner.py` dispatches to instead of `game_enhancer.enhance_game()`.
+Config lives under `multifile_agent:` in `config.yaml` (model/effort/
+max_steps/max_verification_retries/max_module_bytes).
+
+**The agent event stream + live chat UI.** Every think/act/observe/verify
+step is emitted through an `emit(role, content, data)` callback
+(`agent.py`'s default writes a `db.add_agent_event` row keyed by
+`job_id`). `GET /api/jobs/<job_id>/events?since=<seq>` returns everything
+newer than `seq` — the incremental slice `static/agent_chat.js` polls
+every second on the job status page. `templates/status.html` is a
+two-pane `.job-shell`: the left pane is the original `status.js`-driven
+queue/ETA/timer panel (unchanged), the right pane (`#chat-pane`) is
+`agent_chat.js`'s independent, Claude-chat-style transcript — thoughts
+collapse past 240 chars, tool calls/results get an icon and a short
+summary (never the full file contents), a `build` event renders ✅/❌ with
+the attempt number, and a terminal `final` event renders the notes plus a
+Play link. Legacy single-file jobs have no agent events at all — the pane
+just shows "No live transcript for this job" and the left pane alone
+carries the whole experience, exactly as before this feature existed.
+
+**Explode + the dual-format enhance policy** (`agent.explode_game()`,
+`agent.enhance_game_auto_format()`) convert an *existing single-file* game
+into this format. `explode_game()` hands the model the whole original
+`index.html` as input context (input tokens aren't subject to the output
+ceiling) and has it re-emit the same game split across `write_file` calls
+— behavior-preserving by contract and gated by the same
+`build_and_verify()`, but only a manual play-test actually confirms the
+game still *plays* identically, not just "console-error-free." It forks
+like any other enhance (`parent_game_id`/`root_game_id` back to the
+single-file source) except the title defaults to the source's own title
+verbatim, since this is a format change, not a content change.
+`enhance_game_auto_format()` is `job_runner.py`'s single dispatch point
+for every `kind='enhance'` job: a multi-file source goes straight to
+`enhance_multifile_game()`; a single-file source at or over
+`game_enhancer.LARGE_SOURCE_BYTES` gets auto-exploded first (the resulting
+intermediate fork is hidden via `db.set_game_hidden` — it's an
+implementation detail, not something the requester asked to see as its
+own arcade entry, though its lineage still chains through it to the
+original single-file source) and then enhanced on that fork for the
+actual requested change; everything else keeps using the legacy
+`game_enhancer.enhance_game()` path untouched. If the explode step itself
+fails, the whole request falls back to the legacy single-file path rather
+than failing over an internal step the user never directly asked for.
+`builder.build_and_verify()` treats a not-yet-written `index.html` (either
+format, mid-explode) as a normal failed-verification result, not a crash.
+
 ## Running locally
 
 See `README.md` for the full quickstart (including `ADMIN_TOKEN` and the
@@ -279,41 +381,54 @@ disk-sync register it.
 app.py                 Flask site: menu, /games/new, /games/<id>/enhance,
                         /games/<id>/download, /status/<job_id>, /api/games
                         (sort), /api/games/<id>/info (prompt/model/tokens/
-                        lineage), rate endpoint, report endpoint, /signup,
+                        lineage), /api/jobs/<job_id>/events (agent transcript),
+                        rate endpoint, report endpoint, /signup,
                         /u/<uid> (sign-in link), /signin, /account, /profile,
                         /leaderboard, access-log middleware, /admin/stats,
                         /admin/games/download, /admin/reports
 job_runner.py           DB-polling background worker: claims generation_requests,
-                        dispatches to game_generator/game_enhancer
+                        dispatches to game_generator/agent.enhance_game_auto_format
 game_generator.py       generate_game() + shared run_generation_attempts() retry loop,
-                        run_moderation_pass() (shared with game_enhancer)
+                        run_moderation_pass() (shared with game_enhancer/agent)
 game_enhancer.py        enhance_game(): forks a new game_id/slug, links parent/root
+                        (legacy single-file whole-file resubmit path);
+                        LARGE_SOURCE_BYTES (dual-format explode trigger)
+builder.py              multi-file build-and-inline: build_game()/write_built_index(),
+                        is_multi_file(), build_and_verify() (shared scan+smoke gate)
+agent.py                ReAct editing agent for multi-file games:
+                        enhance_multifile_game(), explode_game() (single-file ->
+                        multi-file, behavior-preserving), enhance_game_auto_format()
+                        (job_runner's dual-format dispatch point), agent_events emission
 safety.py               regex blocklist + CDN allowlist for generated HTML
 content_moderation.py   DeepSeek-judged check_game(): flags phishing/social-engineering
                         player-facing text safety.py/smoke_test.py can't catch
 smoke_test.py           headless Playwright load, fails on JS errors
-ai_client.py            DeepSeek Chat Completions client (swap point for other providers)
+ai_client.py            DeepSeek Chat Completions client (swap point for other providers);
+                        ask_with_tools() also drives agent.py's ReAct loop
 db.py                   SQLite: web_games, generation_requests, generation_attempts,
-                        ratings, reports, plays, access_log, users;
+                        agent_events, ratings, reports, plays, access_log, users;
                         sync_games_from_disk() startup backfill
 gunicorn.conf.py        post_fork hook starts job_runner workers per worker process
 templates/index.html    menu shell: sidebar (sort toggle, rate/enhance controls) + iframe,
                         info modal w/ Report control
 templates/new_game.html  "Create New Game" prompt form
 templates/enhance.html  enhancement prompt + optional new-title form
-templates/status.html   job status page (polls static/status.js)
+templates/status.html   two-pane job status page: status.js panel + live agent
+                        chat transcript pane (agent_chat.js)
 templates/account.html  set username, show /u/<uid> sign-in link + token
 templates/signin.html   paste-a-token form (alternative to the /u/<uid> link)
 templates/profile.html  own games w/ hide toggle, play/like stats, recent plays
 templates/leaderboard.html  public all-users ranking by total thumbs_up
 templates/admin_stats.html  access-log/usage dashboard, behind ADMIN_TOKEN
 templates/admin_reports.html  open-reports review page, behind ADMIN_TOKEN
-static/style.css        arcade-cabinet styling
+static/style.css        arcade-cabinet styling + two-pane job-shell/chat-log styling
 static/app.js           play-on-click, thumbs-vote, report-this-game, sort toggle behavior
 static/status.js        polls /api/status/<job_id> until success/failed
+static/agent_chat.js    polls /api/jobs/<job_id>/events, renders the live agent transcript
 games/block-dodge/      bundled game (game_id committed in meta.json)
 games/connect-4-4/      bundled game (game_id committed in meta.json)
-tests/                  pytest suite: db.py, startup disk-sync, fork linkage, reports
+tests/                  pytest suite: db.py, startup disk-sync, fork linkage, reports,
+                        builder, agent (ReAct loop), explode/dual-format, job UI
 config.yaml.example     copy to config.yaml
 .env.example            copy to .env: DEEPSEEK_API_KEY, ADMIN_TOKEN
 ```

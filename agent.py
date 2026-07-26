@@ -27,9 +27,19 @@ once the run passes verification.
 #   enhance_multifile_game(source_game_id, description, requested_by, config,
 #                          db_conn=None, games_dir=None, job_id=None,
 #                          new_title=None, creator_uid=None, emit=None) -> dict
+#   explode_game(source_game_id, requested_by, config, db_conn=None,
+#                games_dir=None, job_id=None, new_title=None, creator_uid=None,
+#                emit=None, announce_completion=True) -> dict
+#     (Sprint 5: AI-assisted single-file -> multi-file split, behavior-
+#     preserving. Forks like enhance_multifile_game; see docstring.)
+#   enhance_game_auto_format(source_game_id, description, requested_by, config,
+#                            db_conn=None, games_dir=None, job_id=None,
+#                            new_title=None, creator_uid=None, emit=None) -> dict
+#     (Sprint 5's dual-format policy: job_runner's single dispatch point for
+#     kind='enhance' — routes to enhance_multifile_game, explode_game +
+#     enhance_multifile_game, or game_enhancer.enhance_game based on the
+#     source's on-disk format/size.)
 #   is_multi_file_source(source_game_id, games_dir, conn=None) -> bool
-#     (job_runner's dispatch check: route kind='enhance' here vs.
-#     game_enhancer.enhance_game() based on the source game's format)
 #   AGENT_TOOLS, DEFAULT_MAX_MODULE_BYTES
 #
 # Sprint 3 (docs/multifile-agent/03-agent-event-stream.md) makes the loop
@@ -477,21 +487,83 @@ def _build_user_prompt(description: str) -> str:
     return f"Enhance/fix this game per this request: {description}"
 
 
+def _build_explode_system_prompt(source_title: str, source_html: str) -> str:
+    """Sprint 5's explode pass (docs/multifile-agent/05-migration-and-pilot.md
+    Part A): the model is handed the ENTIRE original single-file game as
+    plain input context (reading it costs input tokens only, never subject
+    to the output-token ceiling that motivates this whole initiative) and
+    re-emits it split across several bounded write_file calls instead of
+    one whole-game submission — the same trick that lets explode work even
+    on a game already too large to ever be resubmitted whole."""
+    allowed_hosts = ", ".join(sorted(safety.ALLOWED_CDN_HOSTS))
+    return (
+        f"You are converting an existing single-file browser game, "
+        f"currently titled '{source_title}', into this arcade's multi-file "
+        "format. This produces a NEW game entry — the original single-file "
+        "game is left completely untouched.\n\n"
+        "## Task\n"
+        "Split the single index.html below into a shell src/index.html "
+        "plus cohesive src/style.css and src/*.js modules, and author "
+        "game.md (a prose description of the game plus a table of every "
+        "src/ file and its purpose). This MUST be behavior-preserving: "
+        "every mechanic, visual, and control must work identically to the "
+        "original — you are re-organizing the code, not rewriting the "
+        "game, adding features, or fixing bugs you happen to notice.\n\n"
+        "Use write_file(path, contents) for every file you create — e.g. "
+        "write_file(\"index.html\", ...) for the src/ shell, "
+        "write_file(\"style.css\", ...), write_file(\"core.js\", ...), and "
+        "write_file(\"game.md\", ...) for the map. You may use "
+        "read_file(path)/list_files() to check back on files you've "
+        "already written. Call finish(summary) only once EVERY file "
+        "(including src/index.html and game.md) has been written — it "
+        "triggers a build + safety scan + smoke test of the assembled "
+        "result; a failure comes back as this call's result so you can "
+        "keep editing and call finish again.\n\n"
+        "## Contract\n"
+        "All HTML/CSS/JS stays inline within the src/ files (no separate "
+        "asset files). You may load external JavaScript modules or "
+        "stylesheets via <script>/<link> tags ONLY from these CDN hosts: "
+        f"{allowed_hosts}. Do not reference any other external host, and do "
+        "not attempt any network calls back to this site or anywhere else "
+        "at runtime.\n\n"
+        "## Sandbox constraints\n"
+        "The game is played inside a sandboxed <iframe> with no "
+        "same-origin access: document.cookie, localStorage, sessionStorage, "
+        "indexedDB, and window.parent/window.top are all unavailable — keep "
+        "all game state in ordinary JavaScript variables. Do not use "
+        "eval() or `new Function(...)`.\n\n"
+        "## Original single-file game\n"
+        f"```html\n{source_html}\n```\n"
+    )
+
+
+def _build_explode_user_prompt() -> str:
+    return (
+        "Split this game into the multi-file format described above. Do "
+        "not add, remove, or change any feature, visual, or control — the "
+        "played game must behave exactly as it does now."
+    )
+
+
 # ---------------------------------------------------------------------------
 # The ReAct loop
 # ---------------------------------------------------------------------------
 
-def _run_react_loop(*, game_dir: Path, description: str, source_title: str,
+def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                      cfg: dict, job_id: str | None, db_conn, emit: Callable | None = None) -> dict:
     """Drive the read_map/list_files/read_file/write_file/finish loop
-    against game_dir (an already-staged copy of the source's src/+game.md)
-    until finish() passes build->scan->smoke, the verification-retry budget
-    is exhausted, or the step budget runs out.
+    against game_dir until finish() passes build->scan->smoke, the
+    verification-retry budget is exhausted, or the step budget runs out.
+    game_dir is either an already-staged copy of a multi-file source's
+    src/+game.md (enhance_multifile_game) or an empty directory the model
+    populates from scratch via write_file (explode_game, Sprint 5) —
+    `_write_file`/`builder.is_multi_file`'s src/index.html check both cope
+    with the latter starting out empty.
 
     Returns a dict: success/summary/attempts/input_tokens/output_tokens/
     tokens_used/model/effort/error. Does not touch games_dir bookkeeping,
-    the DB registry, or rollback — the caller (enhance_multifile_game)
-    owns all of that, same division of labor as
+    the DB registry, or rollback — the caller (enhance_multifile_game,
+    explode_game) owns all of that, same division of labor as
     game_generator.run_generation_attempts() vs. its callers.
 
     `emit(role, content=None, data=None)` (Sprint 3) is called at every
@@ -510,8 +582,8 @@ def _run_react_loop(*, game_dir: Path, description: str, source_title: str,
         emit = _make_emitter(job_id, db_conn)
 
     messages = [
-        {"role": "system", "content": _build_system_prompt(source_title)},
-        {"role": "user", "content": _build_user_prompt(description)},
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
     ]
 
     total_input_tokens = 0
@@ -770,7 +842,9 @@ def enhance_multifile_game(source_game_id: str, description: str, requested_by: 
     _stage_fork(source_dir, dest_dir)
 
     outcome = _run_react_loop(
-        game_dir=dest_dir, description=description, source_title=source_row["title"],
+        game_dir=dest_dir,
+        system_prompt=_build_system_prompt(source_row["title"]),
+        user_prompt=_build_user_prompt(description),
         cfg=cfg, job_id=job_id, db_conn=db_conn, emit=emit,
     )
     duration = time.monotonic() - t0
@@ -833,3 +907,211 @@ def enhance_multifile_game(source_game_id: str, description: str, requested_by: 
     _safe_emit(emit, "final", result["notes"] or "Enhancement complete.",
                {"slug": result["slug"], "title": result["title"], "url": result["url"]})
     return result
+
+
+# ---------------------------------------------------------------------------
+# Sprint 5 — the explode pass (docs/multifile-agent/05-migration-and-pilot.md
+# Part A) and the dual-format enhance policy (Part B)
+# ---------------------------------------------------------------------------
+
+def explode_game(source_game_id: str, requested_by: str, config: dict, db_conn=None,
+                  games_dir: Path | None = None, job_id: str | None = None,
+                  new_title: str | None = None, creator_uid: str | None = None,
+                  emit: Callable | None = None, announce_completion: bool = True) -> dict:
+    """Convert an existing single-file game into a multi-file fork,
+    behavior-preserving: the model is handed the whole original index.html
+    as input context and re-emits it split across src/index.html +
+    src/style.css + src/*.js + game.md via the same write_file/finish tools
+    _run_react_loop already drives, so this works even on a game already at
+    the output-token ceiling (the whole point — see
+    docs/multifile-agent/00-overview.md). Build -> safety scan -> smoke
+    test must all pass, same gate as any other change; a manual play-test
+    is still the only check that the game *plays* identically, not just
+    that it's console-error-free (see the Sprint 5 doc's Part A).
+
+    Forks exactly like enhance_multifile_game: a brand-new games/<slug>/ is
+    written (parent_game_id=source_game_id, root_game_id=source's
+    root_game_id), the source is never touched, and a failed run deletes
+    the half-written fork. Unlike an enhance, the default title is the
+    source's own title verbatim (this is a format change, not a content
+    change) unless new_title overrides it.
+
+    `announce_completion=False` (used by enhance_game_auto_format's
+    dual-format policy, Part B) suppresses the terminal 'final' event and
+    its Play link — that fork is an internal implementation detail the
+    requester didn't directly ask to see — emitting a short 'assistant'
+    note instead so the transcript still explains why an extra step ran
+    before the caller continues on with the actual requested enhancement.
+    """
+    games_dir = Path(games_dir) if games_dir is not None else gg.GAMES_DIR
+    cfg = config.get("multifile_agent", {})
+    t0 = time.monotonic()
+    if emit is None:
+        emit = _make_emitter(job_id, db_conn)
+
+    try:
+        source_row = ge.resolve_target(source_game_id, games_dir, conn=db_conn)
+    except ge.GameEnhancementError as exc:
+        result = _failure_result(exc, cfg, t0)
+        result["message"] = ge.format_report(result)
+        _safe_emit(emit, "error", result["error"])
+        return result
+
+    source_dir = games_dir / source_row["slug"]
+    if builder.is_multi_file(source_dir):
+        exc = ge.GameEnhancementError(f"'{source_game_id}' is already multi-file")
+        result = _failure_result(exc, cfg, t0)
+        result["message"] = ge.format_report(result)
+        _safe_emit(emit, "error", result["error"])
+        return result
+
+    source_html = (source_dir / "index.html").read_text(encoding="utf-8")
+    title_override = (new_title or "").strip() or source_row["title"]
+
+    dest_game_id = db.mint_game_id()
+    dest_slug = db.make_slug(title_override, dest_game_id)
+    collision = gg.check_slug_collision(dest_slug, games_dir)
+    if collision:
+        exc = ge.GameEnhancementError(f"slug collision: {collision}")
+        result = _failure_result(exc, cfg, t0)
+        result["message"] = ge.format_report(result)
+        _safe_emit(emit, "error", result["error"])
+        return result
+
+    dest_dir = games_dir / dest_slug
+    dest_dir.mkdir(parents=True, exist_ok=False)
+
+    outcome = _run_react_loop(
+        game_dir=dest_dir,
+        system_prompt=_build_explode_system_prompt(source_row["title"], source_html),
+        user_prompt=_build_explode_user_prompt(),
+        cfg=cfg, job_id=job_id, db_conn=db_conn, emit=emit,
+    )
+    duration = time.monotonic() - t0
+
+    if not outcome["success"]:
+        gg.rollback_game_files(dest_dir)
+        result = {
+            "success": False, "game_id": None, "slug": None, "title": None,
+            "description": None, "attempts": outcome["attempts"],
+            "input_tokens": outcome["input_tokens"], "output_tokens": outcome["output_tokens"],
+            "tokens_used": outcome["tokens_used"], "model": outcome["model"],
+            "effort": outcome["effort"], "duration_seconds": duration,
+            "error": outcome["error"], "notes": "", "url": None,
+            "parent_game_id": None, "root_game_id": None,
+        }
+        result["message"] = ge.format_report(result)
+        _safe_emit(emit, "error", result["error"])
+        return result
+
+    meta = {
+        "game_id": dest_game_id,
+        "parent_game_id": source_row["game_id"],
+        "root_game_id": source_row["root_game_id"],
+        "title": title_override,
+        "description": source_row["description"],
+        "requested_by": requested_by,
+        "created_at": db.now_iso(),
+        "version": 1,
+        "prompt": "explode: split single-file game into multi-file modules (behavior-preserving)",
+        "format": "multi-file",
+    }
+    (dest_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    result = {
+        "success": True, "game_id": dest_game_id, "slug": dest_slug,
+        "title": title_override, "description": source_row["description"],
+        "attempts": outcome["attempts"],
+        "input_tokens": outcome["input_tokens"], "output_tokens": outcome["output_tokens"],
+        "tokens_used": outcome["tokens_used"],
+        "model": outcome["model"], "effort": outcome["effort"],
+        "duration_seconds": duration, "error": None,
+        "notes": outcome["summary"] or "Converted to the multi-file format.",
+        "url": gg.build_play_url(dest_slug, config),
+        "parent_game_id": source_row["game_id"], "root_game_id": source_row["root_game_id"],
+    }
+    db.register_web_game(
+        game_id=result["game_id"], slug=result["slug"], title=result["title"],
+        description=result["description"], requested_by=requested_by, status="success",
+        attempts=result["attempts"], version=1, model=result["model"],
+        effort=result["effort"], duration_seconds=duration,
+        input_tokens=result["input_tokens"], output_tokens=result["output_tokens"],
+        tokens_used=result["tokens_used"], error=None,
+        parent_game_id=result["parent_game_id"], root_game_id=result["root_game_id"],
+        creator_uid=creator_uid, conn=db_conn,
+    )
+    gg.run_moderation_pass(
+        result["game_id"], result["slug"], result["description"], result["notes"],
+        games_dir, db_conn=db_conn,
+    )
+    result["message"] = ge.format_report(result)
+    if announce_completion:
+        _safe_emit(emit, "final", result["notes"],
+                   {"slug": result["slug"], "title": result["title"], "url": result["url"]})
+    else:
+        _safe_emit(
+            emit, "assistant",
+            "Converted this game to a multi-file format so future edits can "
+            "target individual files — continuing with your requested change…",
+        )
+    return result
+
+
+def enhance_game_auto_format(source_game_id: str, description: str, requested_by: str,
+                              config: dict, db_conn=None, games_dir: Path | None = None,
+                              job_id: str | None = None, new_title: str | None = None,
+                              creator_uid: str | None = None, emit: Callable | None = None) -> dict:
+    """job_runner's single dispatch point for kind='enhance' (Sprint 5's
+    dual-format policy, docs/multifile-agent/05-migration-and-pilot.md Part
+    B): decides among three enhance paths based only on the source game's
+    on-disk format and size, never a per-request choice.
+
+    - Multi-file source -> enhance_multifile_game() directly (unchanged
+      from Sprint 2).
+    - Single-file source at/over ge.LARGE_SOURCE_BYTES (the same size
+      ceiling game_enhancer already uses to trigger its own compactness
+      nudge) -> explode_game() first, then enhance_multifile_game() on the
+      resulting fork for the actual requested change. The intermediate
+      exploded fork is hidden (db.set_game_hidden) — it's an internal
+      formatting step, not something the requester asked to see as its own
+      arcade entry — but its parent_game_id/root_game_id still chain back
+      through it to the original single-file source, so the info modal's
+      ancestor chain and sidebar lineage stay correct across the
+      single-to-multi boundary. If the explode step itself fails, falls
+      back to the legacy single-file path below rather than failing the
+      whole job over an internal step the user never directly asked for.
+    - Otherwise -> the legacy game_enhancer.enhance_game() whole-file path,
+      unchanged.
+    """
+    games_dir = Path(games_dir) if games_dir is not None else gg.GAMES_DIR
+
+    if is_multi_file_source(source_game_id, games_dir, conn=db_conn):
+        return enhance_multifile_game(
+            source_game_id, description, requested_by, config,
+            db_conn=db_conn, games_dir=games_dir, job_id=job_id,
+            new_title=new_title, creator_uid=creator_uid, emit=emit,
+        )
+
+    row = db.get_web_game(source_game_id, conn=db_conn)
+    if row is not None:
+        index_path = games_dir / row["slug"] / "index.html"
+        if index_path.is_file() and index_path.stat().st_size >= ge.LARGE_SOURCE_BYTES:
+            exploded = explode_game(
+                source_game_id, requested_by, config, db_conn=db_conn,
+                games_dir=games_dir, job_id=job_id, emit=emit,
+                announce_completion=False,
+            )
+            if exploded["success"]:
+                db.set_game_hidden(exploded["game_id"], True, conn=db_conn)
+                return enhance_multifile_game(
+                    exploded["game_id"], description, requested_by, config,
+                    db_conn=db_conn, games_dir=games_dir, job_id=job_id,
+                    new_title=new_title, creator_uid=creator_uid, emit=emit,
+                )
+            # Explode failed -- fall through to the legacy single-file path.
+
+    return ge.enhance_game(
+        source_game_id, description, requested_by, config,
+        db_conn=db_conn, games_dir=games_dir, job_id=job_id,
+        new_title=new_title, creator_uid=creator_uid,
+    )

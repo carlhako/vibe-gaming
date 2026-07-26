@@ -210,6 +210,22 @@ def test_build_and_verify_single_file_is_passthrough(tmp_path):
     assert built_html == "<html><body>hi</body></html>"
 
 
+def test_build_and_verify_reports_failure_instead_of_crashing_when_nothing_written_yet(tmp_path):
+    """Sprint 5's explode pass (agent.explode_game) can stage a brand-new,
+    completely empty fork directory and have the model call finish() before
+    any write_file has landed — neither src/index.html nor a legacy
+    index.html exists yet. This must come back as a normal failed
+    verification, not an unhandled FileNotFoundError."""
+    game_dir = tmp_path / "game"
+    game_dir.mkdir()
+
+    passed, detail, built_html = builder.build_and_verify(game_dir)
+
+    assert not passed
+    assert "index.html" in detail
+    assert built_html == ""
+
+
 # --- the fixture itself, end to end ------------------------------------------
 
 
