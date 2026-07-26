@@ -1,10 +1,7 @@
 .claude/
 .env
 config.yaml
-vibegames.db
-vibegames.db-wal
-vibegames.db-shm
-vibegames.db.bak
+vibegames.db*
 logs/
 __pycache__/
 *.pyc
