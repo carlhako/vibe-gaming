@@ -159,6 +159,10 @@ def test_explode_produces_multifile_fork_with_lineage_to_source(isolated_db, gam
     row = db.get_web_game(result["game_id"])
     assert row["parent_game_id"] == SOURCE_GAME_ID
     assert row["root_game_id"] == SOURCE_GAME_ID
+    assert row["version"] == 2, "fork's version must be one more than its source's"
+
+    fork_meta = json.loads((fork_dir / "meta.json").read_text(encoding="utf-8"))
+    assert fork_meta["version"] == 2
 
     # Source untouched.
     source_dir = games_dir / db.get_web_game(SOURCE_GAME_ID)["slug"]

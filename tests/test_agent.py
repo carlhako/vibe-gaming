@@ -148,6 +148,8 @@ def test_targeted_edit_produces_forked_game_with_only_that_module_changed(isolat
     game = db.get_web_game(result["game_id"])
     assert game["parent_game_id"] == SOURCE_GAME_ID
     assert game["root_game_id"] == SOURCE_GAME_ID
+    assert game["version"] == 2, "fork's version must be one more than its source's"
+    assert meta["version"] == 2
 
 
 # ---------------------------------------------------------------------------

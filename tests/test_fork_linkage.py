@@ -77,6 +77,12 @@ def test_three_generation_fork_chain_shares_root(isolated_db, games_dir):
     assert (games_dir / v2["slug"] / "index.html").exists()
     assert (games_dir / v3["slug"] / "index.html").exists()
 
+    # Each fork's version is one more than its immediate parent's, not a
+    # flat 1 for every new game_id.
+    assert orig_row["version"] == 1
+    assert db.get_web_game(v2["game_id"])["version"] == 2
+    assert db.get_web_game(v3["game_id"])["version"] == 3
+
 
 def test_second_fork_of_original_is_v3(isolated_db, games_dir):
     with mock.patch.object(ai, "ask_with_tools", return_value=_submission("Original")), \

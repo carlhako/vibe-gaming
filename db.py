@@ -266,7 +266,7 @@ _ADDED_COLUMNS = {
     "generation_requests": [
         ("tokens_used", "INTEGER"), ("creator_uid", "TEXT"),
         ("input_tokens", "INTEGER"), ("output_tokens", "INTEGER"),
-        ("ip_address", "TEXT"),
+        ("ip_address", "TEXT"), ("cached_tokens", "INTEGER"),
     ],
     "generation_attempts": [
         ("duration_seconds", "REAL"), ("raw_response", "TEXT"),
@@ -535,7 +535,8 @@ def get_generation_history(limit=20, offset=0, conn=None):
         SELECT gr.job_id, gr.kind, gr.prompt, gr.new_title, gr.status,
                gr.requested_by, gr.creator_uid, gr.created_at,
                gr.error, gr.model, gr.effort, gr.attempts,
-               gr.input_tokens, gr.output_tokens, gr.tokens_used, gr.duration_seconds,
+               gr.input_tokens, gr.output_tokens, gr.tokens_used, gr.cached_tokens,
+               gr.duration_seconds,
                gr.source_game_id,
                wg.title AS result_title, wg.slug AS result_slug,
                u.username AS creator_username,
@@ -778,7 +779,7 @@ def get_generation_request(job_id, conn=None):
 def update_generation_request(job_id, status=None, result_game_id=None, attempts=None,
                                model=None, effort=None, duration_seconds=None,
                                input_tokens=None, output_tokens=None,
-                               tokens_used=None, error=None, conn=None):
+                               tokens_used=None, cached_tokens=None, error=None, conn=None):
     """Sparse update: only columns explicitly passed (non-None) are touched,
     except `error` which can be intentionally cleared by passing an empty
     string — pass None to leave it alone."""
@@ -802,6 +803,8 @@ def update_generation_request(job_id, status=None, result_game_id=None, attempts
         fields["output_tokens"] = output_tokens
     if tokens_used is not None:
         fields["tokens_used"] = tokens_used
+    if cached_tokens is not None:
+        fields["cached_tokens"] = cached_tokens
     if error is not None:
         fields["error"] = error
     set_clause = ", ".join(f"{k}=?" for k in fields)

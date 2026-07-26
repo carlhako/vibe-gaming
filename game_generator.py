@@ -356,7 +356,8 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
                              job_id: str | None = None, db_conn=None,
                              parent_game_id: str | None = None,
                              root_game_id: str | None = None,
-                             title_override: str | None = None) -> dict:
+                             title_override: str | None = None,
+                             version_override: int = 1) -> dict:
     """Drive the submit -> safety-scan -> mint id/slug -> write ->
     smoke-test loop shared by a brand-new game and an enhancement fork,
     as ONE multi-turn conversation: each rejected submit_game call gets
@@ -372,6 +373,9 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
     the model calls the revised game. `parent_game_id`/`root_game_id` are
     written into meta.json as-is (None/None for a brand-new original,
     which write_game_files' caller then treats as "root_game_id = self").
+    `version_override` is written into meta.json's "version" field —
+    callers forking from an existing game pass source_version + 1 so the
+    field tracks lineage depth; a brand-new original leaves it at 1.
 
     Does not touch the web_games table — callers register the result
     themselves once they've computed their own bookkeeping (duration,
@@ -393,6 +397,7 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
 
     total_input_tokens = 0
     total_output_tokens = 0
+    total_cached_tokens = 0
     last_model = model or "default"
     last_effort = effort
     previous_failure = None
@@ -445,6 +450,7 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
 
         total_input_tokens += ask_result.input_tokens
         total_output_tokens += ask_result.output_tokens
+        total_cached_tokens += ask_result.cached_tokens
         last_model = ask_result.model or "default"
         last_effort = ask_result.effort
         redacted = _redact_raw_response(ask_result.raw_response)
@@ -539,7 +545,7 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
                 "description": parsed["description"],
                 "requested_by": requested_by,
                 "created_at": datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z"),
-                "version": 1,
+                "version": version_override,
                 "prompt": description,
             }
             game_dir = write_game_files(candidate_slug, parsed["game_html"], meta, games_dir)
@@ -587,8 +593,9 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
     return {
         "success": slug is not None,
         "game_id": game_id, "slug": slug, "title": title, "description": description_out,
-        "notes": notes, "attempts": attempt,
+        "version": version_override, "notes": notes, "attempts": attempt,
         "input_tokens": total_input_tokens, "output_tokens": total_output_tokens,
+        "cached_tokens": total_cached_tokens,
         "tokens_used": total_input_tokens + total_output_tokens,
         "model": last_model, "effort": last_effort, "error": previous_failure,
     }
@@ -622,7 +629,7 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
             "title": outcome["title"], "description": outcome["description"],
             "attempts": outcome["attempts"],
             "input_tokens": outcome["input_tokens"], "output_tokens": outcome["output_tokens"],
-            "tokens_used": outcome["tokens_used"],
+            "tokens_used": outcome["tokens_used"], "cached_tokens": outcome["cached_tokens"],
             "model": outcome["model"], "effort": outcome["effort"],
             "duration_seconds": duration, "error": None, "notes": outcome["notes"],
             "url": build_play_url(outcome["slug"], config),
@@ -657,7 +664,7 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
             "success": False, "game_id": None, "slug": None, "title": None, "description": None,
             "attempts": outcome["attempts"],
             "input_tokens": outcome["input_tokens"], "output_tokens": outcome["output_tokens"],
-            "tokens_used": outcome["tokens_used"],
+            "tokens_used": outcome["tokens_used"], "cached_tokens": outcome["cached_tokens"],
             "model": outcome["model"], "effort": outcome["effort"],
             "duration_seconds": duration, "error": outcome["error"],
             "notes": "", "url": None,

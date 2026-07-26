@@ -1450,7 +1450,8 @@ def enhance_multifile_game(source_game_id: str, description: str, requested_by: 
             "success": False, "game_id": None, "slug": None, "title": None,
             "description": None, "attempts": outcome["attempts"],
             "input_tokens": outcome["input_tokens"], "output_tokens": outcome["output_tokens"],
-            "tokens_used": outcome["tokens_used"], "model": outcome["model"],
+            "tokens_used": outcome["tokens_used"], "cached_tokens": outcome["cached_tokens"],
+            "model": outcome["model"],
             "effort": outcome["effort"], "duration_seconds": duration,
             "error": outcome["error"], "notes": "", "url": None,
             "parent_game_id": None, "root_game_id": None,
@@ -1459,6 +1460,7 @@ def enhance_multifile_game(source_game_id: str, description: str, requested_by: 
         _safe_emit(emit, "error", result["error"])
         return result
 
+    dest_version = (source_row["version"] or 1) + 1
     meta = {
         "game_id": dest_game_id,
         "parent_game_id": source_row["game_id"],
@@ -1467,7 +1469,7 @@ def enhance_multifile_game(source_game_id: str, description: str, requested_by: 
         "description": source_row["description"],
         "requested_by": requested_by,
         "created_at": db.now_iso(),
-        "version": 1,
+        "version": dest_version,
         "prompt": description,
         "format": "multi-file",
     }
@@ -1478,7 +1480,7 @@ def enhance_multifile_game(source_game_id: str, description: str, requested_by: 
         "title": title_override, "description": source_row["description"],
         "attempts": outcome["attempts"],
         "input_tokens": outcome["input_tokens"], "output_tokens": outcome["output_tokens"],
-        "tokens_used": outcome["tokens_used"],
+        "tokens_used": outcome["tokens_used"], "cached_tokens": outcome["cached_tokens"],
         "model": outcome["model"], "effort": outcome["effort"],
         "duration_seconds": duration, "error": None, "notes": outcome["summary"],
         "url": gg.build_play_url(dest_slug, config),
@@ -1487,7 +1489,7 @@ def enhance_multifile_game(source_game_id: str, description: str, requested_by: 
     db.register_web_game(
         game_id=result["game_id"], slug=result["slug"], title=result["title"],
         description=result["description"], requested_by=requested_by, status="success",
-        attempts=result["attempts"], version=1, model=result["model"],
+        attempts=result["attempts"], version=dest_version, model=result["model"],
         effort=result["effort"], duration_seconds=duration,
         input_tokens=result["input_tokens"], output_tokens=result["output_tokens"],
         tokens_used=result["tokens_used"], error=None,
@@ -1602,7 +1604,8 @@ def explode_game(source_game_id: str, requested_by: str, config: dict, db_conn=N
             "success": False, "game_id": None, "slug": None, "title": None,
             "description": None, "attempts": outcome["attempts"],
             "input_tokens": outcome["input_tokens"], "output_tokens": outcome["output_tokens"],
-            "tokens_used": outcome["tokens_used"], "model": outcome["model"],
+            "tokens_used": outcome["tokens_used"], "cached_tokens": outcome["cached_tokens"],
+            "model": outcome["model"],
             "effort": outcome["effort"], "duration_seconds": duration,
             "error": outcome["error"], "notes": "", "url": None,
             "parent_game_id": None, "root_game_id": None,
@@ -1611,6 +1614,7 @@ def explode_game(source_game_id: str, requested_by: str, config: dict, db_conn=N
         _safe_emit(emit, "error", result["error"])
         return result
 
+    dest_version = (source_row["version"] or 1) + 1
     meta = {
         "game_id": dest_game_id,
         "parent_game_id": source_row["game_id"],
@@ -1619,7 +1623,7 @@ def explode_game(source_game_id: str, requested_by: str, config: dict, db_conn=N
         "description": source_row["description"],
         "requested_by": requested_by,
         "created_at": db.now_iso(),
-        "version": 1,
+        "version": dest_version,
         "prompt": "explode: split single-file game into multi-file modules (behavior-preserving)",
         "format": "multi-file",
     }
@@ -1630,7 +1634,7 @@ def explode_game(source_game_id: str, requested_by: str, config: dict, db_conn=N
         "title": title_override, "description": source_row["description"],
         "attempts": outcome["attempts"],
         "input_tokens": outcome["input_tokens"], "output_tokens": outcome["output_tokens"],
-        "tokens_used": outcome["tokens_used"],
+        "tokens_used": outcome["tokens_used"], "cached_tokens": outcome["cached_tokens"],
         "model": outcome["model"], "effort": outcome["effort"],
         "duration_seconds": duration, "error": None,
         "notes": outcome["summary"] or "Converted to the multi-file format.",
@@ -1640,7 +1644,7 @@ def explode_game(source_game_id: str, requested_by: str, config: dict, db_conn=N
     db.register_web_game(
         game_id=result["game_id"], slug=result["slug"], title=result["title"],
         description=result["description"], requested_by=requested_by, status="success",
-        attempts=result["attempts"], version=1, model=result["model"],
+        attempts=result["attempts"], version=dest_version, model=result["model"],
         effort=result["effort"], duration_seconds=duration,
         input_tokens=result["input_tokens"], output_tokens=result["output_tokens"],
         tokens_used=result["tokens_used"], error=None,

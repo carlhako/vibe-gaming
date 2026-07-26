@@ -245,7 +245,7 @@
           </p>
           <div class="table-scroll">
           <table class="stats-table">
-            <thead><tr><th>When</th><th>Kind</th><th>Title</th><th>Requested by</th><th>Status</th><th>Attempts</th><th>Model</th><th>Duration</th><th>Input tokens</th><th>Output tokens</th><th>Total tokens</th><th>Links</th></tr></thead>
+            <thead><tr><th>When</th><th>Kind</th><th>Title</th><th>Requested by</th><th>Status</th><th>Attempts</th><th>Model</th><th>Duration</th><th>Input tokens</th><th>Input cached</th><th>Output tokens</th><th>Total tokens</th><th>Links</th></tr></thead>
             <tbody>
               {% for r in history_rows %}
               <tr class="{{ 'is-hidden-row' if r.status == 'failed' }}">
@@ -258,6 +258,7 @@
                 <td>{{ r.model or '—' }}{% if r.effort %} <span class="form-hint">({{ r.effort }})</span>{% endif %}</td>
                 <td>{{ '%.1fs'|format(r.duration_seconds) if r.duration_seconds is not none else '—' }}</td>
                 <td class="token-cell">{{ tokencell(r.input_tokens, r.input_cost) }}</td>
+                <td class="token-cell">{{ r.cached_tokens if r.cached_tokens is not none else '—' }}</td>
                 <td class="token-cell">{{ tokencell(r.output_tokens, r.output_cost) }}</td>
                 <td class="token-cell">{{ tokencell(r.tokens_used, r.total_cost) }}</td>
                 <td>
@@ -284,6 +285,7 @@
                       data-attempts="{{ r.attempts or '' }}"
                       data-duration="{{ r.duration_seconds if r.duration_seconds is not none else '' }}"
                       data-input-tokens="{{ r.input_tokens if r.input_tokens is not none else '' }}"
+                      data-cached-tokens="{{ r.cached_tokens if r.cached_tokens is not none else '' }}"
                       data-output-tokens="{{ r.output_tokens if r.output_tokens is not none else '' }}"
                       data-tokens="{{ r.tokens_used if r.tokens_used is not none else '' }}"
                       data-error="{{ r.error or '' }}"
@@ -437,6 +439,7 @@
           ["Attempts", d.attempts],
           ["Duration", d.duration ? `${parseFloat(d.duration).toFixed(1)}s` : ""],
           ["Input tokens", d.inputTokens],
+          ["Input cached", d.cachedTokens],
           ["Output tokens", d.outputTokens],
           ["Total tokens", d.tokens],
         ].forEach(([label, value]) => historyMeta.append(...([...metaRow(label, value)])));

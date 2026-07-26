@@ -196,7 +196,8 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
         result = {
             "success": False, "game_id": None, "slug": None, "title": None,
             "description": None, "attempts": 0,
-            "input_tokens": 0, "output_tokens": 0, "tokens_used": 0, "model": "default",
+            "input_tokens": 0, "output_tokens": 0, "tokens_used": 0, "cached_tokens": 0,
+            "model": "default",
             "effort": cfg.get("effort", "high"), "duration_seconds": time.monotonic() - t0,
             "error": str(exc), "notes": "", "url": None,
             "parent_game_id": None, "root_game_id": None,
@@ -220,6 +221,7 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
         cfg=cfg, games_dir=games_dir, job_id=job_id, db_conn=db_conn,
         parent_game_id=source_row["game_id"], root_game_id=source_row["root_game_id"],
         title_override=title_override,
+        version_override=(source_row["version"] or 1) + 1,
     )
     duration = time.monotonic() - t0
 
@@ -229,7 +231,7 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
             "title": outcome["title"], "description": outcome["description"],
             "attempts": outcome["attempts"],
             "input_tokens": outcome["input_tokens"], "output_tokens": outcome["output_tokens"],
-            "tokens_used": outcome["tokens_used"],
+            "tokens_used": outcome["tokens_used"], "cached_tokens": outcome["cached_tokens"],
             "model": outcome["model"], "effort": outcome["effort"],
             "duration_seconds": duration, "error": None, "notes": outcome["notes"],
             "url": gg.build_play_url(outcome["slug"], config),
@@ -238,7 +240,7 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
         db.register_web_game(
             game_id=result["game_id"], slug=result["slug"], title=result["title"],
             description=result["description"], requested_by=requested_by, status="success",
-            attempts=result["attempts"], version=1, model=result["model"],
+            attempts=result["attempts"], version=outcome["version"], model=result["model"],
             effort=result["effort"], duration_seconds=duration,
             input_tokens=result["input_tokens"], output_tokens=result["output_tokens"],
             tokens_used=result["tokens_used"], error=None,
@@ -255,7 +257,8 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
             "success": False, "game_id": None, "slug": None, "title": None,
             "description": None, "attempts": outcome["attempts"],
             "input_tokens": outcome["input_tokens"], "output_tokens": outcome["output_tokens"],
-            "tokens_used": outcome["tokens_used"], "model": outcome["model"],
+            "tokens_used": outcome["tokens_used"], "cached_tokens": outcome["cached_tokens"],
+            "model": outcome["model"],
             "effort": outcome["effort"], "duration_seconds": duration,
             "error": outcome["error"], "notes": "", "url": None,
             "parent_game_id": None, "root_game_id": None,

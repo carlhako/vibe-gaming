@@ -92,7 +92,7 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
             attempts=result["attempts"], model=result["model"], effort=result["effort"],
             duration_seconds=result["duration_seconds"],
             input_tokens=result["input_tokens"], output_tokens=result["output_tokens"],
-            tokens_used=result["tokens_used"],
+            tokens_used=result["tokens_used"], cached_tokens=result.get("cached_tokens"),
             conn=conn,
         )
     else:
@@ -100,7 +100,8 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
             job_id, status="failed", attempts=result["attempts"], model=result["model"],
             effort=result["effort"], duration_seconds=result["duration_seconds"],
             input_tokens=result["input_tokens"], output_tokens=result["output_tokens"],
-            tokens_used=result["tokens_used"], error=result["error"] or "unknown error",
+            tokens_used=result["tokens_used"], cached_tokens=result.get("cached_tokens"),
+            error=result["error"] or "unknown error",
             conn=conn,
         )
 
