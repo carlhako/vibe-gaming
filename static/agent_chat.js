@@ -9,6 +9,7 @@
     read_map: "📖",
     list_files: "📂",
     read_file: "📖",
+    search: "🔍",
     write_file: "✏️",
     finish: "🏁",
   };

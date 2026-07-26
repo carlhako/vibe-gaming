@@ -926,6 +926,59 @@ def test_the_budget_warning_is_not_sent_once_verification_has_run(
 
 
 # ---------------------------------------------------------------------------
+# The forced last-ditch verification (see the end of _run_react_loop) must go
+# through the SAME gate a model-requested finish() does — including explode's
+# declaration-parity check, which is the only thing that catches a split that
+# silently dropped code. A stalled explode that ships unchecked would be
+# strictly worse than one that ships nothing.
+# ---------------------------------------------------------------------------
+
+def test_a_stalled_explode_still_ships_when_its_split_is_actually_complete(
+        isolated_db, games_dir):
+    _setup_single_file_source(games_dir)
+    responses = (
+        [_turn([("write_file", {"path": "index.html", "contents": SPLIT_INDEX_HTML})]),
+         _turn([("write_file", {"path": "style.css", "contents": SPLIT_STYLE_CSS})]),
+         _turn([("write_file", {"path": "core.js", "contents": SPLIT_CORE_JS})]),
+         _turn([("write_file", {"path": "game.md", "contents": SPLIT_GAME_MD})])]
+        # Two full stalls: one consumes the re-armed nudge, the second ends it.
+        + _reads(agent._MAX_NO_PROGRESS_STEPS * 2 + 2)
+    )
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result = agent.explode_game(SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir)
+
+    assert result["success"], result["error"]
+    assert builder.is_multi_file(games_dir / result["slug"])
+
+
+def test_a_stalled_explode_with_a_dropped_declaration_is_still_rejected(
+        isolated_db, games_dir):
+    """The parity gate is what stands between a stalled run and shipping a
+    game whose entity rendering silently vanished."""
+    _setup_single_file_source(games_dir)
+    gutted_core = SPLIT_CORE_JS.replace("var count = 0;", "")
+    responses = (
+        [_turn([("write_file", {"path": "index.html", "contents": SPLIT_INDEX_HTML})]),
+         _turn([("write_file", {"path": "style.css", "contents": SPLIT_STYLE_CSS})]),
+         _turn([("write_file", {"path": "core.js", "contents": gutted_core})]),
+         _turn([("write_file", {"path": "game.md", "contents": SPLIT_GAME_MD})])]
+        + _reads(agent._MAX_NO_PROGRESS_STEPS * 2 + 2)
+    )
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result = agent.explode_game(SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir)
+
+    assert not result["success"]
+    assert "count" in result["error"]
+    assert "never called finish" in result["error"]
+    # Nothing half-exploded left behind.
+    assert not any(builder.is_multi_file(p) for p in games_dir.iterdir() if p.is_dir())
+
+
+# ---------------------------------------------------------------------------
 # The agent's own model default. config.yaml is gitignored, so a config-only
 # default is invisible to every deployment — this has to live in code.
 # ---------------------------------------------------------------------------

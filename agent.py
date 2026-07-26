@@ -6,9 +6,9 @@ no chat UI yet (Sprints 3-4 add the event stream and the live transcript).
 Where game_generator/game_enhancer make the model resend a COMPLETE
 index.html on every attempt, this agent lets the model explore a
 multi-file game's `src/` tree with tools and rewrite only the modules a
-change touches — read_map()/list_files()/read_file(path) to look around,
-write_file(path, contents) to replace one whole module, finish(summary) to
-trigger verification. No single model turn ever contains (or requires
+change touches — read_map()/list_files()/read_file(path)/search(pattern) to
+look around, write_file(path, contents) to replace one whole module,
+finish(summary) to trigger verification. No single model turn ever contains (or requires
 reading) the whole game, so the output-token ceiling that motivated
 Sprint 1 (see docs/multifile-agent/00-overview.md) stops being a structural
 problem: a per-module size ceiling (`max_module_bytes`) is enforced on every
@@ -247,6 +247,55 @@ WRITE_FILE_TOOL = {
     },
 }
 
+# Why a grep exists alongside read_file: without one, the only way for the
+# model to answer a narrow question about code it can't currently see is to
+# read a whole module back. A real enhance run (job 79a0abbb, 2026-07-26)
+# died doing exactly that — its last five turns before the no-progress kill
+# were spent re-reading enemies.js, render.js and config.js to settle whether
+# the constant was `TILE` or `TILE_SIZE`, a question one grep answers in a
+# line. That run read 938KB of file contents across 33 read_file calls for a
+# change that touched six files: render.js alone was read 7 times at 73KB a
+# time. Whole-file reads are the agent path's dominant input-token cost, and
+# most of them are asking something a search can answer.
+SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "search",
+        "description": (
+            "Search the game's source for a regular expression, returning "
+            "matching lines as 'path:line: text'. Searches every src/ file "
+            "plus game.md, or just one file if you pass 'path'. Use this "
+            "INSTEAD of re-reading a module whenever your question is narrow: "
+            "does this identifier exist, where is it declared, what are its "
+            "call sites, is it declared twice, which files reference it. It "
+            "costs a tiny fraction of a read_file and covers every file at "
+            "once. Reach for read_file only when you need a module's full "
+            "text because you're about to rewrite it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": (
+                        "A regular expression (Python/PCRE syntax), "
+                        r"e.g. 'function\s+drawPlayer' or '\bTILE_SIZE\b'. "
+                        "Case-sensitive."
+                    ),
+                },
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Limit the search to this one file; omit to "
+                        f"search all of them. {_PATH_ARG_DESCRIPTION}"
+                    ),
+                },
+            },
+            "required": ["pattern"],
+        },
+    },
+}
+
 FINISH_TOOL = {
     "type": "function",
     "function": {
@@ -270,7 +319,8 @@ FINISH_TOOL = {
     },
 }
 
-AGENT_TOOLS = [READ_MAP_TOOL, LIST_FILES_TOOL, READ_FILE_TOOL, WRITE_FILE_TOOL, FINISH_TOOL]
+AGENT_TOOLS = [READ_MAP_TOOL, LIST_FILES_TOOL, READ_FILE_TOOL, SEARCH_TOOL,
+               WRITE_FILE_TOOL, FINISH_TOOL]
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +389,22 @@ def _parse_path_arg(arguments_json: str) -> str:
     return path.strip()
 
 
+def _parse_search_args(arguments_json: str) -> tuple[str, str | None]:
+    try:
+        args = json.loads(arguments_json)
+    except json.JSONDecodeError as exc:
+        raise AgentError(f"malformed search arguments: not valid JSON: {exc}") from None
+    if not isinstance(args, dict):
+        raise AgentError("malformed search arguments: must be a JSON object")
+    pattern = args.get("pattern")
+    if not isinstance(pattern, str) or not pattern.strip():
+        raise AgentError("malformed search arguments: missing a non-empty 'pattern'")
+    path = args.get("path")
+    if path is not None and (not isinstance(path, str) or not path.strip()):
+        raise AgentError("malformed search arguments: 'path' must be a non-empty string")
+    return pattern, (path.strip() if isinstance(path, str) else None)
+
+
 def _parse_write_args(arguments_json: str) -> tuple[str, str]:
     try:
         args = json.loads(arguments_json)
@@ -382,15 +448,30 @@ def _read_map(game_dir: Path) -> str:
     return map_path.read_text(encoding="utf-8")
 
 
-def _list_files(game_dir: Path) -> str:
+def _list_files(game_dir: Path, written: set[str] | None = None) -> str:
+    """Every src/ file with its size, and — for files this run has already
+    rewritten — a written_this_run flag.
+
+    That flag is bookkeeping the model otherwise has no way to recover.
+    _compact_write_calls deliberately removes each executed write_file call
+    from the conversation, so a run that has drifted past its own compaction
+    notes cannot tell an edited module from an untouched one without reading
+    it. Job 79a0abbb rewrote config.js five times and map.js three times for
+    a single feature, each rewrite preceded by a read to work out what it had
+    already done. One flag on the cheapest tool there is answers that."""
     src_dir = game_dir / "src"
     if not src_dir.is_dir():
         return "ERROR: src/ not found"
-    entries = [
-        {"path": p.relative_to(src_dir).as_posix(), "bytes": p.stat().st_size}
-        for p in src_dir.rglob("*") if p.is_file()
-    ]
-    entries.sort(key=lambda e: e["path"])
+    written = written or set()
+    entries = []
+    for p in sorted(src_dir.rglob("*"), key=lambda p: p.as_posix()):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(src_dir).as_posix()
+        entry = {"path": rel, "bytes": p.stat().st_size}
+        if rel in written:
+            entry["written_this_run"] = True
+        entries.append(entry)
     return json.dumps(entries)
 
 
@@ -399,6 +480,75 @@ def _read_file(game_dir: Path, path: str) -> str:
     if not file_path.is_file():
         return f"ERROR: {path!r} not found"
     return file_path.read_text(encoding="utf-8")
+
+
+# A search result rides along in the conversation for the rest of the run
+# (unlike a read_file result, which gets pruned once stale) — that's the
+# point: an answer the model can still see is an answer it won't ask for
+# twice. Which only holds if the answer stays small, hence both caps. A
+# pattern broad enough to blow through them is a pattern that should have
+# been narrower, and the observation says so.
+_SEARCH_MAX_MATCHES = 60
+_SEARCH_MAX_LINE_CHARS = 200
+
+
+def _search(game_dir: Path, pattern: str, path: str | None = None) -> str:
+    try:
+        rx = re.compile(pattern)
+    except re.error as exc:
+        return f"ERROR: not a valid regular expression: {exc}"
+
+    if path is not None:
+        target = _resolve_agent_path(game_dir, path)
+        if not target.is_file():
+            return f"ERROR: {path!r} not found"
+        targets = [(path, target)]
+    else:
+        src_dir = game_dir / "src"
+        if not src_dir.is_dir():
+            return "ERROR: src/ not found"
+        targets = [
+            (p.relative_to(src_dir).as_posix(), p)
+            for p in sorted(src_dir.rglob("*"), key=lambda p: p.as_posix())
+            if p.is_file()
+        ]
+        game_md = game_dir / "game.md"
+        if game_md.is_file():
+            targets.append(("game.md", game_md))
+
+    lines: list[str] = []
+    total = 0
+    for rel, file_path in targets:
+        try:
+            text = file_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if not rx.search(line):
+                continue
+            total += 1
+            if len(lines) >= _SEARCH_MAX_MATCHES:
+                continue
+            stripped = line.strip()
+            if len(stripped) > _SEARCH_MAX_LINE_CHARS:
+                stripped = stripped[:_SEARCH_MAX_LINE_CHARS] + " …"
+            lines.append(f"{rel}:{lineno}: {stripped}")
+
+    # The pattern is echoed back VERBATIM, not through !r. repr() would turn
+    # `function\s+\w+` into `'function\\s+\\w+'`, and this model reliably
+    # imitates whatever its own transcript shows it (see _compact_write_calls) —
+    # here that would teach it to double-escape its next pattern into a literal
+    # backslash.
+    scope = f"'{path}'" if path is not None else f"{len(targets)} file(s)"
+    if not total:
+        return f"No matches for `{pattern}` in {scope}."
+    header = f"{total} match(es) for `{pattern}` in {scope}"
+    if total > len(lines):
+        header += (
+            f" — showing the first {len(lines)}. Narrow the pattern if you "
+            "need the rest"
+        )
+    return header + ":\n" + "\n".join(lines)
 
 
 def _write_file(game_dir: Path, path: str, contents: str, max_module_bytes: int,
@@ -446,20 +596,28 @@ def _write_file(game_dir: Path, path: str, contents: str, max_module_bytes: int,
 
 
 def _execute_tool(tc: ai.ToolCall, game_dir: Path, max_module_bytes: int,
-                   warn_bytes: int) -> tuple[str, str | None]:
+                   warn_bytes: int, written: set[str] | None = None) -> tuple[str, str | None]:
     """Run one non-finish tool call. Returns (observation, touched_path) —
     touched_path is the path read/written (for staleness pruning), or None
     for tools that don't target a single file. Never raises: an AgentError
     becomes an "ERROR: ..." observation, same as a rejected submit_game
-    becomes "REJECTED: ..." in game_generator's loop."""
+    becomes "REJECTED: ..." in game_generator's loop.
+
+    `written` is the set of paths this run has already rewritten, surfaced by
+    list_files (see _list_files)."""
     try:
         if tc.name == "read_map":
             return _read_map(game_dir), None
         if tc.name == "list_files":
-            return _list_files(game_dir), None
+            return _list_files(game_dir, written), None
         if tc.name == "read_file":
             path = _normalize_agent_path(_parse_path_arg(tc.arguments))
             return _read_file(game_dir, path), path
+        if tc.name == "search":
+            pattern, path = _parse_search_args(tc.arguments)
+            if path is not None:
+                path = _normalize_agent_path(path)
+            return _search(game_dir, pattern, path), path
         if tc.name == "write_file":
             path, contents = _parse_write_args(tc.arguments)
             path = _normalize_agent_path(path)
@@ -547,6 +705,16 @@ def _summarize_tool_call(tc: ai.ToolCall) -> tuple[str, dict]:
             return f"write_file({path!r}, {size} bytes)", {"tool": tc.name, "path": path, "bytes": size}
         except AgentError:
             return "write_file(...)", {"tool": tc.name}
+    if tc.name == "search":
+        try:
+            pattern, path = _parse_search_args(tc.arguments)
+            data = {"tool": tc.name, "pattern": pattern}
+            if path:
+                data["path"] = path
+                return f"search({pattern!r} in {path!r})", data
+            return f"search({pattern!r})", data
+        except AgentError:
+            return "search(...)", {"tool": tc.name}
     if tc.name == "finish":
         summary = _parse_finish_summary(tc.arguments)
         data = {"tool": tc.name}
@@ -582,6 +750,12 @@ def _summarize_observation(tc_name: str, path: str | None, observation: str) -> 
         except (json.JSONDecodeError, TypeError):
             pass
         return observation, data
+    if tc_name == "search":
+        # Capped to _SEARCH_MAX_MATCHES lines by construction, so the whole
+        # observation is safe to keep verbatim — but only its first line
+        # (the "N match(es) for ..." header) is worth a transcript row.
+        head, _, _ = observation.partition("\n")
+        return head, data
     return observation, data
 
 
@@ -606,6 +780,14 @@ def _build_system_prompt(source_title: str) -> str:
         "- list_files() — every src/ file with its byte size.\n"
         "- read_file(path) — the full contents of one src/ file (or "
         "game.md).\n"
+        "- search(pattern, path=None) — regex search across every file, "
+        "returning matching lines as 'path:line: text'. This is how you "
+        "answer a narrow question: whether an identifier exists, where it's "
+        "declared, every call site of a function, which module owns a "
+        "constant. It costs a fraction of a read_file, so use it instead of "
+        "re-reading a module you've already seen — reach for read_file only "
+        "when you need a file's whole text because you're about to rewrite "
+        "it.\n"
         "- write_file(path, contents) — replace ONE WHOLE file (or create a "
         "new one). Always the complete file, never a diff. Rejected if over "
         "the module size ceiling — split it instead of shrinking it.\n"
@@ -1177,8 +1359,12 @@ def _build_explode_system_prompt(source_title: str, source_html: str,
         "<script src=\"entities.js\"></script>"
         "<script src=\"render.js\"></script> and so on), never "
         "\"src/style.css\". You may use "
-        "read_file(path)/list_files() to check back on files you've "
-        "already written. Call finish(summary) only once EVERY file "
+        "list_files()/read_file(path) to check back on files you've "
+        "already written, and search(pattern) to grep every module you've "
+        "written so far — that is much the cheaper way to check whether a "
+        "name is declared, declared twice, or referenced with no "
+        "declaration, which is exactly what verification checks. Call "
+        "finish(summary) only once EVERY file "
         "(including src/index.html and game.md) has been written — it "
         "triggers a build + safety scan + smoke test of the assembled "
         "result; a failure comes back as this call's result so you can "
@@ -1348,9 +1534,13 @@ def _compact_write_calls(messages: list[dict], assistant_msg: dict,
 def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                      cfg: dict, job_id: str | None, db_conn, emit: Callable | None = None,
                      extra_verify: Callable | None = None) -> dict:
-    """Drive the read_map/list_files/read_file/write_file/finish loop
+    """Drive the read_map/list_files/read_file/search/write_file/finish loop
     against game_dir until finish() passes build->scan->smoke, the
     verification-retry budget is exhausted, or the step budget runs out.
+
+    A run that ends any other way than a passing finish() still gets one
+    forced verification of whatever it wrote (see the end of this function),
+    so a stalled-but-correct run ships instead of being discarded.
     game_dir is either an already-staged copy of a multi-file source's
     src/+game.md (enhance_multifile_game) or an empty directory the model
     populates from scratch via write_file (explode_game, Sprint 5) —
@@ -1441,10 +1631,12 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     last_read_step: dict[str, int] = {}
     consecutive_no_progress = 0
     wrote_anything = False
+    written_paths: set[str] = set()
     nudged_to_finish = False
     nudged_low_budget = False
     finish_nudge_at = _finish_nudge_threshold(max_steps)
     summary = ""
+    last_candidate_summary = ""
     error = None
     success = False
 
@@ -1458,6 +1650,33 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                 input_tokens=in_delta, tokens_used=out_delta, conn=db_conn,
             )
         tokens_at_last_attempt = (total_input_tokens, total_output_tokens)
+
+    def run_verification(forced: bool = False) -> tuple[bool, str]:
+        """Build -> safety scan -> smoke test (-> extra_verify), recorded as
+        one verification attempt and emitted as one 'build' event. Called
+        both for a finish() the model asked for and for the forced last-ditch
+        attempt below; `forced` only changes the wording."""
+        nonlocal verification_attempts
+        passed, detail, built_html = builder.build_and_verify(game_dir)
+        if passed and extra_verify is not None:
+            extra_detail = extra_verify(game_dir, built_html)
+            if extra_detail:
+                passed, detail = False, extra_detail
+        verification_attempts += 1
+        prefix = "Forced final verification" if forced else "Verification"
+        if passed:
+            record_verification("success", None)
+            _safe_emit(emit, "build", f"{prefix} passed: build, safety scan, and "
+                                      "smoke test all succeeded.",
+                       {"outcome": "success", "attempt": verification_attempts,
+                        "forced": forced})
+            return True, detail
+        outcome = _classify_failure(detail)
+        record_verification(outcome, detail)
+        _safe_emit(emit, "build", f"{prefix} failed: {detail}",
+                   {"outcome": outcome, "attempt": verification_attempts,
+                    "forced": forced})
+        return False, detail
 
     for step_num in range(1, max_steps + 1):
         try:
@@ -1531,7 +1750,8 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         for tc in other_calls:
             call_content, call_data = _summarize_tool_call(tc)
             _safe_emit(emit, "tool_call", call_content, call_data)
-            content, touched_path = _execute_tool(tc, game_dir, max_module_bytes, module_warn_bytes)
+            content, touched_path = _execute_tool(
+                tc, game_dir, max_module_bytes, module_warn_bytes, written_paths)
             obs_content, obs_data = _summarize_observation(tc.name, touched_path, content)
             _safe_emit(emit, "tool_result", obs_content, obs_data)
             msg = {"role": "tool", "tool_call_id": tc.id, "content": content}
@@ -1544,6 +1764,13 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                 if touched_path and content.startswith("OK:"):
                     made_progress = True
                     wrote_anything = True
+                    written_paths.add(touched_path)
+                    # Re-arm the stall nudge below: it answers a specific
+                    # stall, and a real write means the run moved on. Job
+                    # 79a0abbb spent its one nudge on an early review pause,
+                    # then wrote six more files and was killed outright at
+                    # the next pause with everything unverified.
+                    nudged_to_finish = False
                     stale = last_read_message.pop(touched_path, None)
                     last_read_step.pop(touched_path, None)
                     if stale is not None:
@@ -1575,17 +1802,9 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
             call_content, call_data = _summarize_tool_call(finish_call)
             _safe_emit(emit, "tool_call", call_content, call_data)
             candidate_summary = _parse_finish_summary(finish_call.arguments)
-            passed, detail, built_html = builder.build_and_verify(game_dir)
-            if passed and extra_verify is not None:
-                extra_detail = extra_verify(game_dir, built_html)
-                if extra_detail:
-                    passed, detail = False, extra_detail
-            verification_attempts += 1
+            last_candidate_summary = candidate_summary or last_candidate_summary
+            passed, detail = run_verification()
             if passed:
-                record_verification("success", None)
-                _safe_emit(emit, "build",
-                           "Verification passed: build, safety scan, and smoke test all succeeded.",
-                           {"outcome": "success", "attempt": verification_attempts})
                 messages.append({
                     "role": "tool", "tool_call_id": finish_call.id,
                     "content": "Verification passed: build, safety scan, and smoke test all succeeded.",
@@ -1593,10 +1812,6 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                 summary = candidate_summary
                 success = True
                 break
-            outcome = _classify_failure(detail)
-            record_verification(outcome, detail)
-            _safe_emit(emit, "build", f"Verification failed: {detail}",
-                       {"outcome": outcome, "attempt": verification_attempts})
             error = detail
             if verification_attempts >= max_verification_retries:
                 messages.append({
@@ -1662,6 +1877,40 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                 "turns without a successful write_file"
             )
             break
+
+    # Last-ditch verification. Every way this loop can end other than a
+    # passing finish() used to discard the run outright — the caller deletes
+    # the fork — even when every module the change needed was already written
+    # and correct on disk. The only thing missing was the finish() call, and
+    # finish() is not the model's to bestow: it just runs a deterministic
+    # build -> scan -> smoke gate the loop can run itself.
+    #
+    # Job 79a0abbb (2026-07-26) is the case. It wrote all six modules for the
+    # requested feature, spent its last five turns re-reading them to settle a
+    # `TILE` vs `TILE_SIZE` question, tripped the no-progress guard a second
+    # time, and was killed — 1.58M tokens and ~18 minutes for nothing, one
+    # unmade call away from either shipping or a concrete error to show.
+    # Verifying costs one build; not verifying guarantees a total loss. Skip it
+    # only when the verification-retry budget is already spent (that ceiling
+    # exists to stop exactly this kind of repetition) or when nothing was ever
+    # written (nothing to verify).
+    if (not success and wrote_anything
+            and verification_attempts < max_verification_retries):
+        stalled_error = error or f"ran out of steps after {max_steps} turns"
+        passed, detail = run_verification(forced=True)
+        if passed:
+            success = True
+            summary = last_candidate_summary or (
+                "The agent stopped without calling finish; its written files "
+                "passed a forced final build, safety scan and smoke test."
+            )
+            error = None
+        else:
+            # Report the real defect, not the stall that exposed it — "smoke
+            # test failed: ReferenceError foo is not defined" is actionable
+            # where "agent made no progress" is not. Keep the stall as
+            # context, since it's why the run ended here.
+            error = f"{detail} (agent never called finish: {stalled_error})"
 
     return {
         "success": success,

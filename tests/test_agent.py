@@ -610,6 +610,299 @@ def test_explicit_new_title_overrides_auto_numbering(isolated_db, games_dir):
     assert result["title"] == "Punch Counter"
 
 
+# ---------------------------------------------------------------------------
+# 6. search(): the cheap alternative to re-reading a module. Job 79a0abbb
+#    (2026-07-26) read 938KB of file contents across 33 read_file calls for a
+#    six-file change and died before verifying, its last five turns spent
+#    re-reading modules to settle whether a constant was TILE or TILE_SIZE.
+# ---------------------------------------------------------------------------
+
+def test_search_reports_matching_lines_across_every_file_with_path_and_lineno(
+        isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("search", {"pattern": r"getElementById"})]),
+        _turn([("finish", {"summary": "no changes needed"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    observation = next(
+        m for m in seen[1]
+        if m.get("role") == "tool" and m.get("tool_call_id") == "call_0_search"
+    )["content"]
+    # Two call sites in core.js, on their real line numbers.
+    assert "core.js:3: var countEl = document.getElementById(\"count\");" in observation
+    assert "core.js:4:" in observation
+    assert "2 match(es)" in observation
+    # And nowhere near the cost of reading the file it found them in.
+    core_js = (games_dir / "click-counter-src" / "src" / "core.js").read_text()
+    assert core_js not in observation
+
+
+def test_search_can_be_scoped_to_one_file_and_reports_no_matches_plainly(
+        isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    responses = [
+        # A name that exists in core.js but nowhere in style.css, so the
+        # scoping is what makes the answer empty.
+        _turn([("search", {"pattern": "addEventListener", "path": "style.css"})]),
+        _turn([("finish", {"summary": "no changes needed"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    observation = next(
+        m for m in seen[1]
+        if m.get("role") == "tool" and m.get("tool_call_id") == "call_0_search"
+    )["content"]
+    assert observation == "No matches for `addEventListener` in 'style.css'."
+
+
+def test_search_survives_a_bad_regex_and_a_missing_file_as_observations(
+        isolated_db, games_dir):
+    """Same discipline as every other tool: a bad argument comes back as an
+    ERROR observation the model can correct, never as a failed run."""
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("search", {"pattern": "unclosed ("})]),
+        _turn([("search", {"pattern": "x", "path": "nope.js"})]),
+        _turn([("finish", {"summary": "no changes needed"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    bad_regex = next(m for m in seen[1] if m.get("tool_call_id") == "call_0_search")
+    assert bad_regex["content"].startswith("ERROR: not a valid regular expression")
+    missing = next(m for m in seen[2] if m.get("tool_call_id") == "call_0_search"
+                    and "not found" in m.get("content", ""))
+    assert missing["content"] == "ERROR: 'nope.js' not found"
+
+
+def test_search_output_is_capped_so_it_can_ride_along_unpruned(isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    src = games_dir / "click-counter-src" / "src"
+    (src / "core.js").write_text("var needle = 1;\n" * 500)
+
+    responses = [
+        _turn([("search", {"pattern": "needle"})]),
+        _turn([("finish", {"summary": "no changes needed"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    observation = next(
+        m for m in seen[1] if m.get("tool_call_id") == "call_0_search")["content"]
+    match_lines = [ln for ln in observation.splitlines() if ln.startswith("core.js:")]
+    assert len(match_lines) == agent._SEARCH_MAX_MATCHES
+    assert "500 match(es)" in observation, "the real total is reported, not the shown count"
+    assert f"showing the first {agent._SEARCH_MAX_MATCHES}" in observation
+
+
+def test_search_echoes_the_pattern_verbatim_not_repr_escaped(isolated_db, games_dir):
+    """This model imitates its own transcript (see _compact_write_calls), so a
+    pattern echoed back as repr() would teach it to double-escape the next
+    one into a literal backslash."""
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("search", {"pattern": r"var\s+\w+"})]),
+        _turn([("finish", {"summary": "no changes needed"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    observation = next(
+        m for m in seen[1] if m.get("tool_call_id") == "call_0_search")["content"]
+    assert r"var\s+\w+" in observation
+    assert r"var\\s" not in observation
+
+
+def test_list_files_flags_the_modules_this_run_already_rewrote(isolated_db, games_dir):
+    """Written-ness is bookkeeping the model can't recover on its own once
+    _compact_write_calls has removed its write calls from the conversation.
+    Job 79a0abbb rewrote config.js five times for one feature."""
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("list_files", {})]),                                        # before
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})]),
+        _turn([("list_files", {})]),                                        # after
+        _turn([("finish", {"summary": "rewrote core.js"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    def listings(messages):
+        return [json.loads(m["content"]) for m in messages
+                if m.get("tool_call_id") == "call_0_list_files"]
+
+    before, after = listings(seen[3])   # both turns' listings, in order
+    assert all("written_this_run" not in e for e in before)
+    assert {e["path"]: e.get("written_this_run") for e in after} == {
+        "core.js": True, "index.html": None, "style.css": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 7. The forced last-ditch verification. A run that wrote everything it
+#    needed and then stalled used to be discarded outright — job 79a0abbb
+#    burned 1.58M tokens and ~18 minutes, had all six modules correct on
+#    disk, and shipped nothing because the one call it never made was a
+#    deterministic build the loop can run itself.
+# ---------------------------------------------------------------------------
+
+def _reads(n, path="core.js"):
+    return [_turn([("read_file", {"path": path})]) for _ in range(n)]
+
+
+# CONFIG's max_steps is 10, which a stall (one write plus two full
+# _MAX_NO_PROGRESS_STEPS runs of reads) outgrows — and running out of steps is
+# a different exit path from being killed by the guard.
+STALL_CONFIG = {
+    "game_web": CONFIG["game_web"],
+    "multifile_agent": dict(CONFIG["multifile_agent"], max_steps=30),
+}
+
+
+def test_a_stalled_run_is_verified_before_being_discarded_and_ships_if_it_passes(
+        isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    responses = (
+        [_turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})])]
+        # Enough read-only turns to burn the re-armed nudge and then stall out.
+        + _reads(agent._MAX_NO_PROGRESS_STEPS * 2 + 2)
+    )
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, _seen = _run(games_dir, responses, config=STALL_CONFIG, job_id="job-stall")
+
+    assert result["success"], result["error"]
+    assert (games_dir / result["slug"] / "src" / "core.js").read_text() == NEW_CORE_JS
+    assert "without calling finish" in result["notes"]
+    # Recorded like any other verification attempt, so the job's history
+    # shows what actually happened.
+    assert [a["outcome"] for a in db.get_generation_attempts("job-stall")] == ["success"]
+
+
+def test_a_stalled_run_that_fails_verification_reports_the_real_defect(
+        isolated_db, games_dir):
+    """"smoke test failed: ..." is actionable; "agent made no progress" is
+    not. The stall stays in the message as context for why the run ended."""
+    _setup_source_game(games_dir)
+    responses = (
+        [_turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})])]
+        + _reads(agent._MAX_NO_PROGRESS_STEPS * 2 + 2)
+    )
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(False, "console.error: boom")):
+        result, _seen = _run(games_dir, responses, config=STALL_CONFIG)
+
+    assert not result["success"]
+    assert "console.error: boom" in result["error"]
+    assert "never called finish" in result["error"]
+    assert "no progress" in result["error"]
+    # Still rolled back — a failed run leaves no half-written fork.
+    assert {p.name for p in games_dir.iterdir()} == {"click-counter-src"}
+
+
+def test_a_run_that_never_wrote_a_file_is_not_force_verified(isolated_db, games_dir):
+    """Nothing was written, so the staged fork is a byte-copy of the source:
+    verifying it would 'pass' and ship a pointless duplicate game."""
+    _setup_source_game(games_dir)
+    responses = _reads(agent._MAX_NO_PROGRESS_STEPS + 2)
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")) as smoke:
+        result, _seen = _run(games_dir, responses, job_id="job-nowrite")
+
+    assert not result["success"]
+    assert "no progress" in result["error"]
+    smoke.assert_not_called()
+    assert db.get_generation_attempts("job-nowrite") == []
+
+
+def test_exhausting_the_verification_retries_does_not_buy_one_more_attempt(
+        isolated_db, games_dir):
+    """max_verification_retries is the ceiling on build->scan->smoke runs;
+    the forced attempt must respect it rather than adding a free one."""
+    _setup_source_game(games_dir)
+    small_cfg = {
+        "game_web": CONFIG["game_web"],
+        "multifile_agent": dict(CONFIG["multifile_agent"], max_verification_retries=2),
+    }
+    responses = [
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS}),
+               ("finish", {"summary": "attempt 1"})]),
+        _turn([("finish", {"summary": "attempt 2"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test",
+                     return_value=(False, "console.error: still broken")) as smoke:
+        result, _seen = _run(games_dir, responses, config=small_cfg)
+
+    assert not result["success"]
+    assert smoke.call_count == 2
+    assert result["attempts"] == 2
+
+
+def test_an_ai_error_after_the_work_is_done_still_verifies_what_was_written(
+        isolated_db, games_dir):
+    """A transport failure on the turn that would have called finish is not a
+    reason to throw away a complete, correct edit."""
+    _setup_source_game(games_dir)
+    responses = [_turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})])]
+
+    def scripted(messages, **_kwargs):
+        if responses:
+            return responses.pop(0)
+        raise ai.AIError("connection reset")
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result = agent.enhance_multifile_game(
+            SOURCE_GAME_ID, "make the button say Punch", "web:t", CONFIG,
+            games_dir=games_dir,
+        )
+
+    assert result["success"], result["error"]
+    assert (games_dir / result["slug"] / "src" / "core.js").read_text() == NEW_CORE_JS
+
+
+def test_a_later_stall_gets_its_own_nudge_after_a_real_write(isolated_db, games_dir):
+    """The nudge answers one specific stall. Job 79a0abbb spent its only
+    nudge on an early review pause, wrote six more files, and was killed at
+    the next pause — so a successful write re-arms it."""
+    _setup_source_game(games_dir)
+    responses = (
+        [_turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})])]
+        + _reads(agent._MAX_NO_PROGRESS_STEPS)      # stall 1 -> nudged
+        + [_turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})])]
+        + _reads(agent._MAX_NO_PROGRESS_STEPS)      # stall 2 -> nudged again
+        + [_turn([("finish", {"summary": "done after two review passes"})])]
+    )
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses, config=STALL_CONFIG)
+
+    assert result["success"], result["error"]
+    assert result["notes"] == "done after two review passes"
+    stall_nudges = [
+        m for m in seen[-1]
+        if m.get("role") == "user" and "turns without writing a file" in (m.get("content") or "")
+    ]
+    assert len(stall_nudges) == 2, "each stall after real progress earns its own nudge"
+
+
 def test_resolve_failure_for_unknown_source_returns_clean_error(isolated_db, games_dir):
     # No source registered at all -> resolve_target fails before any
     # ask_with_tools call is made.

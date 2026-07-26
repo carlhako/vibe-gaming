@@ -1,10 +1,17 @@
-# Sprint 7 — Streaming + targeted diff edits for the ReAct agent
+# Sprint 8 — Streaming + targeted diff edits for the ReAct agent
 
 See [00-overview.md](00-overview.md). Split out of
 [06-streaming-and-polish.md](06-streaming-and-polish.md)'s items A and C,
 deferred until Sprint 6's items (B: job controls, D: module-size hygiene)
 are fully working — both items here touch the same tool-call loop and
 transcript UI those are still landing in.
+
+**Renumbered 7 → 8 on 2026-07-27** to make room for
+[07-context-vs-cache.md](07-context-vs-cache.md), which lands ahead of this
+one. That is not just a numbering accident: Sprint 7 measures what the
+conversation actually costs per turn, and item 2 below is a bet that output
+tokens are worth optimizing. Sprint 7's measurements are what say whether
+that bet is right, and against which modules.
 
 ## Item 1: Token-level streaming (true live feel)
 

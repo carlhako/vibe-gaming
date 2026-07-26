@@ -168,7 +168,7 @@ aspirational:
   `src/style.css` + `src/*.js`, and `builder.py` deterministically inlines
   that split source back into the one served `index.html` — no AI
   involved in the build step itself. Enhancing a multi-file game runs
-  `agent.py`'s ReAct loop (`read_map`/`list_files`/`read_file`/
+  `agent.py`'s ReAct loop (`read_map`/`list_files`/`read_file`/`search`/
   `write_file`/`finish` tools) instead of the whole-file resubmit loop, so
   the model only ever reads/rewrites the modules a change touches. See
   "Multi-file games" below for the full picture, including the live agent
@@ -309,7 +309,8 @@ through) for single-file games.
 
 **The ReAct agent** (`agent.py`) is what enhances a multi-file game.
 Instead of resubmitting the complete file, the model drives a bounded
-tool loop: `read_map()`, `list_files()`, `read_file(path)` to explore, then
+tool loop: `read_map()`, `list_files()`, `read_file(path)`, `search(pattern,
+path=None)` to explore, then
 `write_file(path, contents)` to replace one whole module (rejected over
 `max_module_bytes` — split it instead of shrinking it), then
 `finish(summary)` to trigger `builder.build_and_verify()`; a failure comes
@@ -487,9 +488,45 @@ Pro reached verification in ~18 turns and passed, and was cheaper per run
 this up for flash and for bigger sources: one when a run has written files
 but gone `_MAX_NO_PROGRESS_STEPS` turns without writing (it's reviewing, not
 stalled — don't kill it, tell it to verify), and one when a quarter of the
-step budget remains with no `finish` attempt yet. A run that never calls
-`finish` discards everything it wrote, which is how two consecutive pilots
-burned ~$1 between them.
+step budget remains with no `finish` attempt yet. The stall nudge is
+**re-armed by any successful write** — it answers one specific pause, and a
+run that has since written real files has earned another.
+
+**A stalled run is verified before it's discarded, because `finish` is not
+the model's to bestow.** Every exit from `_run_react_loop` other than a
+passing `finish` used to throw the whole run away — the caller deletes the
+fork — even with every module the change needed already correct on disk. But
+`finish` only triggers a deterministic build → scan → smoke gate the loop can
+run itself, so it now does: any run that wrote at least one file and hasn't
+spent `max_verification_retries` gets one forced verification (the same gate,
+`extra_verify` parity check included) after the loop ends, whatever ended it
+— stall, step budget, or an `ai_client` error on what would have been the
+finishing turn. It ships if it passes; if it fails, the reported error is the
+real defect (`smoke test failed: ...`) with the stall appended as context,
+which is actionable where "agent made no progress" was not. The case that
+forced this: a live enhance (job 79a0abbb, 2026-07-26) wrote all six modules
+a feature needed, spent its last five turns re-reading them to settle a
+`TILE` vs `TILE_SIZE` question, tripped the no-progress guard a second time,
+and was killed — 1.58M tokens and ~18 minutes for nothing, one unmade call
+away from either shipping or a concrete error. Verifying costs one build; not
+verifying guarantees a total loss.
+
+**`search(pattern, path=None)` exists so the agent doesn't have to re-read a
+module to answer a narrow question.** It greps every `src/` file (plus
+`game.md`), returning `path:line: text` for up to `_SEARCH_MAX_MATCHES`
+matches. Without it the only way to check whether an identifier exists, where
+it's declared, whether it's declared twice, or what its call sites are was a
+whole-file `read_file` — and whole-file reads are the agent path's dominant
+input-token cost. The same job 79a0abbb read 938KB of file contents across 33
+`read_file` calls for a six-file change, `render.js` seven times at 73KB
+each, and its fatal last five turns were a `TILE_SIZE` question one grep
+answers in a line. Unlike a `read_file` result, a search result is never
+pruned — an answer the model can still see is one it won't ask for twice —
+which is why both the match count and the per-line length are capped.
+`list_files()` also now flags each file the run has already rewritten
+(`written_this_run`), bookkeeping the model otherwise cannot recover, since
+`_compact_write_calls` deliberately removes its own write calls from the
+conversation: that same job rewrote `config.js` five times for one feature.
 
 **The agent event stream + live chat UI.** Every think/act/observe/verify
 step is emitted through an `emit(role, content, data)` callback

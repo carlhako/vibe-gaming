@@ -26,6 +26,14 @@ Disk games with no web_games row at all are also reported, but need no
 action here - db.sync_games_from_disk() (called at every app startup)
 already backfills those.
 
+Also sweeps expired enhance_locks rows. Those locks are cleaned up
+lazily, on read (db.get_active_enhance_lock / acquire_enhance_lock delete
+a stale row when someone next touches that game_id), which is correct for
+correctness but means a lock on a game nobody revisits sits in the table
+forever - the production DB had ~70 rows expired since 2026-07-21. They
+are inert (every reader treats an expired row as absent), so this is
+housekeeping, not a bug fix.
+
 Always makes a timestamped copy of the DB file before touching anything,
 whether or not any fix is applied.
 
@@ -129,7 +137,31 @@ def delete_dangling(conn, game_id: str) -> None:
         "UPDATE generation_requests SET result_game_id=NULL WHERE result_game_id=?",
         (game_id,),
     )
+    conn.execute("DELETE FROM enhance_locks WHERE game_id=?", (game_id,))
     conn.execute("DELETE FROM web_games WHERE game_id=?", (game_id,))
+
+
+def stale_enhance_locks(conn) -> list:
+    """Every enhance_locks row no live reader would still honour: past its
+    absolute TTL, or its holder's heartbeat has been quiet longer than
+    ENHANCE_LOCK_IDLE_TIMEOUT_SECONDS. Exactly the two conditions
+    db.get_active_enhance_lock treats as "no lock here" — so anything this
+    returns is already invisible to the app, and deleting it changes no
+    behaviour."""
+    now = db_module.now_iso()
+    idle_cutoff = db_module._iso_add_seconds(now, -db_module.ENHANCE_LOCK_IDLE_TIMEOUT_SECONDS)
+    rows = conn.execute(
+        "SELECT * FROM enhance_locks WHERE expires_at<=? OR last_ping_at<=? "
+        "ORDER BY expires_at",
+        (now, idle_cutoff),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_enhance_locks(conn, game_ids: list) -> None:
+    conn.executemany(
+        "DELETE FROM enhance_locks WHERE game_id=?", [(g,) for g in game_ids]
+    )
 
 
 def main() -> int:
@@ -181,8 +213,11 @@ def main() -> int:
         for slug, game_id in unregistered:
             print(f"  - {slug} ({game_id})")
 
-    if not stale and not dangling:
-        print("\nNo orphaned rows found. DB and games/ agree on every slug.")
+    expired_locks = stale_enhance_locks(conn)
+
+    if not stale and not dangling and not expired_locks:
+        print("\nNo orphaned rows found. DB and games/ agree on every slug, "
+              "and no expired enhance_locks are left over.")
         conn.close()
         return 0
 
@@ -225,6 +260,27 @@ def main() -> int:
                 print("    -> deleted.")
             else:
                 print("    -> skipped.")
+
+    if expired_locks:
+        titles = {r["game_id"]: r["title"] for r in db_rows.values()}
+        oldest = expired_locks[0]["expires_at"]
+        print(f"\n{len(expired_locks)} expired enhance_locks row(s) - the oldest expired "
+              f"{oldest}. These are already invisible to the app (every reader treats an "
+              f"expired row as no lock); they linger only because cleanup is lazy/on-read, "
+              f"so a lock on a game nobody revisits is never swept:")
+        for row in expired_locks[:10]:
+            title = titles.get(row["game_id"], "<no web_games row>")
+            print(f"  - {row['game_id']} ({title!r}) held by {row['locked_by_uid']}, "
+                  f"expired {row['expires_at']}")
+        if len(expired_locks) > 10:
+            print(f"  ... and {len(expired_locks) - 10} more")
+        if confirm(f"    Delete all {len(expired_locks)} expired lock row(s)?", args.yes):
+            with conn:
+                delete_enhance_locks(conn, [r["game_id"] for r in expired_locks])
+            made_changes = True
+            print("    -> deleted.")
+        else:
+            print("    -> skipped.")
 
     conn.close()
     if made_changes:

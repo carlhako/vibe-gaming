@@ -13,7 +13,9 @@ for the full writeup, including the subsequent stub-write root-cause and
 fix (step 2) and the explode reliability work that followed it. That work
 is done; this sprint is now scoped down to items B and D below. Token-level
 streaming (formerly item A) and targeted diff edits (formerly item C) are
-both deferred to [07-targeted-diff-edits.md](07-targeted-diff-edits.md)
+both deferred to [08-targeted-diff-edits.md](08-targeted-diff-edits.md)
+(renumbered from 07 on 2026-07-27, when
+[07-context-vs-cache.md](07-context-vs-cache.md) took that slot)
 until B and D are fully working — streaming in particular has real
 gunicorn worker-occupancy tradeoffs worth deciding on its own, separate
 from these smaller, additive items.
