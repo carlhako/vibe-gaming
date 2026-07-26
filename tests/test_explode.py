@@ -481,7 +481,9 @@ def test_explode_rejects_a_split_that_drops_a_declaration(isolated_db, games_dir
     # clean) — only the parity check stands between this and a broken game.
     assert not result["success"]
     assert "screenX" in result["error"]
-    assert "dropped" in result["error"]
+    # The message has to name the surviving call sites, because "it is still
+    # referenced" is the whole difference between this and a legal rename.
+    assert "reference(s) left" in result["error"]
 
 
 def test_explode_declaration_check_ignores_pure_reorganisation(isolated_db, games_dir):
@@ -501,6 +503,119 @@ def test_explode_declaration_check_names_every_missing_symbol(isolated_db, games
               '</script></html>')
     built = '<html><script>function alpha(){}</script></html>'
     assert agent._missing_declarations(source, built) == ["beta", "gamma"]
+
+
+def test_explode_succeeds_end_to_end_when_the_model_renames_a_collision(
+        isolated_db, games_dir):
+    """The production failure, whole-pipeline. Both Sorcerer With A Minigun
+    explodes (2026-07-26) died here: the model renamed `screenX` to
+    `toScreenX` at the declaration and every call site — the remedy the gate's
+    own message prescribes — and the gate failed it anyway, then repeated the
+    demand until the attempts ran out."""
+    source_js = (
+        '(function () {\n'
+        '  var camera = { x: 0, y: 0 };\n'
+        '  function screenX(wx) { return wx - camera.x; }\n'
+        '  function screenY(wy) { return wy - camera.y; }\n'
+        '  function draw() { return screenX(10) + screenY(20); }\n'
+        '  draw();\n'
+        '})();\n'
+    )
+    _setup_single_file_source(games_dir, html=(
+        '<!doctype html><html><body><canvas id="c"></canvas>'
+        '<script>' + source_js + '</script></body></html>'))
+
+    responses = [
+        _turn([("write_file", {"path": "index.html", "contents":
+                '<!doctype html><html><body><canvas id="c"></canvas>'
+                '<script src="world.js"></script>'
+                '<script src="render.js"></script></body></html>'})]),
+        _turn([("write_file", {"path": "world.js", "contents":
+                'var camera = { x: 0, y: 0 };\n'
+                'function toScreenX(wx) { return wx - camera.x; }\n'
+                'function toScreenY(wy) { return wy - camera.y; }\n'})]),
+        _turn([("write_file", {"path": "render.js", "contents":
+                'function draw() { return toScreenX(10) + toScreenY(20); }\n'
+                'draw();\n'})]),
+        _turn([("write_file", {"path": "game.md", "contents": SPLIT_GAME_MD})]),
+        _turn([("finish", {"summary": "split, renaming the window collisions"})]),
+    ]
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result = agent.explode_game(
+            SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir)
+
+    assert result["success"], result["error"]
+    built = (games_dir / result["slug"] / "index.html").read_text(encoding="utf-8")
+    assert "toScreenX" in built and "toScreenY" in built
+    # The rename has to be complete: no bare `screenX` left to bind to the
+    # read-only Window built-in.
+    assert agent._reference_count("screenX", built) == 0
+
+
+def test_explode_declaration_check_accepts_a_consistent_rename(isolated_db, games_dir):
+    """The gate must pass the exact fix its own message asks for. Dropping the
+    IIFE puts `screenX` in global scope where it collides with the read-only
+    Window built-in, so the prompt tells the model to rename it at the
+    declaration and every call site — which necessarily removes `screenX`
+    from the declaration set. Failing that renamed split is what made two
+    real Sorcerer With A Minigun explodes unsatisfiable: every remaining
+    attempt spent re-doing the rename it had already done correctly."""
+    source = ('<html><script>(function () {'
+              'function screenX(wx) { return wx - 1; }'
+              'function draw() { return screenX(10); }'
+              '})();</script></html>')
+    built = ('<html><script>function toScreenX(wx) { return wx - 1; }</script>'
+             '<script>function draw() { return toScreenX(10); }</script></html>')
+
+    assert agent._missing_declarations(source, built) == ["screenX"]
+    assert agent._declaration_parity(source, built) == ([], ["screenX"])
+    assert agent._explode_declaration_check(source)(games_dir, built) is None
+
+
+def test_explode_declaration_check_still_fails_a_half_done_rename(
+        isolated_db, games_dir):
+    """A rename that missed a call site is the delete case wearing a
+    disguise: `screenX` there still binds to the built-in number."""
+    source = ('<html><script>(function () {'
+              'function screenX(wx) { return wx - 1; }'
+              'function draw() { return screenX(10); }'
+              'function hud() { return screenX(20); }'
+              '})();</script></html>')
+    built = ('<html><script>function toScreenX(wx) { return wx - 1; }'
+             'function draw() { return toScreenX(10); }'
+             'function hud() { return screenX(20); }</script></html>')
+
+    error = agent._explode_declaration_check(source)(games_dir, built)
+    assert error and "screenX (1 reference(s) left)" in error
+
+
+def test_explode_declaration_check_fails_code_dropped_with_its_call_sites(
+        isolated_db, games_dir):
+    """The other real defect: a module shrunk to fit the ceiling, taking a
+    subsystem and its callers with it. Nothing is left referencing the names,
+    so only the absence of any replacement declaration distinguishes it from
+    a rename."""
+    source = ('<html><script>(function () {'
+              'function drawPlayer(){} function drawEnemy(){}'
+              'function frame(){ drawPlayer(); drawEnemy(); }'
+              '})();</script></html>')
+    built = '<html><script>function frame(){}</script></html>'
+
+    error = agent._explode_declaration_check(source)(games_dir, built)
+    assert error and "drawPlayer, drawEnemy" in error.replace(
+        "drawEnemy, drawPlayer", "drawPlayer, drawEnemy")
+    assert "no new declaration to replace them" in error
+
+
+def test_reference_count_ignores_member_access(isolated_db, games_dir):
+    """`camera.screenX` is a property, not a reference to the global that was
+    renamed away — counting it would fail a legitimate rename."""
+    html = ('<html><script>var camera = { screenX: 1 };'
+            'function f(){ return camera.screenX; }</script></html>')
+    assert agent._reference_count("screenX", html) == 0
+    assert agent._reference_count("camera", html) == 2
 
 
 # ---------------------------------------------------------------------------

@@ -400,8 +400,9 @@ count, not the ceiling, is what actually produces granularity.
 it** — so explode runs one extra gate of its own,
 `_explode_declaration_check`, passed to `_run_react_loop` as `extra_verify`
 (an optional post-verification hook; the loop stays generic). It fails a
-finish whose built HTML no longer declares some name the single-file
-original declared. The reason it has to exist: a game whose whole program
+finish whose built HTML either still *references* a name it no longer
+declares, or drops a declaration without putting any new one in its place.
+The reason it has to exist: a game whose whole program
 sits in one IIFE has names that are safe locally but collide with read-only
 `Window` built-ins once the IIFE is dropped — `screenX`, `screenY`, `name`,
 `status`, `length`, `top`. The Darkhold pilot resolved that collision by
@@ -416,6 +417,23 @@ deterministic check is what actually holds the line. It earned that live:
 the passing run's second attempt cleared build, scan AND smoke while having
 dropped 55 declarations including `drawPlayer`/`drawEnemy`/`drawMinion`, and
 only the parity check stopped a game with no entity rendering from shipping.
+
+**A gate must accept the fix its own message demands.** That check started as
+a plain set difference over declared names, which made it unsatisfiable for
+the exact case it was written for: its remedy is to RENAME the colliding
+declaration and every call site, and a correct rename necessarily removes the
+original name from the declaration set — so the gate failed the fix and
+repeated the same demand. Two live Sorcerer With A Minigun explodes
+(2026-07-26) burned every verification attempt on it — one on flash, one on
+pro, so not a capability failure; the flash transcript shows the model
+renaming `screenX`/`screenY` to `toScreenX`/`toScreenY`
+at the declaration and walking the call sites, then being told again not to
+delete them. What actually separates the delete from the rename is the call
+sites — deleting `screenX` strands 22 of them, renaming it strands none — so
+the check now fails on names left *referenced* without a declaration, and
+separately on names that vanish with no new declaration replacing them (the
+drop-to-fit case). Neither prompt wording nor a stricter gate could have
+fixed this; the two simply had to agree on what "preserved" means.
 
 **Explode runs on `deepseek-v4-pro`, not flash** — `agent.DEFAULT_AGENT_MODEL`,
 a code default rather than a config one, because `config.yaml` is gitignored

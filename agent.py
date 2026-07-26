@@ -661,9 +661,50 @@ def _missing_declarations(source_html: str, built_html: str) -> list[str]:
     return sorted(_declared_names(source_html) - _declared_names(built_html))
 
 
+def _reference_count(name: str, html: str) -> int:
+    """How many times `name` appears as a bare identifier in the inline
+    scripts of `html`. Member accesses (`camera.screenX`) and object-literal
+    keys (`{ screenX: 1 }`) don't count — neither one refers to the global
+    that a rename moved away, and counting either would fail a legitimate
+    rename, which is the failure this whole check exists to stop doing. The
+    same exclusion does drop the rare `cond ? screenX : y`; that direction
+    only ever costs a missed catch, not a false accusation. String literals
+    and comments are not excluded, this being a regex rather than a parser
+    for the same reason _declared_names is."""
+    script = "".join(_INLINE_SCRIPT_RE.findall(html))
+    return len(re.findall(
+        rf"(?<![.\w$]){re.escape(name)}(?![\w$])(?!\s*:)", script))
+
+
+def _declaration_parity(source_html: str,
+                        built_html: str) -> tuple[list[str], list[str]]:
+    """Sort the names the built result no longer declares into the only two
+    cases that differ in consequence:
+
+    `broken` — the name is undeclared but the program still references it.
+    That is the real defect: those call sites now bind to a browser built-in
+    or to nothing at all.
+
+    `vanished` — the name is gone from the program entirely, declaration and
+    references alike. That is exactly what a correct, consistent RENAME looks
+    like from the outside, and it is what the explode prompt demands for a
+    name colliding with a Window built-in, so it cannot be treated as a
+    failure on its own.
+    """
+    missing = _missing_declarations(source_html, built_html)
+    broken = [n for n in missing if _reference_count(n, built_html)]
+    vanished = [n for n in missing if n not in broken]
+    return broken, vanished
+
+
+def _fmt_name_list(names: list[str], limit: int = 20) -> str:
+    return ", ".join(names[:limit]) + ("…" if len(names) > limit else "")
+
+
 def _explode_declaration_check(source_html: str):
-    """An extra explode-only verification gate: every name the single-file
-    original declared must still be declared somewhere in the split.
+    """An extra explode-only verification gate: no name the single-file
+    original declared may end up referenced-but-undeclared in the split, and
+    no name may disappear without a replacement taking its place.
 
     This exists because build->scan->smoke cannot catch the worst outcome
     this pass has. Splitting a game whose whole program sat in one IIFE
@@ -678,27 +719,58 @@ def _explode_declaration_check(source_html: str):
     rendering. The result was a green build and a game that breaks the
     instant you start playing.
 
-    A name check is deterministic, needs no model, and turns that silent
-    class of failure into a precise, fixable message.
+    Why this is a reference check and not a set difference over declared
+    names, which is what it was first: the prompt's own remedy for such a
+    collision is to RENAME the declaration and every call site, and a
+    successful rename removes the original name from the declaration set.
+    A plain set difference therefore failed the fix it had just asked for,
+    with a message repeating the demand — an unsatisfiable loop that burned
+    every verification attempt on two real Sorcerer With A Minigun explodes
+    (2026-07-26) without the model ever being able to comply. What actually
+    distinguishes the delete from the rename is the call sites: deleting
+    `screenX` leaves 22 of them behind, renaming it leaves none. So the gate
+    fails on names that are still referenced, and separately on names that
+    vanish with nothing new declared to stand in for them (which is the
+    other real defect — code dropped to fit the module ceiling).
     """
     def check(game_dir, built_html):
-        missing = _missing_declarations(source_html, built_html)
-        if not missing:
-            return None
-        return (
-            "the split dropped "
-            f"{len(missing)} declaration(s) the original defined: "
-            + ", ".join(missing[:20])
-            + ("…" if len(missing) > 20 else "")
-            + ". Every function/const/let/class in the original must still be "
-              "declared exactly once somewhere in src/. If one was removed "
-              "because its name collides with a browser global once it's no "
-              "longer inside the original's IIFE (screenX, screenY, name, "
-              "status, length, top, …), RENAME it consistently at its "
-              "declaration and at every call site — do not delete it. Note "
-              "that a deleted one may not error on load: `screenX` still "
-              "resolves, to the built-in number, and only throws when called."
-        )
+        broken, vanished = _declaration_parity(source_html, built_html)
+        problems = []
+        if broken:
+            sites = ", ".join(
+                f"{n} ({_reference_count(n, built_html)} reference(s) left)"
+                for n in broken[:20]
+            ) + ("…" if len(broken) > 20 else "")
+            problems.append(
+                f"{len(broken)} name(s) the original declared are no longer "
+                "declared anywhere in src/, while the built game still "
+                f"references them: {sites}. Restore each one as a real "
+                "declaration. If you renamed it to dodge a browser-global "
+                "collision (screenX, screenY, name, status, length, top, …), "
+                "that was right — but you missed those references, so rename "
+                "them to match. If you deleted it, put it back under a "
+                "non-colliding name and update every reference. Do not leave "
+                "the call sites bound to the built-in: `screenX` still "
+                "resolves, to a number, so nothing fails on load and it "
+                "throws only once that code runs."
+            )
+        if vanished:
+            # A rename replaces one name with another, so the built result
+            # declares something the original didn't. Nothing new at all means
+            # the code went away rather than moved — the drop-to-fit failure.
+            replacements = _declared_names(built_html) - _declared_names(source_html)
+            if len(replacements) < len(vanished):
+                problems.append(
+                    f"{len(vanished)} name(s) the original declared are gone "
+                    "from the split entirely, with no new declaration to "
+                    f"replace them: {_fmt_name_list(vanished)}. Every "
+                    "function/const/let/class in the original must still be "
+                    "declared exactly once across src/ — under its own name, "
+                    "or under a new one applied consistently at the "
+                    "declaration and every reference. Never omit code to fit "
+                    "the module size ceiling; split the module instead."
+                )
+        return " ".join(problems) or None
     return check
 
 
@@ -800,7 +872,9 @@ def _build_explode_system_prompt(source_title: str, source_html: str,
         "every call site. Never resolve such a collision by deleting the "
         "declaration: the name still resolves — to the built-in — so nothing "
         "fails on load and the game breaks only once that code actually "
-        "runs.\n\n"
+        "runs. Renaming is fully expected here and verification allows it — "
+        "it checks that no name is left referenced without a declaration, "
+        "not that the original spelling survived.\n\n"
         "## Never drop code to fit\n"
         "This conversion is behavior-preserving, and the module ceiling is "
         "never a reason to omit anything. If a subsystem's code exceeds the "
@@ -808,8 +882,10 @@ def _build_explode_system_prompt(source_title: str, source_html: str,
         "render_ui.js) — never abbreviate it, summarize it, stub it, or "
         "leave a function out to make the file fit. Every function and "
         "constant in the original must appear exactly once across your "
-        "modules; the split is checked for this, and a missing declaration "
-        "fails verification.\n\n"
+        "modules — under its own name, or under a rename applied "
+        "consistently at the declaration and every reference. The split is "
+        "checked for this: code that simply disappears fails "
+        "verification.\n\n"
         "## Contract\n"
         "All HTML/CSS/JS stays inline within the src/ files (no separate "
         "asset files). You may load external JavaScript modules or "

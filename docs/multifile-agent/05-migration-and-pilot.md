@@ -823,3 +823,100 @@ Covered by `test_agent_defaults_to_pro_with_no_config_block`,
 `::test_agent_defaults_to_pro_when_the_configured_model_is_blank`,
 `::test_an_explicit_model_in_config_still_wins`, and
 `::test_the_agent_default_does_not_leak_into_the_single_file_pipelines`.
+
+## Sprint 6 step 3: the parity gate was unsatisfiable (2026-07-26)
+
+Two production explodes of Sorcerer With A Minigun (the 159KB Darkhold Arena
+source, same game as run E) failed with the identical error — job
+`1f55645d…` on `deepseek-v4-flash` (650.9s, 4.47M tokens) and job
+`3439369…` on `deepseek-v4-pro (high)` (935.9s, three verification
+attempts). Both models, same wall; this is not a capability failure:
+
+```
+the split dropped 2 declaration(s) the original defined: screenX, screenY.
+… RENAME it consistently at its declaration and at every call site — do not
+delete it.
+```
+
+Job `1f55645d…`'s transcript shows the model doing precisely that, and being
+failed for it:
+
+- seq 281 (thought): "The fix is to rename them to something like `toScreenX`
+  and `toScreenY` everywhere they're used."
+- seq 288: "the functions are defined in `world.js` as `toScreenX` and
+  `toScreenY` (already renamed)" — it then walks `render.js` and `ui.js`
+  updating call sites, and finds a genuine second bug on the way
+  (`renderWaveClear`/`renderGameOver` declared in both `ui.js` and
+  `render.js`).
+- seq 297: the same message, attempts exhausted, fork rolled back.
+
+### The defect
+
+`_explode_declaration_check` was `declared(source) - declared(built)`. The
+remedy it prescribes — rename the declaration and every call site — *removes
+the original name from the declaration set*, so a correct rename fails the
+check by construction, and the failure text asks for it again. There is no
+compliant output: the only way past the gate was to keep the colliding name
+verbatim, which is what run E happened to do and why the gate looked sound.
+The prompt's own rule 5 and the "Never drop code to fit" section were both
+telling the model to do the thing the gate rejected.
+
+This is not "the prompt needs better wording". A deterministic gate and the
+instructions pointing at it must agree on what preservation means, or the
+retry loop is a fixed point that spends the whole budget and ships nothing —
+the same failure shape as the `_PRUNE_SENTINEL` stub loop in step 2, arrived
+at from the opposite direction.
+
+### The fix
+
+The distinguishing evidence is the call sites, not the declaration:
+
+| | declaration gone | still referenced | verdict |
+|---|---|---|---|
+| delete (run B) | yes | 22 sites | broken — those sites bind to the built-in number |
+| rename (this run) | yes | none | correct |
+| drop-to-fit | yes | none, callers went too | broken — code vanished |
+
+So the gate now sorts missing names with `_declaration_parity()` into
+`broken` (undeclared but still referenced — a hard failure, and the message
+now names the surviving reference count per symbol, which also catches a
+*half-finished* rename precisely) and `vanished` (gone entirely, which is what
+a consistent rename looks like from outside). `vanished` fails only when the
+built result declares no new names to stand in for them, which separates a
+rename from a subsystem deleted along with its callers.
+
+`_reference_count()` excludes member accesses (`camera.screenX`) and
+object-literal keys (`{ screenX: 1 }`): neither refers to the renamed global,
+and counting either would fail a legitimate rename — the exact bug being
+fixed. It does not exclude `cond ? screenX : y`, which can only cost a missed
+catch, never a false accusation.
+
+Prompt rule 5 now states that renaming is expected and that verification
+allows it, and "Never drop code to fit" says every original name must survive
+"under its own name, or under a rename applied consistently at the
+declaration and every reference" instead of demanding the original spelling.
+
+Covered by `tests/test_explode.py::test_explode_declaration_check_accepts_a_consistent_rename`,
+`::test_explode_declaration_check_still_fails_a_half_done_rename`,
+`::test_explode_declaration_check_fails_code_dropped_with_its_call_sites`,
+`::test_reference_count_ignores_member_access`, and the pre-existing
+`::test_explode_rejects_a_split_that_drops_a_declaration` (run B's failure,
+which still fails).
+
+### Diagnosing from a copy: `vibegames.db` is WAL, and the sidecar matters
+
+The copy of the production DB used above showed job `3439369…` as
+`status='generating'` with its agent events stopping at 09:32:48 — which
+reads exactly like a worker that died mid-run and left a row that
+`db.claim_next_queued_request` would then let block every other job
+site-wide (`AND NOT EXISTS (… WHERE status='generating')`). It hadn't. The
+run's real end was 09:33:42 (09:18:06 + 935.9s), and the copy simply stops
+55 seconds short of it.
+
+`db.py:310` sets `PRAGMA journal_mode=WAL`, so recently committed
+transactions live in `vibegames.db-wal` until a checkpoint folds them into
+the main file. Copying `vibegames.db` alone silently truncates history to
+the last checkpoint, and a job that finished looks like a job that hung. For
+a faithful copy take `vibegames.db`, `-wal` and `-shm` together, or use
+`sqlite3 vibegames.db ".backup out.db"` / `VACUUM INTO`, which checkpoint
+first.
