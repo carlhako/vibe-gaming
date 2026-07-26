@@ -479,10 +479,21 @@
       const { jobPrompt, attempts, index, mode } = payloadState;
       const n = attempts.length;
       if (n === 0) {
+        // A multi-file agent run only writes a generation_attempts row when
+        // finish()/forced verification actually runs (agent.py's
+        // _run_react_loop) — a run that failed before ever verifying (e.g.
+        // an AI error on the first turn) has none, even though the job's
+        // original prompt is still known. Show it rather than claiming
+        // there's nothing to show; JSON mode has no raw_response without an
+        // attempt, so that one still has nothing to fall back to.
         payloadHeading.textContent = mode === "json" ? "DeepSeek API response" : "Prompt";
         payloadPosition.textContent = "";
         payloadMeta.textContent = "";
-        payloadContent.textContent = "No attempts recorded for this job.";
+        if (mode === "json") {
+          payloadContent.textContent = "No attempts recorded for this job.";
+        } else {
+          payloadContent.textContent = jobPrompt || "No attempts recorded for this job.";
+        }
         payloadPrev.disabled = true;
         payloadNext.disabled = true;
         return;
