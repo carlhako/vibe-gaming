@@ -622,6 +622,171 @@ def test_reference_count_ignores_member_access(isolated_db, games_dir):
     assert agent._reference_count("camera", html) == 2
 
 
+def test_reference_count_ignores_strings_and_comments(isolated_db, games_dir):
+    """A name surviving only in a log message or a commented-out line is not a
+    call site, and reporting it as one sends the model looking for code that
+    isn't there."""
+    html = ('<html><script>function f(){ console.log("screenX broke"); '
+            '/* screenX(1) */ }</script></html>')
+    assert agent._reference_count("screenX", html) == 0
+
+
+# ---------------------------------------------------------------------------
+# Scope awareness. The parity gate polices names that become real globals when
+# explode drops the original's IIFE — it must not police function locals, whose
+# binding form a legitimate split is free to change.
+# ---------------------------------------------------------------------------
+
+def test_scan_scopes_separates_program_names_from_function_locals(
+        isolated_db, games_dir):
+    html = ('<html><script>(function () {'
+            '  var game = { wave: 1 };'
+            '  function fire(t) { let target = t; for (const it of [t]) { target = it; } return target; }'
+            '  fire(null);'
+            '})();</script></html>')
+    scopes = agent._scan_scopes(html)
+    # The IIFE body IS the program's top level: dropping the wrapper is what
+    # turns these two into globals.
+    assert scopes.top_level == {"game", "fire"}
+    # ...and everything bound anywhere is still known, so a name reappearing
+    # as a parameter can't be reported as an undeclared reference.
+    assert {"target", "it", "t"} <= scopes.bound
+
+
+def test_scan_scopes_ignores_braces_inside_strings_comments_and_regexes(
+        isolated_db, games_dir):
+    """The walk that decides "is this declaration inside a function?" counts
+    braces, so an unmatched brace in a literal would shift every name after it
+    into the wrong scope."""
+    html = ('<html><script>(function () {'
+            '  var label = "score: {";'
+            '  var re = /[}{]/g;'
+            '  // }\n'
+            '  /* } */'
+            '  var tail = 1;'
+            '})();</script></html>')
+    assert agent._scan_scopes(html).top_level == {"label", "re", "tail"}
+
+
+def test_scan_scopes_does_not_treat_a_declaration_before_an_iife_as_a_wrapper(
+        isolated_db, games_dir):
+    """`function foo() { … }` followed by `(function () { … })();` reads, to a
+    backwards scan from the closing brace, exactly like `}()` — an IIFE. A
+    function declaration can never be one, so foo's locals stay local."""
+    html = ('<html><script>function foo() { var innerOnly = 1; return innerOnly; }\n'
+            '(function () { var wrapped = 2; })();</script></html>')
+    scopes = agent._scan_scopes(html)
+    assert scopes.top_level == {"foo", "wrapped"}
+    assert "innerOnly" not in scopes.top_level
+
+
+def test_scan_scopes_promotes_a_lone_onload_wrapper(isolated_db, games_dir):
+    """A game written entirely inside one window.onload handler has no top
+    level of its own. Excluding that body would leave the gate policing
+    nothing at all — a silent loss of protection, which is worse than a false
+    positive because nothing reports it."""
+    html = ('<html><script>window.onload = function () {'
+            '  var board = [];'
+            '  function draw() { var px = 1; return px; }'
+            '  draw();'
+            '};</script></html>')
+    scopes = agent._scan_scopes(html)
+    assert scopes.top_level == {"board", "draw"}
+    assert "px" not in scopes.top_level
+
+
+def test_explode_declaration_check_ignores_locals_the_split_re_expressed(
+        isolated_db, games_dir):
+    """The production failure this scope awareness exists for: a Tower Maze
+    Defense explode (2026-07-26) burned all three verification attempts and
+    ~20 minutes on `ct`, `it` and `target` — all three function locals in the
+    original. The split legitimately re-expressed them (a `let target` became
+    an `applyDamage(target, …)` parameter, `for (const it of …)` became
+    `.forEach(it => …)`), which read to a flat regex as "the original declared
+    it, the split doesn't" with the surviving locals counted as broken call
+    sites. No file the model could write would have satisfied that."""
+    source = ('<html><script>(function () {\n'
+              '  var towers = [];\n'
+              '  function applyDamage(t, dmg) {\n'
+              '    var chainTargets = [t], ct = t;\n'
+              '    let target = t;\n'
+              '    for (const it of towers) { target = it; }\n'
+              '    return target && ct && chainTargets;\n'
+              '  }\n'
+              '  applyDamage(null, 1);\n'
+              '})();</script></html>')
+    built = ('<html><script>var towers = [];</script>'
+             '<script>function applyDamage(target, dmg) {\n'
+             '  var chain = [target];\n'
+             '  towers.forEach(it => { target = it; });\n'
+             '  return target && chain;\n'
+             '}\n'
+             'applyDamage(null, 1);</script></html>')
+
+    assert agent._declaration_parity(source, built) == ([], [])
+    assert agent._explode_declaration_check(source)(games_dir, built) is None
+
+
+def test_explode_declaration_check_fails_a_function_copied_into_two_modules(
+        isolated_db, games_dir):
+    """The mirror image of a dropped declaration, from the same Tower Maze run:
+    `gameOver` written into both combat.js and main.js. The later copy silently
+    wins, so the built game can run a body the original never had — and every
+    other gate is happy, since the name is declared and every call resolves."""
+    source = ('<html><script>(function () {'
+              'function gameOver() { return 1; }'
+              'function frame() { return gameOver(); }'
+              'frame();})();</script></html>')
+    built = ('<html><script>function gameOver() { return 1; }</script>'
+             '<script>function gameOver() { return 2; }'
+             'function frame() { return gameOver(); }frame();</script></html>')
+
+    error = agent._explode_declaration_check(source)(games_dir, built)
+    assert error and "gameOver" in error
+    assert "silently replaces" in error
+    # One copy, in one module, is the fix — and it has to pass.
+    fixed = ('<html><script>function gameOver() { return 1; }</script>'
+             '<script>function frame() { return gameOver(); }frame();</script></html>')
+    assert agent._explode_declaration_check(source)(games_dir, fixed) is None
+
+
+def test_explode_succeeds_end_to_end_when_the_split_rebinds_a_local(
+        isolated_db, games_dir):
+    """The Tower Maze failure through the whole pipeline: a split that only
+    ever re-expresses locals must reach a registered fork, not burn its
+    attempts."""
+    source_js = (
+        '(function () {\n'
+        '  var enemies = [];\n'
+        '  function hit(e) { let target = e; for (const it of enemies) { target = it; } return target; }\n'
+        '  hit(null);\n'
+        '})();\n'
+    )
+    _setup_single_file_source(games_dir, html=(
+        '<!doctype html><html><body><canvas id="c"></canvas>'
+        '<script>' + source_js + '</script></body></html>'))
+
+    responses = [
+        _turn([("write_file", {"path": "index.html", "contents":
+                '<!doctype html><html><body><canvas id="c"></canvas>'
+                '<script src="enemies.js"></script>'
+                '<script src="combat.js"></script></body></html>'})]),
+        _turn([("write_file", {"path": "enemies.js", "contents": 'var enemies = [];\n'})]),
+        _turn([("write_file", {"path": "combat.js", "contents":
+                'function hit(target) { enemies.forEach(it => { target = it; }); return target; }\n'
+                'hit(null);\n'})]),
+        _turn([("write_file", {"path": "game.md", "contents": SPLIT_GAME_MD})]),
+        _turn([("finish", {"summary": "split into enemies + combat"})]),
+    ]
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result = agent.explode_game(
+            SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir)
+
+    assert result["success"], result["error"]
+
+
 # ---------------------------------------------------------------------------
 # The no-progress guard must not abort a run that has written everything and
 # is doing a final read-through before finish().

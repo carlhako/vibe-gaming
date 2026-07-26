@@ -58,6 +58,7 @@ import logging
 import re
 import shutil
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Callable
 
@@ -643,22 +644,332 @@ def _build_user_prompt(description: str) -> str:
 
 _INLINE_SCRIPT_RE = re.compile(
     r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", re.S | re.I)
-_TOP_LEVEL_DECL_RE = re.compile(
+_DECL_RE = re.compile(
     r"\b(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)")
+_IDENT_RE = re.compile(r"[A-Za-z_$][\w$]*")
+# A `(` … `)` immediately before a `{` makes that brace a function body only
+# if what precedes the parens isn't one of these — `if (x) {` and
+# `catch (e) {` look identical to `f(x) {` from behind.
+_CONTROL_HEADS = frozenset({
+    "if", "for", "while", "switch", "catch", "with", "do", "else", "try",
+    "finally", "return",
+})
+# Where a `/` can only start a regex literal, never a division: masking those
+# matters because an unmasked `/[{'"]/` would unbalance the brace walk below.
+_REGEX_PRECEDERS = frozenset("(,=:[!&|?{};+-*%^~<>\n")
+_REGEX_KEYWORDS = frozenset({
+    "return", "typeof", "instanceof", "in", "of", "new", "delete", "void",
+    "case", "do", "else", "yield", "await",
+})
+
+
+def _inline_script(html: str) -> str:
+    return "".join(_INLINE_SCRIPT_RE.findall(html))
+
+
+def _mask_js_literals(js: str) -> str:
+    """Blank the *contents* of every string, template literal, regex literal
+    and comment, keeping the text's length and newlines so offsets still line
+    up. Everything below walks braces to decide what scope a declaration sits
+    in, and a `}` inside a string or a `/*` comment would silently shift that
+    walk by a whole scope."""
+    out = list(js)
+    n = len(js)
+    i = 0
+    prev = ""          # last significant char seen outside a literal
+    prev_word = ""     # last identifier/keyword seen outside a literal
+
+    def blank(start: int, end: int) -> None:
+        for k in range(start, min(end, n)):
+            if js[k] != "\n":
+                out[k] = " "
+
+    while i < n:
+        ch = js[i]
+        if ch in "\"'":
+            j = i + 1
+            while j < n:
+                if js[j] == "\\":
+                    j += 2
+                    continue
+                if js[j] == ch or js[j] == "\n":
+                    break
+                j += 1
+            blank(i + 1, j)
+            i = j + 1
+            prev, prev_word = ch, ""
+            continue
+        if ch == "`":
+            # Template literals nest: `${ `${x}` }`. Blank the whole thing
+            # including substitutions — a declaration never lives in one, and
+            # blanking both the `${` and its `}` keeps the walk balanced.
+            j = i + 1
+            depth = 0
+            while j < n:
+                if js[j] == "\\":
+                    j += 2
+                    continue
+                if js[j] == "$" and js[j + 1:j + 2] == "{":
+                    depth += 1
+                    j += 2
+                    continue
+                if depth and js[j] == "}":
+                    depth -= 1
+                elif not depth and js[j] == "`":
+                    break
+                j += 1
+            blank(i + 1, j)
+            i = j + 1
+            prev, prev_word = "`", ""
+            continue
+        if ch == "/" and js[i + 1:i + 2] == "/":
+            j = js.find("\n", i)
+            j = n if j == -1 else j
+            blank(i, j)
+            i = j
+            continue
+        if ch == "/" and js[i + 1:i + 2] == "*":
+            j = js.find("*/", i + 2)
+            j = n if j == -1 else j + 2
+            blank(i, j)
+            i = j
+            continue
+        if ch == "/" and (prev in _REGEX_PRECEDERS or prev == ""
+                          or prev_word in _REGEX_KEYWORDS):
+            j = i + 1
+            in_class = False
+            while j < n:
+                c = js[j]
+                if c == "\\":
+                    j += 2
+                    continue
+                if c == "\n":
+                    break
+                if c == "[":
+                    in_class = True
+                elif c == "]":
+                    in_class = False
+                elif c == "/" and not in_class:
+                    break
+                j += 1
+            blank(i + 1, j)
+            i = j + 1
+            prev, prev_word = "/", ""
+            continue
+        if not ch.isspace():
+            if ch.isalnum() or ch in "_$":
+                m = _IDENT_RE.match(js, i)
+                if m:
+                    prev_word, prev = m.group(0), js[m.end() - 1]
+                    i = m.end()
+                    continue
+            prev, prev_word = ch, ""
+        i += 1
+    return "".join(out)
+
+
+def _skip_back(js: str, j: int) -> int:
+    while j >= 0 and js[j].isspace():
+        j -= 1
+    return j
+
+
+def _word_before(js: str, j: int) -> tuple[str, int]:
+    """The identifier ending at `js[j]` and the index it starts at."""
+    start = j
+    while start >= 0 and (js[start].isalnum() or js[start] in "_$"):
+        start -= 1
+    return js[start + 1:j + 1], start + 1
+
+
+def _matching_open_paren(js: str, close: int) -> int:
+    depth = 0
+    j = close
+    while j >= 0:
+        if js[j] == ")":
+            depth += 1
+        elif js[j] == "(":
+            depth -= 1
+            if depth == 0:
+                return j
+        j -= 1
+    return -1
+
+
+# Anything a function head can legally follow and still be an *expression* —
+# `(function () {`, `!function () {`, `cb = function () {`. A head at
+# statement position (after `;`, `}`, `{` or the start of the script) is a
+# function declaration, which cannot be immediately invoked no matter what
+# follows its closing brace.
+_EXPRESSION_PRECEDERS = frozenset("(!=,:[&|?+-*/%^~<>")
+
+
+def _function_body_head(js: str, brace: int) -> tuple[str, bool] | None:
+    """If the `{` at `brace` opens a function body, return
+    (parameter-list text, is-a-function-expression); otherwise None. `js` must
+    already be literal-masked. Read backwards, because that is the only
+    direction where `function f(a) {`, `(a, b) => {`, `x => {` and the
+    object-method shorthand `draw(ctx) {` all look the same — and where
+    `if (x) {` reliably doesn't."""
+    j = _skip_back(js, brace - 1)
+    if j < 0:
+        return None
+    if j >= 1 and js[j] == ">" and js[j - 1] == "=":            # ... => {
+        j = _skip_back(js, j - 2)
+        if j >= 0 and js[j] == ")":
+            open_paren = _matching_open_paren(js, j)
+            if open_paren < 0:
+                return None
+            params, head = js[open_paren + 1:j], open_paren
+        else:
+            params, head = _word_before(js, j)
+            head = head if params else j
+    elif js[j] == ")":
+        open_paren = _matching_open_paren(js, j)
+        if open_paren < 0:
+            return None
+        params = js[open_paren + 1:j]
+        k = _skip_back(js, open_paren - 1)
+        word, word_start = _word_before(js, k)
+        if word in _CONTROL_HEADS:
+            return None
+        head = word_start if word else k + 1
+        if word and word != "function":                          # function f(
+            k = _skip_back(js, word_start - 1)
+            kw, kw_start = _word_before(js, k)
+            if kw == "function":
+                head = kw_start
+    else:
+        return None
+    prev = _skip_back(js, head - 1)
+    is_expression = prev >= 0 and js[prev] in _EXPRESSION_PRECEDERS
+    return params, is_expression
+
+
+def _is_invoked_at(js: str, close_brace: int) -> bool:
+    """Does the function body closing at `close_brace` get called right
+    there — `(function () { … })()`, `(() => { … })()`, `!function () { … }()`?
+    Such a body holds the whole program's names, which is what dropping the
+    wrapper hoists into global scope, so it counts as top level. An ordinary
+    `function fire() { … }` body, or a `setTimeout(function () { … }, 5)`
+    callback, holds locals nobody outside can see."""
+    n = len(js)
+    j = close_brace + 1
+    while j < n and js[j].isspace():
+        j += 1
+    if j < n and js[j] == ")":
+        j += 1
+        while j < n and js[j].isspace():
+            j += 1
+    return j < n and js[j] == "("
+
+
+class _Scopes:
+    """What a program declares, split by scope, so the parity gate can tell a
+    global apart from a local.
+
+    `top_level` — names visible to the whole program: declared at a script's
+    top level, or inside an IIFE body (the original's names all live there,
+    and dropping that wrapper is what makes them real globals).
+    `bound` — every name bound anywhere at any depth, parameters included.
+    `redeclared_functions` — top-level function/class names declared more than
+    once, i.e. one module's copy silently overriding another's.
+    """
+
+    __slots__ = ("top_level", "bound", "redeclared_functions")
+
+    def __init__(self, top_level: set[str], bound: set[str],
+                 redeclared_functions: list[str] | None = None):
+        self.top_level = top_level
+        self.bound = bound
+        self.redeclared_functions = redeclared_functions or []
+
+
+def _scan_scopes(html: str) -> _Scopes:
+    """Scope-aware inventory of the inline <script> blocks of `html`.
+
+    Still not a JS parser — it masks literals, then walks braces classifying
+    each one as a block, an IIFE body (top level continues inside it) or an
+    ordinary function body (everything inside is local). That is the whole
+    distinction the gate needs, and the one a bare regex over the file does
+    not make: the flat version of this counted `for (const it of inRange)` and
+    a `let target = …` inside a function as declarations, so a split that
+    legitimately re-expressed one of those locals — a `let target` becoming an
+    `applyDamage(target, …)` parameter, a `for (const it of …)` becoming a
+    `.forEach(it => …)` — read as "the original declared it, the split
+    doesn't", with the surviving locals counted as broken references. That
+    unsatisfiable failure burned all three attempts of a real Tower Maze
+    Defense explode (2026-07-26, `ct`/`it`/`target`); there is nothing the
+    model can write to make a local look declared at file scope.
+    """
+    js = _mask_js_literals(_inline_script(html))
+    frames: list[tuple[int, bool]] = []   # (open brace idx, is function body)
+    # open idx -> (params, is a function expression, enclosing function frames)
+    functions: dict[int, tuple[str, bool, tuple[int, ...]]] = {}
+    closes: dict[int, int] = {}
+    decls: list[tuple[str, str, tuple[int, ...]]] = []   # name, kw, fn frames
+
+    for m in re.finditer(
+            r"[{}]|\b(?:function|const|let|var|class)\s+[A-Za-z_$][\w$]*", js):
+        tok = m.group(0)
+        if tok == "{":
+            head = _function_body_head(js, m.start())
+            if head is not None:
+                functions[m.start()] = (
+                    *head, tuple(idx for idx, is_fn in frames if is_fn))
+            frames.append((m.start(), head is not None))
+        elif tok == "}":
+            if frames:
+                open_idx, _ = frames.pop()
+                closes[open_idx] = m.start()
+        else:
+            decls.append((_DECL_RE.match(tok).group(1), tok.split()[0],
+                          tuple(idx for idx, is_fn in frames if is_fn)))
+
+    def transparent(open_idx: int) -> bool:
+        """Is this function body one whose names the split will hoist into
+        global scope — i.e. an IIFE wrapper rather than an ordinary function?"""
+        _params, is_expression, _enclosing = functions[open_idx]
+        close = closes.get(open_idx)
+        return (is_expression and close is not None
+                and _is_invoked_at(js, close))
+
+    bound = {name for name, _kw, _stack in decls}
+    for params, _is_expression, _enclosing in functions.values():
+        bound.update(_IDENT_RE.findall(params))
+
+    def at_top_level(promoted: int | None = None) -> list[tuple[str, str]]:
+        return [(name, kw) for name, kw, stack in decls
+                if all(idx == promoted or transparent(idx) for idx in stack)]
+
+    scoped = at_top_level()
+    outermost = [idx for idx, (_p, _e, enclosing) in functions.items()
+                 if not enclosing]
+    if not scoped and len(outermost) == 1:
+        # A program written as one `window.onload = function () { … }` or a
+        # single DOMContentLoaded callback has no top level of its own.
+        # Promoting that lone wrapper keeps the gate from quietly degrading
+        # into a no-op on such a game — worse than a false positive, because
+        # nothing reports it.
+        scoped = at_top_level(promoted=outermost[0])
+
+    counts = Counter(name for name, kw in scoped if kw in ("function", "class"))
+    return _Scopes({name for name, _kw in scoped}, bound,
+                   sorted(n for n, c in counts.items() if c > 1))
 
 
 def _declared_names(html: str) -> set[str]:
-    """Every name declared by the inline <script> blocks of `html`. Crude by
-    design — a regex, not a JS parser — because it's only ever used to
-    compare one program against a reorganized copy of itself, where a name
-    that vanishes entirely is the signal. Over-matching (a `const` inside a
-    function body) is harmless: it over-matches identically on both sides."""
-    return set(_TOP_LEVEL_DECL_RE.findall(
-        "".join(_INLINE_SCRIPT_RE.findall(html))))
+    """The names of `html`'s program that a split turns into real globals —
+    see _scan_scopes for why this is scope-aware and not a flat regex."""
+    return _scan_scopes(html).top_level
 
 
 def _missing_declarations(source_html: str, built_html: str) -> list[str]:
-    return sorted(_declared_names(source_html) - _declared_names(built_html))
+    """Top-level names of the original that the split binds nowhere at all.
+    Measured against every binding in the built result, at any depth: a name
+    that reappears as a parameter or a local is a name whose references this
+    check cannot honestly call broken."""
+    return sorted(_declared_names(source_html) - _scan_scopes(built_html).bound)
 
 
 def _reference_count(name: str, html: str) -> int:
@@ -668,10 +979,10 @@ def _reference_count(name: str, html: str) -> int:
     that a rename moved away, and counting either would fail a legitimate
     rename, which is the failure this whole check exists to stop doing. The
     same exclusion does drop the rare `cond ? screenX : y`; that direction
-    only ever costs a missed catch, not a false accusation. String literals
-    and comments are not excluded, this being a regex rather than a parser
-    for the same reason _declared_names is."""
-    script = "".join(_INLINE_SCRIPT_RE.findall(html))
+    only ever costs a missed catch, not a false accusation. Occurrences in
+    strings and comments are masked out, so a name that only survives in a
+    log message isn't reported as a live call site."""
+    script = _mask_js_literals(_inline_script(html))
     return len(re.findall(
         rf"(?<![.\w$]){re.escape(name)}(?![\w$])(?!\s*:)", script))
 
@@ -732,10 +1043,44 @@ def _explode_declaration_check(source_html: str):
     fails on names that are still referenced, and separately on names that
     vanish with nothing new declared to stand in for them (which is the
     other real defect — code dropped to fit the module ceiling).
+
+    Every name here is a TOP-LEVEL name — see _scan_scopes. Policing locals
+    too is what made the gate unsatisfiable a second time, on the Tower Maze
+    Defense explode.
+
+    The third thing it fails is the mirror image of a dropped declaration: the
+    same top-level function declared in two modules at once, which is what a
+    split does when it copies a function instead of moving it. The later copy
+    silently wins, so if the two bodies differ the built game runs code the
+    original never did — and nothing else notices, since the name is present
+    and every call site resolves. That happened in the same Tower Maze run
+    (`gameOver` in both combat.js and main.js, `checkEnemyDeaths` in both
+    enemies.js and combat.js).
     """
+    if not _declared_names(source_html):
+        # Every scope in this source read as local (several top-level callbacks,
+        # say, with nothing promotable). The gate still runs, but it has nothing
+        # to compare — say so, because a check that quietly passes everything
+        # is indistinguishable from a check that works.
+        _logger.warning(
+            "explode parity check found no top-level declarations in the "
+            "source game: it cannot detect dropped or stranded names for this "
+            "split")
+
     def check(game_dir, built_html):
         broken, vanished = _declaration_parity(source_html, built_html)
         problems = []
+        duplicated = _scan_scopes(built_html).redeclared_functions
+        if duplicated:
+            problems.append(
+                f"{len(duplicated)} function/class name(s) are declared at the "
+                "top level of more than one module, so the last copy loaded "
+                f"silently replaces the earlier one: {_fmt_name_list(duplicated)}. "
+                "Each one must be declared exactly once across src/ — keep it "
+                "in the module it belongs to and delete the other copy, "
+                "leaving the call sites alone (they resolve across modules "
+                "either way)."
+            )
         if broken:
             sites = ", ".join(
                 f"{n} ({_reference_count(n, built_html)} reference(s) left)"
@@ -854,7 +1199,12 @@ def _build_explode_system_prompt(source_title: str, source_html: str,
         "combined. The same const/let/class name in two files is a fatal "
         "redeclaration error that kills the entire game on load — it is not "
         "a per-file shadow. If two subsystems both need a constant, it "
-        "belongs in exactly one module.\n"
+        "belongs in exactly one module. A duplicated `function` is the "
+        "quieter version of the same mistake: two copies don't error, the "
+        "later one just silently replaces the earlier, so if they ever drift "
+        "the game runs code the original never had. MOVE each function into "
+        "the one module it belongs to; never copy it into a second. Calls "
+        "reach it from any module either way. Verification checks this.\n"
         "3. Never invent `window.foo = foo` bridges to pass things between "
         "modules. Top-level const/let/class bindings never become window "
         "properties, so `window.foo` reads undefined even where bare `foo` "

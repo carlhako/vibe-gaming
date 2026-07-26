@@ -435,6 +435,44 @@ separately on names that vanish with no new declaration replacing them (the
 drop-to-fit case). Neither prompt wording nor a stricter gate could have
 fixed this; the two simply had to agree on what "preserved" means.
 
+**A gate that can't see scope will police names that were never its business.**
+The same check then failed a Tower Maze Defense explode (2026-07-26) three
+attempts running on `ct`, `it` and `target` — all three *function locals* in
+the original (`var chainTargets = [t], ct = t;`, `for (const it of towers)`, a
+`let target` inside `applyDamage`). Its declaration scan was a flat regex over
+the whole file with no notion of scope, so a split that legitimately
+re-expressed a local — a `let target` becoming an `applyDamage(target, …)`
+parameter, a `for (const it of …)` becoming `.forEach(it => …)` — read as "the
+original declared it, the split doesn't", with the surviving locals counted as
+stranded call sites. Unsatisfiable in the strongest sense: no file the model
+can write makes a local look declared at file scope, and on the two bundled
+games ~45% of the names that flat regex policed were locals, most of them
+generic (`b`, `c`, `col`, `dt`, `target`) — a large landmine field, since any
+reorganization is free to rebind those. `_scan_scopes` now masks literals and
+walks braces, classifying each one as a block, an IIFE body (top level
+continues inside it, because dropping that wrapper is exactly what makes those
+names global) or an ordinary function body (everything inside is local), and
+the gate polices only top-level names. It also tracks every binding at any
+depth, parameters included, so a name that reappears as a parameter is never
+called a broken reference. Two details earned their code: a function
+*declaration* is never an IIFE however invoked-looking the text after its
+closing brace is (`function foo(){}` followed by `(function(){…})()` reads as
+`}()` to a backwards scan), and a program written entirely inside one
+`window.onload = function () {…}` has no top level of its own, so that lone
+wrapper is promoted rather than leaving the gate a silent no-op — worse than a
+false positive, because nothing reports it.
+
+**The same run also shipped a function twice, and every gate was happy.** It
+wrote `gameOver` into both `combat.js` and `main.js` (and `checkEnemyDeaths`
+into both `enemies.js` and `combat.js`). Duplicated `const`/`let`/`class` is a
+load-time SyntaxError the smoke test catches; a duplicated `function` is
+silent — the later copy just replaces the earlier, so if the two bodies ever
+drift the built game runs code the original never had, with every name present
+and every call site resolving. The parity check now also fails a top-level
+function/class name declared more than once in the built result, and the
+explode prompt's "declare every identifier exactly once" rule says why copying
+a function is not the harmless half of that rule.
+
 **Explode runs on `deepseek-v4-pro`, not flash** — `agent.DEFAULT_AGENT_MODEL`,
 a code default rather than a config one, because `config.yaml` is gitignored
 and so a config-only default never reaches a deployment or a fresh clone.
