@@ -797,3 +797,29 @@ warning. The warning fires at 15 steps remaining and run E reached finish at
 turn ~18, so it never triggered — reaching verification is attributable to
 the model, not to that fix. The fix still matters for flash and for larger
 sources; it just isn't what made this run pass.
+
+### Where the model default lives, and why it is code
+
+`deepseek-v4-pro` for the ReAct agent started as a `config.yaml` setting,
+which was a mistake worth recording: **`config.yaml` is gitignored**, so a
+config-only default reaches no deployment and no fresh clone. Pushing run E's
+result would have left prod resolving `cfg.get("model", "")` -> `""` ->
+`ai_client.MODEL_DEFAULT` -> `deepseek-v4-flash`, i.e. running the exact
+configuration there are four failed runs against, while the verified one sat
+in an untracked file on one laptop.
+
+It is now `agent.DEFAULT_AGENT_MODEL`, read as `cfg.get("model") or
+DEFAULT_AGENT_MODEL` — `or`, not a `get()` default, so an explicitly blank
+model still lands on the agent's own default rather than falling through to
+the app-wide one. Scoped to the multi-file agent only: `newaiwebgame` and
+`enhanceaiwebgame` keep resolving through `ai_client.MODEL_DEFAULT`, having
+no evidence against flash.
+
+This is the same shape as `timeout_seconds`' 120s -> 1800s fix earlier in
+Sprint 6. The rule both times: **if a wrong value breaks the feature, the
+default belongs in code, not in an ignored config file.**
+
+Covered by `test_agent_defaults_to_pro_with_no_config_block`,
+`::test_agent_defaults_to_pro_when_the_configured_model_is_blank`,
+`::test_an_explicit_model_in_config_still_wins`, and
+`::test_the_agent_default_does_not_leak_into_the_single_file_pipelines`.

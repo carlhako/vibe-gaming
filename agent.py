@@ -82,6 +82,22 @@ _logger = logging.getLogger(__name__)
 # physical limit. Configurable per-call via cfg["max_module_bytes"].
 DEFAULT_MAX_MODULE_BYTES = ai.MAX_OUTPUT_TOKENS * 3
 
+# The ReAct agent defaults to v4-pro where the rest of the app defaults to
+# ai.MODEL_DEFAULT (v4-flash) — this is the one pipeline with direct evidence
+# against flash. Exploding a 159KB single-IIFE game failed on flash four
+# times running, every time by failing to CONVERGE rather than by lacking
+# capability: it split the game sensibly and then audited its own modules
+# until the step budget ran out, never calling finish, so the run shipped
+# nothing. v4-pro reached verification in ~18 turns and passed, and cost less
+# per run ($0.35 vs $0.66) despite ~3.1x the token price.
+#
+# This is a CODE default rather than a config-only one on purpose: config.yaml
+# is gitignored, so anything set only there is invisible to every deployment
+# and every fresh clone — prod would silently run the configuration we have
+# four failed runs against. Same lesson as timeout_seconds' 120s -> 1800s.
+# cfg["model"] still wins, so flash remains one line away.
+DEFAULT_AGENT_MODEL = "deepseek-v4-pro"
+
 # The explode pass needs a much tighter ceiling than an ordinary edit.
 # DEFAULT_MAX_MODULE_BYTES exists to stop a write that physically cannot be
 # re-emitted; it is not a target, and a 159KB game splits "successfully"
@@ -945,7 +961,10 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     max_verification_retries = cfg.get("max_verification_retries", 3)
     max_module_bytes = cfg.get("max_module_bytes", DEFAULT_MAX_MODULE_BYTES)
     max_read_age_steps = cfg.get("context_prune_after_steps", 3)
-    model = cfg.get("model", "")
+    # `or` rather than a get() default, so an explicitly blank model in a
+    # config still lands on the agent's own default instead of falling
+    # through to ai_client's app-wide one (see DEFAULT_AGENT_MODEL).
+    model = cfg.get("model") or DEFAULT_AGENT_MODEL
     effort = cfg.get("effort", "high")
     # 1800s, matching config.yaml.example and the two single-file pipelines —
     # NOT ai_client's own 120s default. A config.yaml predating the

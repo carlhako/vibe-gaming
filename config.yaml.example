@@ -64,6 +64,11 @@ multifile_agent:
   # price ($0.435/$0.87 vs $0.14/$0.28 per 1M) but was CHEAPER per run in
   # practice -- $0.35 vs $0.66 -- because it converges instead of thrashing.
   # See docs/multifile-agent/05-migration-and-pilot.md.
+  #
+  # This line is OPTIONAL: agent.DEFAULT_AGENT_MODEL is v4-pro in code, so a
+  # deployment with no multifile_agent block at all still gets it. config.yaml
+  # is gitignored, so a config-only default would never reach prod. Uncomment
+  # the flash line to opt back out.
   # model: "deepseek-v4-flash"
   model: "deepseek-v4-pro"
   effort: "high"

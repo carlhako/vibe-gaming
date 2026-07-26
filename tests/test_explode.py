@@ -639,3 +639,59 @@ def test_the_budget_warning_is_not_sent_once_verification_has_run(
 
     assert not [m for turn in sent for m in turn
                 if "BUDGET WARNING" in (m.get("content") or "")]
+
+
+# ---------------------------------------------------------------------------
+# The agent's own model default. config.yaml is gitignored, so a config-only
+# default is invisible to every deployment — this has to live in code.
+# ---------------------------------------------------------------------------
+
+def _model_used_for_explode(games_dir, multifile_cfg):
+    """Run one explode turn and report the model actually sent to DeepSeek."""
+    seen = []
+
+    def scripted(messages, **kwargs):
+        seen.append(kwargs.get("model"))
+        return _turn([("finish", {"summary": "done"})])
+
+    cfg = copy.deepcopy(CONFIG)
+    if multifile_cfg is None:
+        cfg.pop("multifile_agent")
+    else:
+        cfg["multifile_agent"] = multifile_cfg
+    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(False, "stop here")):
+        agent.explode_game(SOURCE_GAME_ID, "web:t", cfg, games_dir=games_dir)
+    return seen[0]
+
+
+def test_agent_defaults_to_pro_with_no_config_block(isolated_db, games_dir):
+    _setup_single_file_source(games_dir)
+    assert _model_used_for_explode(games_dir, None) == agent.DEFAULT_AGENT_MODEL
+    assert agent.DEFAULT_AGENT_MODEL == "deepseek-v4-pro"
+
+
+def test_agent_defaults_to_pro_when_the_configured_model_is_blank(
+        isolated_db, games_dir):
+    """A blank model must land on the agent's default, not fall through to
+    ai_client's app-wide flash default."""
+    _setup_single_file_source(games_dir)
+    used = _model_used_for_explode(
+        games_dir, {"model": "", "effort": "high", "max_steps": 3})
+    assert used == "deepseek-v4-pro"
+
+
+def test_an_explicit_model_in_config_still_wins(isolated_db, games_dir):
+    _setup_single_file_source(games_dir)
+    used = _model_used_for_explode(
+        games_dir, {"model": "deepseek-v4-flash", "effort": "high", "max_steps": 3})
+    assert used == "deepseek-v4-flash"
+
+
+def test_the_agent_default_does_not_leak_into_the_single_file_pipelines(
+        isolated_db, games_dir):
+    """newaiwebgame/enhanceaiwebgame have no evidence against flash and must
+    keep resolving through ai_client's own default."""
+    import ai_client
+    assert ai_client.MODEL_DEFAULT == "deepseek-v4-flash"
+    assert agent.DEFAULT_AGENT_MODEL != ai_client.MODEL_DEFAULT

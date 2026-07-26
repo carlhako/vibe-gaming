@@ -417,8 +417,12 @@ the passing run's second attempt cleared build, scan AND smoke while having
 dropped 55 declarations including `drawPlayer`/`drawEnemy`/`drawMinion`, and
 only the parity check stopped a game with no entity rendering from shipping.
 
-**Explode runs on `deepseek-v4-pro`, not flash** (`multifile_agent.model`;
-the other two pipelines are untouched). Four flash runs failed on the hard
+**Explode runs on `deepseek-v4-pro`, not flash** — `agent.DEFAULT_AGENT_MODEL`,
+a code default rather than a config one, because `config.yaml` is gitignored
+and so a config-only default never reaches a deployment or a fresh clone.
+`multifile_agent.model` still overrides it; `newaiwebgame`/`enhanceaiwebgame`
+keep resolving through `ai_client.MODEL_DEFAULT` (flash), having no evidence
+against it. Four flash runs failed on the hard
 case and every one was a *convergence* failure rather than a capability one —
 flash split the game sensibly each time, then audited its own modules until
 the step budget ran out without ever calling `finish`, shipping nothing.
