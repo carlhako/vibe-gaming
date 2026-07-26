@@ -838,19 +838,30 @@ def test_the_finish_nudge_is_spent_once_and_a_real_stall_still_aborts(
     assert "no progress" in result["error"]
 
 
-def test_a_run_that_never_wrote_anything_is_not_nudged(isolated_db, games_dir):
-    """The nudge tells the model to call finish because its files are on
-    disk. With nothing written that would be wrong, so the guard aborts at
-    the usual threshold."""
+def test_a_run_that_never_wrote_anything_is_not_told_to_finish(isolated_db, games_dir):
+    """The finish nudge tells the model its files are on disk and only
+    verification is missing. With nothing written that would be a lie, so a
+    stalled pre-write run gets the write nudge instead, and aborts if that
+    doesn't take."""
     _setup_single_file_source(games_dir)
-    responses = _reads(agent._MAX_NO_PROGRESS_STEPS + 3)
+    # The first read of a path is new information; only the repeats stall.
+    responses = _reads(1 + 2 * agent._MAX_NO_PROGRESS_STEPS)
+    seen = []
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+    def record(messages, **kwargs):
+        seen.append(copy.deepcopy(messages))
+        return responses[len(seen) - 1]
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=record), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.explode_game(SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir)
 
     assert not result["success"]
     assert "no progress" in result["error"]
+    nudges = [m.get("content") or "" for m in seen[-1] if m.get("role") == "user"]
+    assert not any("turns without writing a file" in n for n in nudges), \
+        "nothing is written, so there is nothing to finish"
+    assert any("have not written a file yet" in n for n in nudges)
 
 
 def test_a_run_running_out_of_steps_without_verifying_is_told_to_finish(
@@ -893,6 +904,38 @@ def test_a_run_running_out_of_steps_without_verifying_is_told_to_finish(
     # Warned exactly once, however many turns it then took.
     assert len({m["content"] for m in warnings}) == 1
     assert "ships NOTHING" in warnings[0]["content"]
+
+
+def test_a_run_that_has_explored_its_whole_budget_is_told_to_write(
+        isolated_db, games_dir):
+    """The other half of the same backstop. Since the no-progress guard
+    counts repetition rather than turns, a run asking a new question every
+    turn can explore indefinitely — so the budget watcher has to cover the
+    never-written case too, and telling it to call finish would be wrong."""
+    _setup_single_file_source(games_dir)
+    cfg = copy.deepcopy(CONFIG)
+    cfg["multifile_agent"]["max_steps"] = 12          # nudge threshold: 5 left
+
+    sent = []
+
+    def scripted(messages, **_kwargs):
+        sent.append([m for m in messages if m.get("role") == "user"])
+        # A different search every turn: always new information, never a write.
+        return _turn([("search", {"pattern": f"pattern{len(sent)}"})])
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result = agent.explode_game(SOURCE_GAME_ID, "web:t", cfg, games_dir=games_dir)
+
+    assert not result["success"]
+    warnings = [m for turn in sent for m in turn
+                if "BUDGET WARNING" in (m.get("content") or "")]
+    assert warnings, "an all-exploration run must still be warned"
+    assert len({m["content"] for m in warnings}) == 1
+    assert "not written a single file" in warnings[0]["content"]
+    # Told to write, not to verify nothing.
+    assert "Stop exploring and start writing" in warnings[0]["content"]
+    assert "call finish(summary) on your next turn" not in warnings[0]["content"]
 
 
 def test_the_budget_warning_is_not_sent_once_verification_has_run(

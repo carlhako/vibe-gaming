@@ -134,6 +134,22 @@ DEFAULT_AGENT_MODEL = "deepseek-v4-pro"
 DEFAULT_EXPLODE_MAX_MODULE_BYTES = 120_000
 EXPLODE_TARGET_MODULE_BYTES = 25_000
 
+# How many consecutive turns may go by learning nothing before the run is
+# considered stuck. "Learning nothing" is the operative phrase — see
+# _progress_key: a turn counts as progress if it wrote a file OR made an
+# observation this run hasn't made before. It used to count only a successful
+# write_file, and that killed a live enhance (job 73df2b10, 2026-07-27) on
+# turn 5 of a completely healthy run: read_map, nine read_file calls across
+# a 13-module game, one search — eleven productive calls, no repeats, the
+# model's own reasoning showing it had finished planning and was about to
+# write. Exploration is not a stall, and the finish nudge below couldn't
+# save it because that nudge is gated on having already written something.
+#
+# The `search` tool (2026-07-27) made this much easier to hit: its whole
+# point is answering narrow questions in cheap turns instead of expensive
+# re-reads, so it adds turns to the pre-write phase by design. A guard that
+# counts turns rather than repetition punishes exactly the behaviour the
+# tool exists to encourage.
 _MAX_NO_PROGRESS_STEPS = 5
 
 # A run that never calls finish() ships NOTHING — every module written, every
@@ -625,6 +641,29 @@ def _execute_tool(tc: ai.ToolCall, game_dir: Path, max_module_bytes: int,
         return f"ERROR: unknown tool {tc.name!r}", None
     except AgentError as exc:
         return f"ERROR: {exc}", None
+
+
+def _progress_key(tc: ai.ToolCall, touched_path: str | None):
+    """A hashable identity for the *observation* a non-write tool call
+    produced, or None if the call has no reusable identity. Two calls with
+    the same key tell the run the same thing, so the second one taught it
+    nothing (see _MAX_NO_PROGRESS_STEPS).
+
+    Deliberately not invalidated by a later write to the same path: after
+    write_file(p) the model already knows p's contents — it just emitted
+    them — so re-reading p is exactly the "careful final review" pass the
+    finish nudge exists to answer, not new information."""
+    if tc.name in ("read_map", "list_files"):
+        return (tc.name,)
+    if tc.name == "read_file":
+        return ("read_file", touched_path)
+    if tc.name == "search":
+        try:
+            pattern, _ = _parse_search_args(tc.arguments)
+        except AgentError:
+            return None
+        return ("search", pattern, touched_path)
+    return None
 
 
 def _classify_failure(detail: str) -> str:
@@ -1632,7 +1671,9 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     consecutive_no_progress = 0
     wrote_anything = False
     written_paths: set[str] = set()
+    seen_observations: set = set()
     nudged_to_finish = False
+    nudged_to_write = False
     nudged_low_budget = False
     finish_nudge_at = _finish_nudge_threshold(max_steps)
     summary = ""
@@ -1756,6 +1797,14 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
             _safe_emit(emit, "tool_result", obs_content, obs_data)
             msg = {"role": "tool", "tool_call_id": tc.id, "content": content}
             messages.append(msg)
+            if not content.startswith("ERROR:"):
+                # A failed call is never progress, and its key is not
+                # recorded either — retrying the same bad path stays a
+                # repeat rather than looking like a fresh observation.
+                key = _progress_key(tc, touched_path)
+                if key is not None and key not in seen_observations:
+                    seen_observations.add(key)
+                    made_progress = True
             if tc.name == "read_file" and touched_path and not content.startswith("ERROR:"):
                 last_read_message[touched_path] = msg
                 last_read_step[touched_path] = step_num
@@ -1829,12 +1878,11 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         # write cadence, which is why this is separate from the no-progress
         # guard below (see _finish_nudge_threshold).
         steps_left = max_steps - step_num
-        if (verification_attempts == 0 and wrote_anything
-                and not nudged_low_budget and steps_left <= finish_nudge_at):
+        if (verification_attempts == 0 and not nudged_low_budget
+                and steps_left <= finish_nudge_at):
             nudged_low_budget = True
-            messages.append({
-                "role": "user",
-                "content": (
+            if wrote_anything:
+                warning = (
                     f"BUDGET WARNING: {steps_left} turn(s) remain, and you have "
                     "not called finish yet. A run that ends without a passing "
                     "finish ships NOTHING — every file you have written is "
@@ -1843,11 +1891,45 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                     "which check your split far more strictly than re-reading "
                     "the modules can; if anything is wrong you get the exact "
                     "failure back and can keep editing from there."
-                ),
-            })
+                )
+            else:
+                # Exploring is no longer capped at _MAX_NO_PROGRESS_STEPS
+                # turns (that guard counts repetition now), so a run can in
+                # principle read and search its way through the whole budget
+                # without ever making the change. This is the backstop.
+                warning = (
+                    f"BUDGET WARNING: {steps_left} turn(s) remain and you have "
+                    "not written a single file. Reading and searching ship "
+                    "NOTHING on their own — only write_file changes the game, "
+                    "and only finish(summary) verifies it. Stop exploring and "
+                    "start writing the change now with what you already know."
+                )
+            messages.append({"role": "user", "content": warning})
 
         consecutive_no_progress = 0 if made_progress else consecutive_no_progress + 1
         if consecutive_no_progress >= _MAX_NO_PROGRESS_STEPS:
+            # Nothing written yet, so the finish nudge below would be
+            # nonsense (there is nothing to verify) — but this run is
+            # re-reading and re-searching what it has already seen, which is
+            # its own kind of stuck. Point it at the actual next step once
+            # before giving up.
+            if not wrote_anything and not nudged_to_write:
+                nudged_to_write = True
+                consecutive_no_progress = 0
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"You have gone {_MAX_NO_PROGRESS_STEPS} turns without "
+                        "reading or finding anything you had not already seen, "
+                        "and you have not written a file yet. Re-reading what "
+                        "is already in this conversation cannot move the task "
+                        "forward. Make the change now with write_file, using "
+                        "what you have already read; if a file's current "
+                        "contents are genuinely missing from this conversation, "
+                        "read that one file and then write it."
+                    ),
+                })
+                continue
             # Reading isn't writing, but it isn't necessarily stalling
             # either: a run that has written files and is now re-reading
             # them is doing a final consistency pass before finish. Killing
@@ -1874,7 +1956,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                 continue
             error = (
                 f"agent made no progress: {_MAX_NO_PROGRESS_STEPS} consecutive "
-                "turns without a successful write_file"
+                "turns that neither wrote a file nor observed anything new"
             )
             break
 

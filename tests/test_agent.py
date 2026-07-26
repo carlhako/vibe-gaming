@@ -766,6 +766,13 @@ def _reads(n, path="core.js"):
     return [_turn([("read_file", {"path": path})]) for _ in range(n)]
 
 
+def _stalled_reads(n=1):
+    """Enough repeated reads of one file to trip the guard n times over.
+    The first read of a path is a genuinely new observation and so counts as
+    progress; only the repeats after it are a stall (see _progress_key)."""
+    return _reads(1 + n * agent._MAX_NO_PROGRESS_STEPS)
+
+
 # CONFIG's max_steps is 10, which a stall (one write plus two full
 # _MAX_NO_PROGRESS_STEPS runs of reads) outgrows — and running out of steps is
 # a different exit path from being killed by the guard.
@@ -773,6 +780,52 @@ STALL_CONFIG = {
     "game_web": CONFIG["game_web"],
     "multifile_agent": dict(CONFIG["multifile_agent"], max_steps=30),
 }
+
+
+def test_a_long_exploration_before_the_first_write_is_not_a_stall(
+        isolated_db, games_dir):
+    """Job 73df2b10 (2026-07-27) was killed on turn 5 of a healthy enhance:
+    read_map, nine read_file calls across a 13-module game, one search — no
+    repeats, and its own reasoning showed it had finished planning and was
+    about to write. Reading a file you have not read is progress; the guard
+    counts repetition, not turns."""
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("read_map", {})]),
+        _turn([("list_files", {})]),
+        _turn([("read_file", {"path": "core.js"})]),
+        _turn([("read_file", {"path": "style.css"})]),
+        _turn([("read_file", {"path": "index.html"})]),
+        _turn([("search", {"pattern": "purpleBlock"})]),
+        _turn([("search", {"pattern": "addEventListener"})]),
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})]),
+        _turn([("finish", {"summary": "explored, then wrote"})]),
+    ]
+    assert len(responses) - 2 > agent._MAX_NO_PROGRESS_STEPS, \
+        "the exploration phase must outlast the guard for this to test anything"
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses, config=STALL_CONFIG)
+
+    assert result["success"], result["error"]
+    assert result["notes"] == "explored, then wrote"
+    assert not [m for m in seen[-1] if m.get("role") == "user"
+                and "turns without" in (m.get("content") or "")], \
+        "a run that never repeated itself should never have been nudged"
+
+
+def test_repeating_a_search_is_not_progress_but_a_new_one_is(isolated_db, games_dir):
+    """The guard has to stay able to catch a run going in circles — the
+    same query re-asked teaches it nothing, however cheap the turn."""
+    _setup_source_game(games_dir)
+    same = [_turn([("search", {"pattern": "count"})])
+            for _ in range(agent._MAX_NO_PROGRESS_STEPS * 2 + 1)]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, _seen = _run(games_dir, same, config=STALL_CONFIG)
+
+    assert not result["success"]
+    assert "no progress" in result["error"]
 
 
 def test_a_stalled_run_is_verified_before_being_discarded_and_ships_if_it_passes(
@@ -820,10 +873,12 @@ def test_a_run_that_never_wrote_a_file_is_not_force_verified(isolated_db, games_
     """Nothing was written, so the staged fork is a byte-copy of the source:
     verifying it would 'pass' and ship a pointless duplicate game."""
     _setup_source_game(games_dir)
-    responses = _reads(agent._MAX_NO_PROGRESS_STEPS + 2)
+    # Two stalls: the first is answered by the write nudge, the second aborts.
+    responses = _stalled_reads(2)
 
     with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")) as smoke:
-        result, _seen = _run(games_dir, responses, job_id="job-nowrite")
+        result, _seen = _run(games_dir, responses, config=STALL_CONFIG,
+                             job_id="job-nowrite")
 
     assert not result["success"]
     assert "no progress" in result["error"]
@@ -885,9 +940,9 @@ def test_a_later_stall_gets_its_own_nudge_after_a_real_write(isolated_db, games_
     _setup_source_game(games_dir)
     responses = (
         [_turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})])]
-        + _reads(agent._MAX_NO_PROGRESS_STEPS)      # stall 1 -> nudged
+        + _stalled_reads()                          # stall 1 -> nudged
         + [_turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})])]
-        + _reads(agent._MAX_NO_PROGRESS_STEPS)      # stall 2 -> nudged again
+        + _stalled_reads()                          # stall 2 -> nudged again
         + [_turn([("finish", {"summary": "done after two review passes"})])]
     )
 

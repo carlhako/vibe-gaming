@@ -485,12 +485,36 @@ flash split the game sensibly each time, then audited its own modules until
 the step budget ran out without ever calling `finish`, shipping nothing.
 Pro reached verification in ~18 turns and passed, and was cheaper per run
 ($0.35 vs $0.66) despite ~3.1x the token price. Two loop-level nudges back
-this up for flash and for bigger sources: one when a run has written files
-but gone `_MAX_NO_PROGRESS_STEPS` turns without writing (it's reviewing, not
-stalled — don't kill it, tell it to verify), and one when a quarter of the
-step budget remains with no `finish` attempt yet. The stall nudge is
-**re-armed by any successful write** — it answers one specific pause, and a
-run that has since written real files has earned another.
+this up for flash and for bigger sources: one when a run goes
+`_MAX_NO_PROGRESS_STEPS` turns without progress (it's reviewing, not stalled —
+don't kill it; tell it to verify if it has written files, or to start writing
+if it hasn't), and one when a quarter of the step budget remains with no
+`finish` attempt yet (worded for whichever of those two states the run is in).
+The stall nudge is **re-armed by any successful write** — it answers one
+specific pause, and a run that has since written real files has earned
+another.
+
+**The stall guard counts repetition, not turns, because exploration is not a
+stall.** It originally counted consecutive turns without a successful
+`write_file`, and that killed a live enhance on turn 5 (job 73df2b10,
+2026-07-27) in the middle of a completely healthy run: `read_map`, nine
+`read_file` calls across a 13-module game, one `search` — eleven productive
+calls, no repeats, and the model's own reasoning showing it had finished
+planning and was about to write. Nothing had been written yet, so the nudge
+above (gated on `wrote_anything`) couldn't save it either; it aborted with no
+warning at all. `search` made this far easier to hit, since its whole purpose
+is answering narrow questions in extra cheap turns rather than one expensive
+re-read — a guard counting turns punishes exactly the behavior the tool
+exists to encourage. A turn is now progress if it wrote a file **or** made an
+observation the run hasn't made before (`_progress_key`: `read_map`,
+`list_files`, `read_file(path)`, `search(pattern, path)`; an `ERROR:`
+observation is never progress and is never recorded, so retrying a bad path
+stays a repeat). A re-read of a file the run itself wrote is deliberately
+*not* counted as new — the model just emitted those bytes, so that is the
+review pass the finish nudge answers. What this gives up is the guard's old
+role as a cap on exploration; `max_steps` and the budget warning cover that,
+and a run genuinely going in circles still trips it, since circling means
+re-asking questions it has already answered.
 
 **A stalled run is verified before it's discarded, because `finish` is not
 the model's to bestow.** Every exit from `_run_react_loop` other than a

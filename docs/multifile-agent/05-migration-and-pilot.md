@@ -920,3 +920,72 @@ the last checkpoint, and a job that finished looks like a job that hung. For
 a faithful copy take `vibegames.db`, `-wal` and `-shm` together, or use
 `sqlite3 vibegames.db ".backup out.db"` / `VACUUM INTO`, which checkpoint
 first.
+
+## Sprint 6 step 4: the stall guard killed a healthy run (2026-07-27)
+
+The first live enhance after the `search` tool and the forced last-ditch
+verification landed (commit `590cfec`) failed on turn 5 of 60, with
+`agent made no progress: 5 consecutive turns without a successful
+write_file`. Job `73df2b101832496ebb19f7672b152a97`, a Tower Maze Defense
+enhance ("after round 5, a 50% chance of a glowing purple block…"). Its
+whole transcript, from `agent_events`:
+
+| turn | tool calls | new information? |
+| --- | --- | --- |
+| 1 | `read_map()` | yes |
+| 2 | `read_file` × 3 — config, map, combat | yes |
+| 3 | `read_file` × 4 — enemies, player, update, entities | yes |
+| 4 | `read_file` × 2 — render (72,974 B), input | yes |
+| 5 | `search('purpleBlock')` → "No matches" | yes |
+
+Eleven tool calls, not one of them a repeat, and the turn-5 reasoning block
+reads "Now I have a thorough understanding of the game. Let me plan the
+implementation" — it was one turn from its first `write_file`. 106,504
+tokens spent, nothing shipped.
+
+**The guard counted turns without a write, which is not what it was ever
+trying to catch.** Both stalls it was built for (run C above, and job
+79a0abbb) were runs *re-reading modules they had already written*. Neither
+is what a 13-module game's opening exploration looks like, and the nudge
+that would have caught the mistake is gated on `wrote_anything`, so a
+pre-write run got no warning at all — just an abort.
+
+`search` is what made this reachable. It exists so a narrow question costs a
+cheap turn instead of a 73KB re-read, and the prompt tells the model to
+prefer it; that necessarily adds turns to the pre-write phase. A guard
+counting turns therefore penalises exactly the behaviour the tool was added
+to encourage — the two changes shipped in the same commit and were in direct
+conflict.
+
+**Fix: count repetition, not turns.** A turn is progress if it wrote a file
+**or** produced an observation the run hasn't produced before —
+`_progress_key` over `read_map` / `list_files` / `read_file(path)` /
+`search(pattern, path)`. Details that matter:
+
+- An `ERROR:` observation is never progress *and* is never recorded, so
+  retrying the same bad path stays a repeat rather than looking fresh.
+- A re-read of a file the run itself wrote is deliberately **not** new. The
+  model emitted those bytes; re-reading them is the review pass the finish
+  nudge answers, and invalidating the key on write would have let run C's
+  exact shape (9 modules written, then 5 turns re-reading them) slip past
+  the guard entirely.
+- A stalled run with nothing written now gets its own nudge — to *write*,
+  not to `finish`, which would be meaningless with an empty fork — before
+  aborting. `test_a_run_that_never_wrote_anything_is_not_nudged` became
+  `::test_a_run_that_never_wrote_anything_is_not_told_to_finish`, keeping
+  its original point (no finish nudge before a write) and adding the new one.
+
+What this gives up is the guard's incidental role as a cap on exploration: a
+run asking a genuinely new question every turn can now explore until
+`max_steps`. So the budget warning, previously also gated on
+`wrote_anything`, now covers the never-written case with its own wording
+("you have not written a single file… stop exploring and start writing").
+`max_steps` (60) is the hard backstop, as it always was for run D's
+alternating read/write shape.
+
+Regression tests: `tests/test_agent.py::test_a_long_exploration_before_the_first_write_is_not_a_stall`
+(job 73df2b10 in miniature — the exploration phase outlasts
+`_MAX_NO_PROGRESS_STEPS` and must produce no nudge at all),
+`::test_repeating_a_search_is_not_progress_but_a_new_one_is` (the guard still
+catches circling), and
+`tests/test_explode.py::test_a_run_that_has_explored_its_whole_budget_is_told_to_write`.
