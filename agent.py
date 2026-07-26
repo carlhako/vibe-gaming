@@ -1008,7 +1008,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     with the latter starting out empty.
 
     Returns a dict: success/summary/attempts/input_tokens/output_tokens/
-    tokens_used/model/effort/error. Does not touch games_dir bookkeeping,
+    cached_tokens/tokens_used/model/effort/error. Does not touch games_dir bookkeeping,
     the DB registry, or rollback — the caller (enhance_multifile_game,
     explode_game) owns all of that, same division of labor as
     game_generator.run_generation_attempts() vs. its callers.
@@ -1082,6 +1082,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
 
     total_input_tokens = 0
     total_output_tokens = 0
+    total_cached_tokens = 0
     last_model = model or "default"
     last_effort = effort
     verification_attempts = 0
@@ -1120,6 +1121,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
 
         total_input_tokens += ask_result.input_tokens
         total_output_tokens += ask_result.output_tokens
+        total_cached_tokens += ask_result.cached_tokens
         last_model = ask_result.model or "default"
         last_effort = ask_result.effort
         messages.append(ask_result.message)
@@ -1140,8 +1142,10 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                 "step": step_num,
                 "call_input_tokens": ask_result.input_tokens,
                 "call_output_tokens": ask_result.output_tokens,
+                "call_cached_tokens": ask_result.cached_tokens,
                 "input_tokens": total_input_tokens,
                 "output_tokens": total_output_tokens,
+                "cached_tokens": total_cached_tokens,
                 "tokens_used": total_input_tokens + total_output_tokens,
                 "model": last_model,
                 "effort": last_effort,
@@ -1315,6 +1319,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         "attempts": verification_attempts,
         "input_tokens": total_input_tokens,
         "output_tokens": total_output_tokens,
+        "cached_tokens": total_cached_tokens,
         "tokens_used": total_input_tokens + total_output_tokens,
         "model": last_model,
         "effort": last_effort,
@@ -1363,7 +1368,7 @@ def _failure_result(exc: Exception, cfg: dict, t0: float) -> dict:
     return {
         "success": False, "game_id": None, "slug": None, "title": None,
         "description": None, "attempts": 0,
-        "input_tokens": 0, "output_tokens": 0, "tokens_used": 0, "model": "default",
+        "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "tokens_used": 0, "model": "default",
         "effort": cfg.get("effort", "high"), "duration_seconds": time.monotonic() - t0,
         "error": str(exc), "notes": "", "url": None,
         "parent_game_id": None, "root_game_id": None,

@@ -3,6 +3,7 @@
   if (!pane) return;
   const jobId = pane.dataset.jobId;
   const log = document.getElementById("chat-log");
+  const usageBar = document.getElementById("chat-usage-bar");
 
   const TOOL_ICON = {
     read_map: "📖",
@@ -42,6 +43,42 @@
     return el("div", "chat-msg chat-msg-assistant", event.content || "");
   }
 
+  // Set once the first 'usage' event arrives (one per LLM call, Sprint 3)
+  // and kept up to date after that — the source for both the always-on
+  // running-total bar and the step/token figures in the terminal summary.
+  let lastUsage = null;
+
+  function updateUsageBar(data) {
+    lastUsage = data;
+    usageBar.hidden = false;
+    const parts = [
+      `Step ${data.step}`,
+      `${(data.input_tokens || 0).toLocaleString()} in`,
+      `${(data.output_tokens || 0).toLocaleString()} out`,
+    ];
+    if (data.cached_tokens) parts.push(`${data.cached_tokens.toLocaleString()} cached`);
+    parts.push(`${(data.tokens_used || 0).toLocaleString()} total`);
+    usageBar.textContent = parts.join(" · ");
+  }
+
+  function renderUsage(event) {
+    const data = event.data || {};
+    updateUsageBar(data);
+    return el("div", "chat-msg chat-msg-usage", "📊 " + (event.content || ""));
+  }
+
+  function renderSummary() {
+    if (!lastUsage) return null;
+    const parts = [
+      `${lastUsage.step} step${lastUsage.step === 1 ? "" : "s"}`,
+      `${(lastUsage.input_tokens || 0).toLocaleString()} in`,
+      `${(lastUsage.output_tokens || 0).toLocaleString()} out`,
+    ];
+    if (lastUsage.cached_tokens) parts.push(`${lastUsage.cached_tokens.toLocaleString()} cached`);
+    parts.push(`${(lastUsage.tokens_used || 0).toLocaleString()} total`);
+    return el("div", "chat-msg chat-msg-summary", "🧮 " + parts.join(" · "));
+  }
+
   function renderToolCall(event) {
     const tool = (event.data && event.data.tool) || "";
     const icon = TOOL_ICON[tool] || "🔧";
@@ -74,6 +111,7 @@
   }
 
   function renderFinal(event) {
+    const frag = document.createDocumentFragment();
     const data = event.data || {};
     const card = el("div", "chat-msg chat-msg-final");
     card.appendChild(el("div", null, "🎉 " + (event.content || "Enhancement complete.")));
@@ -84,16 +122,24 @@
       link.textContent = "Play now →";
       card.appendChild(link);
     }
-    return card;
+    frag.appendChild(card);
+    const summary = renderSummary();
+    if (summary) frag.appendChild(summary);
+    return frag;
   }
 
   function renderError(event) {
-    return el("div", "chat-msg chat-msg-error", "⚠️ " + (event.content || "Something went wrong."));
+    const frag = document.createDocumentFragment();
+    frag.appendChild(el("div", "chat-msg chat-msg-error", "⚠️ " + (event.content || "Something went wrong.")));
+    const summary = renderSummary();
+    if (summary) frag.appendChild(summary);
+    return frag;
   }
 
   const RENDERERS = {
     thought: renderThought,
     assistant: renderAssistant,
+    usage: renderUsage,
     tool_call: renderToolCall,
     tool_result: renderToolResult,
     build: renderBuild,

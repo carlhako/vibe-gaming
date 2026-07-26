@@ -970,13 +970,28 @@ body {
   min-height: 200px;
 }
 
+.chat-pane-head-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
 .chat-pane-head {
   font-size: 11px;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin-bottom: 12px;
-  flex-shrink: 0;
+}
+
+.chat-usage-bar {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 12px;
+  white-space: nowrap;
 }
 
 .chat-log {
@@ -1444,6 +1459,13 @@ body {
   font-size: 11.5px;
   padding-top: 0;
   padding-bottom: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-msg-summary {
+  border: 1px solid var(--line);
+  background: var(--panel-raised);
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 

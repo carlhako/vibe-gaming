@@ -99,6 +99,7 @@ class AskResult:
     effort: str
     raw_response: dict
     finish_reason: str = "stop"  # "length" means the output hit MAX_OUTPUT_TOKENS and was truncated
+    cached_tokens: int = 0  # DeepSeek's prompt_cache_hit_tokens — the slice of input_tokens served from cache
 
 
 @dataclass
@@ -119,6 +120,7 @@ class ToolAskResult:
     effort: str
     raw_response: dict
     finish_reason: str = "stop"  # "length" means the output hit MAX_OUTPUT_TOKENS and was truncated
+    cached_tokens: int = 0  # DeepSeek's prompt_cache_hit_tokens — the slice of input_tokens served from cache
 
 
 def _client() -> OpenAI:
@@ -128,6 +130,14 @@ def _client() -> OpenAI:
     if not api_key:
         raise AIError("Error: DEEPSEEK_API_KEY is not set (see .env.example)")
     return OpenAI(api_key=api_key, base_url=BASE_URL)
+
+
+def _cached_tokens(usage) -> int:
+    """DeepSeek's usage payload carries prompt_cache_hit_tokens alongside the
+    standard OpenAI prompt_tokens/completion_tokens fields — not part of the
+    openai SDK's typed CompletionUsage, but its BaseModel allows (and keeps)
+    unknown fields, so it survives as a plain attribute on the response."""
+    return getattr(usage, "prompt_cache_hit_tokens", 0) or 0 if usage else 0
 
 
 def _resolve_model(model: str | None) -> str:
@@ -270,6 +280,7 @@ def ask(
         effort=resolved_effort,
         raw_response=response_dict,
         finish_reason=(choice.finish_reason or "stop") if choice else "stop",
+        cached_tokens=_cached_tokens(response.usage),
     )
 
 
@@ -368,4 +379,5 @@ def ask_with_tools(
         effort=resolved_effort,
         raw_response=response_dict,
         finish_reason=choice.finish_reason or "stop",
+        cached_tokens=_cached_tokens(response.usage),
     )
