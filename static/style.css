@@ -1561,7 +1561,7 @@ body {
 /* Must stay after .rename-dialog: same specificity, so source order is
    what lets the wider explode dialog beat its 360px max-width. */
 .explode-dialog {
-  max-width: 620px;
+  max-width: 930px;
   flex-direction: column;
   gap: 10px;
 }
