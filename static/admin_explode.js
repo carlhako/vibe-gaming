@@ -71,7 +71,8 @@
       ? data.tokens_used
       : (data.input_tokens || 0) + (data.output_tokens || 0);
     const parts = [
-      `${(data.input_tokens || 0).toLocaleString()} in`,
+      `${(data.input_tokens || 0).toLocaleString()} in` +
+        (data.cached_tokens ? ` (${data.cached_tokens.toLocaleString()} cached)` : ""),
       `${(data.output_tokens || 0).toLocaleString()} out`,
       `${total.toLocaleString()} total`,
     ];
