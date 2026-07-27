@@ -1,0 +1,12 @@
+{
+  "game_id": "367cea2a59744bc59f3777fe2b8c2e97",
+  "parent_game_id": "7a31d02e01864ce1b38eb31481a32492",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v56)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-27T11:57:18.532669Z",
+  "version": 15,
+  "prompt": "the little i on the annihilator weapon in the shop doesn't display the full story, add a scroll bar so the text can be scrolled.",
+  "format": "multi-file"
+}
