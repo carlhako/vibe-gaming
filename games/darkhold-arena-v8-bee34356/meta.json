@@ -1,0 +1,11 @@
+{
+  "game_id": "bee34356cd2e44b3804563508b71b47f",
+  "parent_game_id": "73b0caeb3490466cbd3f3f8bffa2b4bf",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Darkhold Arena (v8)",
+  "description": "Wave-based dark-fantasy arena RPG where walls can be smashed \u2014 two hits to destroy, 10% chance of token loot on destruction.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-23T06:16:15.298760Z",
+  "version": 1,
+  "prompt": "enemies are getting stuck in walls that you cant get to and kill. make the walls destructible, 1 hit and they goto a damaged look, another hit and they explode. Randomly generate a coin when destroying walls like loot, make it a 10% chance of getting a token."
+}
