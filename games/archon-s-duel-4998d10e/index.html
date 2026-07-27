@@ -1,0 +1,1045 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Archon's Duel</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    html, body { width:100%; height:100%; overflow:hidden; background:#111; touch-action:none; }
+    #gameCanvas { display:block; position:absolute; top:0; left:0; width:100%; height:100%; }
+    #spellMenu {
+      display:none;
+      position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+      background:rgba(30,30,30,0.95); border:2px solid gold; border-radius:12px;
+      padding:15px; text-align:center; color:white; font-family:sans-serif; z-index:10;
+    }
+    #spellMenu button {
+      display:block; margin:8px auto; padding:8px 20px; font-size:16px;
+      background:#333; color:white; border:1px solid #aaa; border-radius:6px; cursor:pointer;
+    }
+    #spellMenu button:hover { background:#555; }
+    #restartBtn {
+      position:absolute; bottom:20px; right:20px; padding:10px 25px; font-size:18px;
+      background:firebrick; color:white; border:none; border-radius:8px; cursor:pointer; z-index:5;
+      display:none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+  <div id="spellMenu">
+    <h3>Cast Spell (Sacrifice Health)</h3>
+    <button id="spellHeal">Heal Ally (10 HP)</button>
+    <button id="spellRevive">Revive Dead (20 HP)</button>
+    <button id="spellTeleport">Teleport Self (5 HP)</button>
+    <button id="spellTimeShift">Shift Light Cycle (15 HP)</button>
+    <button id="spellCancel">Cancel</button>
+  </div>
+  <button id="restartBtn">Restart</button>
+  <script>
+    (function(){
+      const canvas = document.getElementById('gameCanvas');
+      const ctx = canvas.getContext('2d');
+      const spellMenu = document.getElementById('spellMenu');
+      const restartBtn = document.getElementById('restartBtn');
+      
+      // Canvas sizing
+      function resizeCanvas() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        if (gameState.phase === 'BOARD') computeBoardMetrics();
+      }
+      window.addEventListener('resize', resizeCanvas);
+
+      // Game state
+      const gameState = {
+        phase: 'BOARD', // 'BOARD' or 'ARENA'
+        turn: 'light',   // whose turn to move
+        lightCyclePhase: 0, // 0..4 -> white,cyan,green,blue,black
+        board: [],        // 9x9 array of null or pieceRef
+        pieces: { light: [], dark: [] },
+        selectedPiece: null, // piece being moved (on board)
+        validMoves: [],  // [{col,row}] highlighted
+        winner: null,
+        message: ''
+      };
+
+      // Board metrics
+      let boardMetrics = { cellSize: 0, offsetX: 0, offsetY: 0 };
+
+      // Light cycle colors (for grid squares)
+      const cycleColors = ['#ffffff', '#00ffff', '#00ff00', '#0000ff', '#000000']; // white cyan green blue black
+      const cycleNames = ['White','Cyan','Green','Blue','Black'];
+
+      // Permanent squares: some pre-defined as fixed white or black
+      const fixedWhite = [[0,0],[0,8],[4,4],[8,0],[8,8]]; // corners and center
+      const fixedBlack = [[2,2],[2,6],[6,2],[6,6]];       // some cross
+
+      // Power nodes: 5 special squares to occupy
+      const powerNodes = [[0,4],[4,0],[4,8],[8,4],[4,4]]; // center cross + center
+
+      // Piece types definitions
+      class Piece {
+        constructor(type, owner, col, row) {
+          this.type = type;
+          this.owner = owner; // 'light' or 'dark'
+          this.col = col;
+          this.row = row;
+          // base stats
+          const stats = Piece.baseStats[type];
+          this.baseMaxHealth = stats.health;
+          this.health = stats.health;
+          this.baseSpeed = stats.speed;
+          this.baseDamage = stats.damage;
+          this.attackType = stats.attackType; // 'melee' or 'ranged'
+          this.attackCooldown = stats.attackCooldown; // seconds
+          this.attackWindup = stats.attackWindup;
+          this.attackRange = stats.attackRange;
+          this.movement = stats.movement; // 'walk','fly','teleport'
+          this.cooldownTimer = 0;
+          this.isDead = false;
+        }
+      }
+      Piece.baseStats = {
+        'unicorn':  { health:80, speed:120, damage:15, attackType:'melee', attackCooldown:0.8, attackWindup:0.3, attackRange:35, movement:'walk' },
+        'valkyrie': { health:100, speed:90, damage:20, attackType:'melee', attackCooldown:1.0, attackWindup:0.4, attackRange:40, movement:'fly' },
+        'wizard':   { health:70, speed:110, damage:12, attackType:'ranged', attackCooldown:1.2, attackWindup:0.5, attackRange:200, movement:'teleport' },
+        'goblin':   { health:70, speed:130, damage:13, attackType:'melee', attackCooldown:0.7, attackWindup:0.25, attackRange:30, movement:'walk' },
+        'dragon':   { health:110, speed:80, damage:22, attackType:'ranged', attackCooldown:1.4, attackWindup:0.6, attackRange:250, movement:'fly' },
+        'sorceress':{ health:75, speed:100, damage:14, attackType:'ranged', attackCooldown:1.1, attackWindup:0.45, attackRange:220, movement:'teleport' }
+      };
+
+      // Helper to get piece type char for display
+      function pieceChar(p) {
+        return p.type.charAt(0).toUpperCase();
+      }
+
+      // Initialize new game
+      function initGame() {
+        gameState.phase = 'BOARD';
+        gameState.turn = 'light';
+        gameState.lightCyclePhase = 0;
+        gameState.winner = null;
+        gameState.message = '';
+        gameState.selectedPiece = null;
+        gameState.validMoves = [];
+        gameState.board = Array.from({length:9}, ()=>Array(9).fill(null));
+        gameState.pieces.light = [];
+        gameState.pieces.dark = [];
+        // Place pieces
+        addPiece(new Piece('wizard','light',0,4));
+        addPiece(new Piece('valkyrie','light',0,3));
+        addPiece(new Piece('unicorn','light',0,2));
+        addPiece(new Piece('unicorn','light',0,6));
+        
+        addPiece(new Piece('sorceress','dark',8,4));
+        addPiece(new Piece('dragon','dark',8,3));
+        addPiece(new Piece('goblin','dark',8,2));
+        addPiece(new Piece('goblin','dark',8,6));
+        
+        computeBoardMetrics();
+        renderBoard();
+        restartBtn.style.display = 'none';
+        spellMenu.style.display = 'none';
+      }
+
+      function addPiece(piece) {
+        gameState.pieces[piece.owner].push(piece);
+        gameState.board[piece.col][piece.row] = piece;
+      }
+
+      // Board metrics based on canvas size
+      function computeBoardMetrics() {
+        const w = canvas.width, h = canvas.height;
+        const maxSize = Math.min(w, h) * 0.9;
+        boardMetrics.cellSize = Math.floor(maxSize / 9);
+        boardMetrics.offsetX = (w - boardMetrics.cellSize*9) / 2;
+        boardMetrics.offsetY = (h - boardMetrics.cellSize*9) / 2;
+      }
+
+      // Get square color for a given board cell
+      function getSquareColor(col, row) {
+        // Check if permanent white
+        if (fixedWhite.some(([c,r])=> c===col && r===row)) return '#ffffff';
+        if (fixedBlack.some(([c,r])=> c===col && r===row)) return '#000000';
+        // Otherwise light square, cycle color
+        return cycleColors[gameState.lightCyclePhase];
+      }
+
+      // Check if a square is a power node
+      function isPowerNode(col, row) {
+        return powerNodes.some(([c,r])=> c===col && r===row);
+      }
+
+      // Get buff multiplier for arena based on square color and side
+      function getBuffMultiplier(color, side) {
+        if (color === '#ffffff') return side==='light' ? 1.5 : 0.5;
+        if (color === '#00ffff') return side==='light' ? 1.25 : 0.75;
+        if (color === '#00ff00') return 1.0;
+        if (color === '#0000ff') return side==='light' ? 0.75 : 1.25;
+        if (color === '#000000') return side==='light' ? 0.5 : 1.5;
+        return 1.0;
+      }
+
+      // AI board turn
+      function aiTurn() {
+        if (gameState.phase !== 'BOARD' || gameState.turn !== 'dark' || gameState.winner) return;
+        const pieces = gameState.pieces.dark.filter(p => !p.isDead);
+        if (pieces.length === 0) { checkWin(); return; }
+        // Simple AI: evaluate all possible moves
+        let bestScore = -Infinity, bestPiece = null, bestTarget = null;
+        for (let piece of pieces) {
+          const moves = getValidMoves(piece);
+          for (let {col,row} of moves) {
+            const score = evaluateMove(piece, col, row);
+            if (score > bestScore) {
+              bestScore = score;
+              bestPiece = piece;
+              bestTarget = {col,row};
+            }
+          }
+        }
+        if (bestPiece && bestTarget) {
+          executeBoardMove(bestPiece, bestTarget.col, bestTarget.row);
+        } else {
+          // No moves possible? skip turn
+          gameState.turn = 'light';
+          renderBoard();
+        }
+      }
+
+      function evaluateMove(piece, col, row) {
+        let score = 0;
+        const targetPiece = gameState.board[col][row];
+        const squareColor = getSquareColor(col, row);
+        // Prefer capturing power nodes
+        if (isPowerNode(col, row) && !targetPiece) score += 100;
+        // Prefer attacking enemy if we have advantage
+        if (targetPiece && targetPiece.owner !== piece.owner) {
+          const multiplier = getBuffMultiplier(squareColor, piece.owner);
+          const effectiveHealth = piece.health * multiplier; // rough
+          const enemyMult = getBuffMultiplier(squareColor, targetPiece.owner);
+          const enemyEffHealth = targetPiece.health * enemyMult;
+          if (effectiveHealth > enemyEffHealth) score += 80;
+          else score += 10; // still possibility
+        }
+        // Move towards center or enemy territory
+        score += (piece.owner==='dark' ? (8-col) : col) * 2;
+        // Prefer beneficial colours
+        const baseMult = getBuffMultiplier(squareColor, piece.owner);
+        score += baseMult * 20;
+        // Avoid ending turn on square with enemy (actually combat, not end)
+        return score;
+      }
+
+      // Get valid moves for a piece
+      function getValidMoves(piece) {
+        const moves = [];
+        const col = piece.col, row = piece.row;
+        const isFriendly = (c,r) => {
+          const p = gameState.board[c][r];
+          return p && p.owner === piece.owner;
+        };
+        const isEnemy = (c,r) => {
+          const p = gameState.board[c][r];
+          return p && p.owner !== piece.owner;
+        };
+        if (piece.movement === 'walk') {
+          for (let dc=-1; dc<=1; dc++) {
+            for (let dr=-1; dr<=1; dr++) {
+              if (dc===0 && dr===0) continue;
+              const nc=col+dc, nr=row+dr;
+              if (nc<0||nc>8||nr<0||nr>8) continue;
+              if (isFriendly(nc,nr)) continue;
+              moves.push({col:nc, row:nr});
+            }
+          }
+        } else if (piece.movement === 'fly') {
+          for (let dc=-2; dc<=2; dc++) {
+            for (let dr=-2; dr<=2; dr++) {
+              if (dc===0 && dr===0) continue;
+              const nc=col+dc, nr=row+dr;
+              if (nc<0||nc>8||nr<0||nr>8) continue;
+              if (isFriendly(nc,nr)) continue;
+              moves.push({col:nc, row:nr});
+            }
+          }
+        } else if (piece.movement === 'teleport') {
+          for (let dc=-3; dc<=3; dc++) {
+            for (let dr=-3; dr<=3; dr++) {
+              if (dc===0 && dr===0) continue;
+              const nc=col+dc, nr=row+dr;
+              if (nc<0||nc>8||nr<0||nr>8) continue;
+              if (isFriendly(nc,nr)) continue;
+              moves.push({col:nc, row:nr});
+            }
+          }
+        }
+        return moves;
+      }
+
+      // Execute board move (move piece, handle combat trigger)
+      function executeBoardMove(piece, targetCol, targetRow) {
+        const targetPiece = gameState.board[targetCol][targetRow];
+        if (targetPiece && targetPiece.owner !== piece.owner) {
+          // Combat!
+          startArena(piece, targetPiece, targetCol, targetRow);
+        } else {
+          // Move to empty square
+          gameState.board[piece.col][piece.row] = null;
+          piece.col = targetCol;
+          piece.row = targetRow;
+          gameState.board[targetCol][targetRow] = piece;
+          advanceTurn();
+        }
+      }
+
+      function advanceTurn() {
+        gameState.selectedPiece = null;
+        gameState.validMoves = [];
+        // Advance light cycle after each turn
+        gameState.lightCyclePhase = (gameState.lightCyclePhase + 1) % 5;
+        // Switch turn
+        gameState.turn = gameState.turn === 'light' ? 'dark' : 'light';
+        checkWin();
+        if (!gameState.winner) {
+          if (gameState.turn === 'dark') {
+            setTimeout(aiTurn, 500);
+          }
+        }
+        renderBoard();
+      }
+
+      function checkWin() {
+        // Destroy all enemy pieces?
+        const lightAlive = gameState.pieces.light.filter(p=>!p.isDead).length;
+        const darkAlive = gameState.pieces.dark.filter(p=>!p.isDead).length;
+        if (lightAlive === 0) { gameState.winner = 'dark'; gameState.message = 'Dark Side Wins!'; }
+        else if (darkAlive === 0) { gameState.winner = 'light'; gameState.message = 'Light Side Wins!'; }
+        // Check power nodes occupation
+        for (const player of ['light','dark']) {
+          let occupiedAll = powerNodes.every(([c,r])=>{
+            const p = gameState.board[c][r];
+            return p && p.owner === player && !p.isDead;
+          });
+          if (occupiedAll) {
+            gameState.winner = player;
+            gameState.message = player==='light'? 'Light controls all Power Nodes!' : 'Dark controls all Power Nodes!';
+          }
+        }
+        if (gameState.winner) {
+          gameState.phase = 'BOARD';
+          renderBoard();
+          restartBtn.style.display = 'block';
+        }
+      }
+
+      // ---- ARENA ----
+      let arenaState = null;
+
+      function startArena(attacker, defender, targetCol, targetRow) {
+        const squareColor = getSquareColor(targetCol, targetRow);
+        arenaState = {
+          attacker, defender,
+          squareColor,
+          light: attacker.owner === 'light' ? attacker : defender,
+          dark: attacker.owner === 'dark' ? attacker : defender,
+          player: attacker.owner === 'light' ? attacker : defender,
+          ai: attacker.owner === 'light' ? defender : attacker,
+          mapWidth: canvas.width,
+          mapHeight: canvas.height,
+          walls: generateWalls(),
+          projectiles: [],
+          time: 0,
+          playerKey: { up:0, down:0, left:0, right:0, attack:false },
+          aiDirX: 0, aiDirY: 0, aiAttack: false,
+          gameOver: false, winner: null,
+          arenaHealthLight: 0, arenaMaxHealthLight: 0,
+          arenaHealthDark: 0, arenaMaxHealthDark: 0,
+          lightUnit: null, darkUnit: null,
+          attackerOriginal: attacker, defenderOriginal: defender
+        };
+        // Prepare units with buffed stats
+        const buffLight = getBuffMultiplier(squareColor, 'light');
+        const buffDark = getBuffMultiplier(squareColor, 'dark');
+        const lightPiece = attacker.owner==='light'? attacker : defender;
+        const darkPiece = attacker.owner==='light'? defender : attacker;
+        arenaState.lightUnit = {
+          piece: lightPiece, side: 'light',
+          x: canvas.width*0.3, y: canvas.height/2,
+          speed: lightPiece.baseSpeed * buffLight,
+          damage: lightPiece.baseDamage * buffLight,
+          attackType: lightPiece.attackType,
+          attackCooldown: lightPiece.attackCooldown,
+          attackWindup: lightPiece.attackWindup,
+          attackRange: lightPiece.attackRange,
+          cooldown: 0, windupTimer: 0, facingDir: {x:1,y:0},
+          radius: 18
+        };
+        arenaState.darkUnit = {
+          piece: darkPiece, side: 'dark',
+          x: canvas.width*0.7, y: canvas.height/2,
+          speed: darkPiece.baseSpeed * buffDark,
+          damage: darkPiece.baseDamage * buffDark,
+          attackType: darkPiece.attackType,
+          attackCooldown: darkPiece.attackCooldown,
+          attackWindup: darkPiece.attackWindup,
+          attackRange: darkPiece.attackRange,
+          cooldown: 0, windupTimer: 0, facingDir: {x:-1,y:0},
+          radius: 18
+        };
+        const lightMax = lightPiece.baseMaxHealth * buffLight;
+        const darkMax = darkPiece.baseMaxHealth * buffDark;
+        arenaState.arenaMaxHealthLight = lightMax;
+        arenaState.arenaMaxHealthDark = darkMax;
+        arenaState.arenaHealthLight = (lightPiece.health / lightPiece.baseMaxHealth) * lightMax;
+        arenaState.arenaHealthDark = (darkPiece.health / darkPiece.baseMaxHealth) * darkMax;
+
+        gameState.phase = 'ARENA';
+        renderArena();
+        requestAnimationFrame(arenaLoop);
+      }
+
+      function generateWalls() {
+        const walls = [];
+        const count = 12;
+        for (let i=0; i<count; i++) {
+          const x = 100 + Math.random()*(canvas.width-200);
+          const y = 50 + Math.random()*(canvas.height-100);
+          const w = 40+Math.random()*80;
+          const h = 20+Math.random()*60;
+          const phase = Math.random()*Math.PI*2;
+          walls.push({ x,y,w,h, phase, visible: true, alpha:1 });
+        }
+        return walls;
+      }
+
+      function updateWalls(dt) {
+        if (!arenaState) return;
+        const t = arenaState.time;
+        for (let wall of arenaState.walls) {
+          const fade = Math.sin(t*2 + wall.phase);
+          wall.visible = fade > -0.5;
+          wall.alpha = Math.max(0, fade*0.5+0.5);
+        }
+      }
+
+      function arenaLoop(timestamp) {
+        if (gameState.phase !== 'ARENA') return;
+        const dt = Math.min(0.05, (timestamp - (arenaState._lastTime||timestamp))/1000);
+        arenaState._lastTime = timestamp;
+        arenaState.time += dt;
+        updateWalls(dt);
+        updateArenaInput(dt);
+        updateArenaUnits(dt);
+        updateProjectiles(dt);
+        checkArenaCollisions();
+        renderArena();
+        if (!arenaState.gameOver) {
+          requestAnimationFrame(arenaLoop);
+        } else {
+          finishArena();
+        }
+      }
+
+      function updateArenaInput(dt) {
+        // Player controls (Light side, WASD + space)
+        const pKey = arenaState.playerKey;
+        const playerUnit = (arenaState.player === arenaState.lightUnit.piece)? arenaState.lightUnit : arenaState.darkUnit;
+        if (pKey.up || pKey.down || pKey.left || pKey.right) {
+          const dx = (pKey.right?1:0) - (pKey.left?1:0);
+          const dy = (pKey.down?1:0) - (pKey.up?1:0);
+          if (dx!==0 || dy!==0) {
+            const len = Math.sqrt(dx*dx+dy*dy);
+            playerUnit.facingDir = {x:dx/len, y:dy/len};
+          }
+        }
+        // AI controls
+        const aiUnit = (arenaState.ai === arenaState.lightUnit.piece)? arenaState.lightUnit : arenaState.darkUnit;
+        const target = playerUnit;
+        const dx = target.x - aiUnit.x;
+        const dy = target.y - aiUnit.y;
+        const dist = Math.sqrt(dx*dx+dy*dy);
+        if (dist < 150) {
+          aiUnit.facingDir = {x: dx/dist, y: dy/dist};
+          if (dist > 40) {
+            arenaState.aiDirX = dx/dist;
+            arenaState.aiDirY = dy/dist;
+          } else {
+            arenaState.aiDirX = 0; arenaState.aiDirY = 0;
+          }
+          // attack if cooldown ready and in range
+          if (aiUnit.cooldown <= 0 && dist < aiUnit.attackRange && Math.random()<0.02) {
+            arenaState.aiAttack = true;
+          }
+        } else {
+          // wander
+          if (Math.random()<0.01) {
+            arenaState.aiDirX = (Math.random()-0.5)*2;
+            arenaState.aiDirY = (Math.random()-0.5)*2;
+            aiUnit.facingDir = {x:arenaState.aiDirX, y:arenaState.aiDirY};
+          }
+        }
+      }
+
+      function updateArenaUnits(dt) {
+        // Player unit movement
+        const playerUnit = (arenaState.player === arenaState.lightUnit.piece)? arenaState.lightUnit : arenaState.darkUnit;
+        const keys = arenaState.playerKey;
+        let dx = (keys.right?1:0)-(keys.left?1:0);
+        let dy = (keys.down?1:0)-(keys.up?1:0);
+        if (dx!==0||dy!==0) {
+          const len = Math.sqrt(dx*dx+dy*dy);
+          dx /= len; dy /= len;
+        }
+        playerUnit.x += dx * playerUnit.speed * dt;
+        playerUnit.y += dy * playerUnit.speed * dt;
+        // Clamp to map
+        playerUnit.x = Math.max(playerUnit.radius, Math.min(canvas.width-playerUnit.radius, playerUnit.x));
+        playerUnit.y = Math.max(playerUnit.radius, Math.min(canvas.height-playerUnit.radius, playerUnit.y));
+
+        // AI movement
+        const aiUnit = (arenaState.ai === arenaState.lightUnit.piece)? arenaState.lightUnit : arenaState.darkUnit;
+        aiUnit.x += arenaState.aiDirX * aiUnit.speed * dt;
+        aiUnit.y += arenaState.aiDirY * aiUnit.speed * dt;
+        aiUnit.x = Math.max(aiUnit.radius, Math.min(canvas.width-aiUnit.radius, aiUnit.x));
+        aiUnit.y = Math.max(aiUnit.radius, Math.min(canvas.height-aiUnit.radius, aiUnit.y));
+
+        // Wall collision (both)
+        resolveWallCollision(playerUnit);
+        resolveWallCollision(aiUnit);
+
+        // Cooldowns and attacks
+        updateUnitAttack(playerUnit, dt, 'player');
+        updateUnitAttack(aiUnit, dt, 'ai');
+      }
+
+      function updateUnitAttack(unit, dt, who) {
+        unit.cooldown = Math.max(0, unit.cooldown - dt);
+        if (unit.windupTimer > 0) {
+          unit.windupTimer -= dt;
+          if (unit.windupTimer <= 0) {
+            // Execute attack
+            if (unit.attackType === 'melee') {
+              // check melee hit
+              const enemy = (unit.side==='light'? arenaState.darkUnit : arenaState.lightUnit);
+              const dx = enemy.x - unit.x, dy = enemy.y - unit.y;
+              const dist = Math.sqrt(dx*dx+dy*dy);
+              const dot = (unit.facingDir.x*dx + unit.facingDir.y*dy) / (dist||1);
+              if (dist < unit.attackRange && dot > 0.5) {
+                applyDamage(enemy, unit.damage);
+              }
+            } else if (unit.attackType === 'ranged') {
+              // spawn projectile
+              arenaState.projectiles.push({
+                x: unit.x + unit.facingDir.x * unit.radius,
+                y: unit.y + unit.facingDir.y * unit.radius,
+                vx: unit.facingDir.x * 250,
+                vy: unit.facingDir.y * 250,
+                damage: unit.damage,
+                owner: unit.side,
+              });
+            }
+          }
+        }
+        // Trigger attack
+        if (who==='player' && arenaState.playerKey.attack && unit.cooldown<=0 && unit.windupTimer<=0) {
+          unit.windupTimer = unit.attackWindup;
+          unit.cooldown = unit.attackCooldown;
+          arenaState.playerKey.attack = false;
+        }
+        if (who==='ai' && arenaState.aiAttack && unit.cooldown<=0 && unit.windupTimer<=0) {
+          unit.windupTimer = unit.attackWindup;
+          unit.cooldown = unit.attackCooldown;
+          arenaState.aiAttack = false;
+        }
+      }
+
+      function applyDamage(unit, dmg) {
+        if (arenaState.gameOver) return;
+        if (unit.side==='light') {
+          arenaState.arenaHealthLight = Math.max(0, arenaState.arenaHealthLight - dmg);
+          if (arenaState.arenaHealthLight <= 0) {
+            arenaState.gameOver = true;
+            arenaState.winner = arenaState.darkUnit;
+          }
+        } else {
+          arenaState.arenaHealthDark = Math.max(0, arenaState.arenaHealthDark - dmg);
+          if (arenaState.arenaHealthDark <= 0) {
+            arenaState.gameOver = true;
+            arenaState.winner = arenaState.lightUnit;
+          }
+        }
+      }
+
+      function updateProjectiles(dt) {
+        for (let p of arenaState.projectiles) {
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+          // Check wall collision
+          let blocked = false;
+          for (let wall of arenaState.walls) {
+            if (wall.visible && pointInRect(p.x,p.y,wall)) {
+              blocked = true; break;
+            }
+          }
+          if (blocked || p.x<0||p.x>canvas.width||p.y<0||p.y>canvas.height) {
+            p.alive = false;
+          } else {
+            // hit enemy
+            const enemy = (p.owner==='light'? arenaState.darkUnit : arenaState.lightUnit);
+            const dx = enemy.x - p.x, dy = enemy.y - p.y;
+            if (Math.sqrt(dx*dx+dy*dy) < enemy.radius+5) {
+              applyDamage(enemy, p.damage);
+              p.alive = false;
+            }
+          }
+        }
+        arenaState.projectiles = arenaState.projectiles.filter(p=>p.alive!==false);
+      }
+
+      function resolveWallCollision(unit) {
+        for (let wall of arenaState.walls) {
+          if (!wall.visible) continue;
+          const closestX = Math.max(wall.x, Math.min(unit.x, wall.x+wall.w));
+          const closestY = Math.max(wall.y, Math.min(unit.y, wall.y+wall.h));
+          const dx = unit.x - closestX;
+          const dy = unit.y - closestY;
+          const dist = Math.sqrt(dx*dx+dy*dy);
+          if (dist < unit.radius) {
+            const overlap = unit.radius - dist;
+            if (dist>0.001) {
+              unit.x += (dx/dist) * overlap;
+              unit.y += (dy/dist) * overlap;
+            }
+          }
+        }
+      }
+
+      function pointInRect(px,py, rect) {
+        return px>=rect.x && px<=rect.x+rect.w && py>=rect.y && py<=rect.y+rect.h;
+      }
+
+      function finishArena() {
+        const winnerUnit = arenaState.winner;
+        const loserUnit = (winnerUnit.side==='light'? arenaState.darkUnit : arenaState.lightUnit);
+        const winnerPiece = winnerUnit.piece;
+        const loserPiece = loserUnit.piece;
+        const squareColor = arenaState.squareColor;
+        // Convert arena health back to base scale
+        if (winnerUnit.side==='light') {
+          const buff = getBuffMultiplier(squareColor, 'light');
+          const healthRatio = arenaState.arenaHealthLight / arenaState.arenaMaxHealthLight;
+          winnerPiece.health = healthRatio * winnerPiece.baseMaxHealth;
+        } else {
+          const buff = getBuffMultiplier(squareColor, 'dark');
+          const healthRatio = arenaState.arenaHealthDark / arenaState.arenaMaxHealthDark;
+          winnerPiece.health = healthRatio * winnerPiece.baseMaxHealth;
+        }
+        // Mark loser dead
+        loserPiece.isDead = true;
+        // Update board: winner claims the target square, loser removed
+        const targetCol = arenaState.attackerOriginal.col, targetRow = arenaState.attackerOriginal.row; // actually attacker moved onto defender's square?
+        // The combat was triggered when attacker moved onto defender's square (targetCol,targetRow)
+        const defenderCol = arenaState.defenderOriginal.col, defenderRow = arenaState.defenderOriginal.row;
+        gameState.board[attacker.col][attacker.row] = null; // attacker previous position
+        gameState.board[defenderCol][defenderRow] = null;
+        if (winnerPiece === arenaState.attackerOriginal) {
+          gameState.board[defenderCol][defenderRow] = winnerPiece;
+          winnerPiece.col = defenderCol;
+          winnerPiece.row = defenderRow;
+        } else {
+          // defender won, stays in place, attacker removed
+          gameState.board[defenderCol][defenderRow] = winnerPiece;
+          winnerPiece.col = defenderCol;
+          winnerPiece.row = defenderRow;
+        }
+        // Clean up
+        arenaState = null;
+        gameState.phase = 'BOARD';
+        advanceTurn();
+        renderBoard();
+      }
+
+      function renderArena() {
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+        if (!arenaState) return;
+        // draw floor
+        ctx.fillStyle = '#444';
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        // draw walls
+        for (let w of arenaState.walls) {
+          if (w.visible) {
+            ctx.globalAlpha = w.alpha;
+            ctx.fillStyle = '#888';
+            ctx.fillRect(w.x, w.y, w.w, w.h);
+          }
+        }
+        ctx.globalAlpha = 1;
+        // draw units
+        const light = arenaState.lightUnit, dark = arenaState.darkUnit;
+        drawArenaUnit(light, '#ffdd44', arenaState.arenaHealthLight, arenaState.arenaMaxHealthLight);
+        drawArenaUnit(dark, '#aa44ff', arenaState.arenaHealthDark, arenaState.arenaMaxHealthDark);
+        // projectiles
+        for (let p of arenaState.projectiles) {
+          ctx.fillStyle = p.owner==='light'? '#ffff00' : '#ff44ff';
+          ctx.beginPath(); ctx.arc(p.x,p.y,4,0,Math.PI*2); ctx.fill();
+        }
+        // windup indicator
+        if (light.windupTimer>0) {
+          ctx.strokeStyle = 'white'; ctx.lineWidth=2; ctx.beginPath();
+          ctx.arc(light.x,light.y,light.radius+5,0,Math.PI*2); ctx.stroke();
+        }
+        if (dark.windupTimer>0) {
+          ctx.strokeStyle = 'white'; ctx.lineWidth=2; ctx.beginPath();
+          ctx.arc(dark.x,dark.y,dark.radius+5,0,Math.PI*2); ctx.stroke();
+        }
+        if (arenaState.gameOver) {
+          ctx.fillStyle = 'white'; ctx.font = '30px sans-serif'; ctx.textAlign='center';
+          ctx.fillText(arenaState.winner.side+' Wins!', canvas.width/2, canvas.height/2);
+        }
+      }
+
+      function drawArenaUnit(unit, color, health, maxHealth) {
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(unit.x, unit.y, unit.radius, 0, 2*Math.PI); ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth=2; ctx.stroke();
+        // facing arrow
+        ctx.beginPath(); ctx.moveTo(unit.x + unit.facingDir.x*unit.radius, unit.y + unit.facingDir.y*unit.radius);
+        ctx.lineTo(unit.x, unit.y); ctx.strokeStyle = 'black'; ctx.lineWidth=3; ctx.stroke();
+        // health bar
+        const barW = 40, barH = 6;
+        const hpX = unit.x - barW/2, hpY = unit.y - unit.radius - 10;
+        ctx.fillStyle = 'red'; ctx.fillRect(hpX, hpY, barW, barH);
+        ctx.fillStyle = 'lime'; ctx.fillRect(hpX, hpY, barW * (health/maxHealth), barH);
+        // cooldown bar
+        if (unit.cooldown > 0) {
+          const cdY = unit.y + unit.radius + 6;
+          ctx.fillStyle = '#555'; ctx.fillRect(hpX, cdY, barW, 4);
+          ctx.fillStyle = 'orange';
+          ctx.fillRect(hpX, cdY, barW * (1 - unit.cooldown/unit.attackCooldown), 4);
+        }
+      }
+
+      // Board rendering
+      function renderBoard() {
+        if (gameState.phase !== 'BOARD') return;
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        const {cellSize, offsetX, offsetY} = boardMetrics;
+        // Draw grid squares
+        for (let c=0; c<9; c++) {
+          for (let r=0; r<9; r++) {
+            const x = offsetX + c*cellSize, y = offsetY + r*cellSize;
+            ctx.fillStyle = getSquareColor(c,r);
+            ctx.fillRect(x+1, y+1, cellSize-2, cellSize-2);
+            if (isPowerNode(c,r)) {
+              ctx.fillStyle = 'gold';
+              ctx.fillRect(x+4, y+4, cellSize-8, cellSize-8);
+              ctx.fillStyle = 'black';
+              ctx.font = `${cellSize*0.6}px sans-serif`; ctx.textAlign='center';
+              ctx.fillText('★', x+cellSize/2, y+cellSize/2+cellSize*0.2);
+            }
+          }
+        }
+        // Draw grid lines
+        ctx.strokeStyle = '#333'; ctx.lineWidth=1;
+        for (let i=0; i<=9; i++) {
+          ctx.beginPath();
+          ctx.moveTo(offsetX, offsetY + i*cellSize);
+          ctx.lineTo(offsetX + 9*cellSize, offsetY + i*cellSize);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(offsetX + i*cellSize, offsetY);
+          ctx.lineTo(offsetX + i*cellSize, offsetY + 9*cellSize);
+          ctx.stroke();
+        }
+        // Draw pieces
+        for (let player of ['light','dark']) {
+          for (let piece of gameState.pieces[player]) {
+            if (piece.isDead) continue;
+            const x = offsetX + piece.col*cellSize + cellSize/2;
+            const y = offsetY + piece.row*cellSize + cellSize/2;
+            const r = cellSize*0.4;
+            ctx.beginPath(); ctx.arc(x, y, r, 0, 2*Math.PI);
+            ctx.fillStyle = piece.owner==='light'? '#ffd700' : '#6a0dad';
+            ctx.fill();
+            ctx.strokeStyle = '#fff'; ctx.lineWidth=2; ctx.stroke();
+            ctx.fillStyle = 'black';
+            ctx.font = `bold ${cellSize*0.4}px sans-serif`; ctx.textAlign='center'; ctx.textBaseline='middle';
+            ctx.fillText(pieceChar(piece), x, y);
+            // health bar
+            const hpW = cellSize*0.6, hpH = 4;
+            const hpX = x - hpW/2, hpY = y - r - 8;
+            ctx.fillStyle = 'red'; ctx.fillRect(hpX, hpY, hpW, hpH);
+            ctx.fillStyle = 'lime';
+            ctx.fillRect(hpX, hpY, hpW * (piece.health/piece.baseMaxHealth), hpH);
+          }
+        }
+        // Highlight selected piece
+        if (gameState.selectedPiece && !gameState.selectedPiece.isDead) {
+          const sp = gameState.selectedPiece;
+          const sx = offsetX + sp.col*cellSize, sy = offsetY + sp.row*cellSize;
+          ctx.strokeStyle = 'cyan'; ctx.lineWidth=3;
+          ctx.strokeRect(sx, sy, cellSize, cellSize);
+        }
+        // Highlight valid moves
+        for (let mv of gameState.validMoves) {
+          const mx = offsetX + mv.col*cellSize, my = offsetY + mv.row*cellSize;
+          ctx.fillStyle = 'rgba(0,255,0,0.2)';
+          ctx.fillRect(mx, my, cellSize, cellSize);
+          ctx.strokeStyle = 'lime'; ctx.lineWidth=2;
+          ctx.strokeRect(mx, my, cellSize, cellSize);
+        }
+        // Turn indicator and light cycle
+        ctx.fillStyle = 'white'; ctx.font = '16px sans-serif'; ctx.textAlign='left';
+        ctx.fillText(`${gameState.turn==='light'?'Light':'Dark'}'s turn   Cycle: ${cycleNames[gameState.lightCyclePhase]}`, 10, 30);
+        if (gameState.winner) {
+          ctx.fillStyle = 'yellow'; ctx.font = 'bold 30px sans-serif'; ctx.textAlign='center';
+          ctx.fillText(gameState.message, canvas.width/2, canvas.height-40);
+        }
+        // Spell button for selected leader
+        if (gameState.selectedPiece && (gameState.selectedPiece.type==='wizard' || gameState.selectedPiece.type==='sorceress')
+            && gameState.selectedPiece.owner === gameState.turn && !gameState.winner) {
+          const bx = canvas.width-120, by = 50;
+          ctx.fillStyle = '#880088'; ctx.fillRect(bx, by, 100, 30);
+          ctx.fillStyle = 'white'; ctx.font = '14px sans-serif'; ctx.textAlign='center';
+          ctx.fillText('Cast Spell', bx+50, by+20);
+        }
+      }
+
+      // Input handling
+      function handleBoardClick(clientX, clientY) {
+        if (gameState.phase !== 'BOARD' || gameState.winner) return;
+        const {cellSize, offsetX, offsetY} = boardMetrics;
+        const col = Math.floor((clientX - offsetX) / cellSize);
+        const row = Math.floor((clientY - offsetY) / cellSize);
+        if (col<0||col>8||row<0||row>8) {
+          // Check spell button area
+          if (clientX > canvas.width-120 && clientX < canvas.width-20 && clientY > 50 && clientY < 80) {
+            if (gameState.selectedPiece && (gameState.selectedPiece.type==='wizard'||gameState.selectedPiece.type==='sorceress')
+                && gameState.selectedPiece.owner===gameState.turn) {
+              showSpellMenu();
+            }
+          }
+          return;
+        }
+        // No piece selected yet
+        if (!gameState.selectedPiece) {
+          const piece = gameState.board[col][row];
+          if (piece && piece.owner === gameState.turn) {
+            gameState.selectedPiece = piece;
+            gameState.validMoves = getValidMoves(piece);
+            renderBoard();
+          }
+          return;
+        }
+        // Piece selected, check if clicking on own piece to deselect
+        const clickedPiece = gameState.board[col][row];
+        if (clickedPiece && clickedPiece === gameState.selectedPiece) {
+          gameState.selectedPiece = null;
+          gameState.validMoves = [];
+          renderBoard();
+          return;
+        }
+        // Check if valid move
+        const isValid = gameState.validMoves.some(m=>m.col===col && m.row===row);
+        if (isValid) {
+          executeBoardMove(gameState.selectedPiece, col, row);
+          gameState.selectedPiece = null;
+          gameState.validMoves = [];
+        } else {
+          // invalid, deselect
+          gameState.selectedPiece = null;
+          gameState.validMoves = [];
+          renderBoard();
+        }
+      }
+
+      function showSpellMenu() {
+        spellMenu.style.display = 'block';
+        // Setup spell buttons
+        document.getElementById('spellHeal').onclick = ()=> castSpell('heal');
+        document.getElementById('spellRevive').onclick = ()=> castSpell('revive');
+        document.getElementById('spellTeleport').onclick = ()=> castSpell('teleport');
+        document.getElementById('spellTimeShift').onclick = ()=> castSpell('timeshift');
+        document.getElementById('spellCancel').onclick = ()=> { spellMenu.style.display='none'; };
+      }
+
+      function castSpell(spell) {
+        spellMenu.style.display = 'none';
+        const leader = gameState.selectedPiece;
+        if (!leader || leader.owner!==gameState.turn || leader.isDead) return;
+        let cost = 0;
+        switch(spell) {
+          case 'heal': cost=10; break;
+          case 'revive': cost=20; break;
+          case 'teleport': cost=5; break;
+          case 'timeshift': cost=15; break;
+        }
+        if (leader.health <= cost) return; // not enough health
+        // Execute spell
+        let success = false;
+        if (spell === 'heal') {
+          // Heal a random damaged ally
+          const friends = gameState.pieces[leader.owner].filter(p=>!p.isDead && p!==leader && p.health<p.baseMaxHealth);
+          if (friends.length>0) {
+            const target = friends[Math.floor(Math.random()*friends.length)];
+            target.health = Math.min(target.baseMaxHealth, target.health+20);
+            leader.health -= cost;
+            success = true;
+          }
+        } else if (spell === 'revive') {
+          const dead = gameState.pieces[leader.owner].filter(p=>p.isDead);
+          if (dead.length>0) {
+            const target = dead[0];
+            target.isDead = false;
+            target.health = target.baseMaxHealth * 0.3;
+            // place on empty adjacent square to leader if possible
+            let placed = false;
+            for (let dc=-1;dc<=1;dc++) {
+              for (let dr=-1;dr<=1;dr++) {
+                const nc=leader.col+dc, nr=leader.row+dr;
+                if (nc>=0&&nc<=8&&nr>=0&&nr<=8 && !gameState.board[nc][nr]) {
+                  gameState.board[nc][nr] = target;
+                  target.col=nc; target.row=nr;
+                  placed = true; break;
+                }
+              }
+              if (placed) break;
+            }
+            if (!placed) { target.isDead = true; return; }
+            leader.health -= cost;
+            success = true;
+          }
+        } else if (spell === 'teleport') {
+          // Teleport self to random empty square
+          for (let attempt=0; attempt<20; attempt++) {
+            const nc = Math.floor(Math.random()*9), nr = Math.floor(Math.random()*9);
+            if (!gameState.board[nc][nr] && (Math.abs(nc-leader.col)+Math.abs(nr-leader.row))>1) {
+              gameState.board[leader.col][leader.row] = null;
+              leader.col=nc; leader.row=nr;
+              gameState.board[nc][nr] = leader;
+              leader.health -= cost;
+              success = true;
+              break;
+            }
+          }
+        } else if (spell === 'timeshift') {
+          // Revert light cycle to previous phase
+          gameState.lightCyclePhase = (gameState.lightCyclePhase -1 +5) %5;
+          leader.health -= cost;
+          success = true;
+        }
+        if (success) {
+          gameState.selectedPiece = null;
+          gameState.validMoves = [];
+          advanceTurn();
+        }
+      }
+
+      // Keyboard for arena
+      document.addEventListener('keydown', (e)=>{
+        if (gameState.phase === 'ARENA' && arenaState) {
+          switch(e.key.toLowerCase()) {
+            case 'w': arenaState.playerKey.up=1; break;
+            case 's': arenaState.playerKey.down=1; break;
+            case 'a': arenaState.playerKey.left=1; break;
+            case 'd': arenaState.playerKey.right=1; break;
+            case ' ': arenaState.playerKey.attack=true; break;
+          }
+          if (e.key === 'ArrowUp') arenaState.playerKey.up=1;
+          if (e.key === 'ArrowDown') arenaState.playerKey.down=1;
+          if (e.key === 'ArrowLeft') arenaState.playerKey.left=1;
+          if (e.key === 'ArrowRight') arenaState.playerKey.right=1;
+        }
+      });
+      document.addEventListener('keyup', (e)=>{
+        if (gameState.phase === 'ARENA' && arenaState) {
+          switch(e.key.toLowerCase()) {
+            case 'w': arenaState.playerKey.up=0; break;
+            case 's': arenaState.playerKey.down=0; break;
+            case 'a': arenaState.playerKey.left=0; break;
+            case 'd': arenaState.playerKey.right=0; break;
+          }
+          if (e.key === 'ArrowUp') arenaState.playerKey.up=0;
+          if (e.key === 'ArrowDown') arenaState.playerKey.down=0;
+          if (e.key === 'ArrowLeft') arenaState.playerKey.left=0;
+          if (e.key === 'ArrowRight') arenaState.playerKey.right=0;
+        }
+      });
+
+      // Mouse/touch for board
+      canvas.addEventListener('click', (e)=>{
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width/rect.width, scaleY = canvas.height/rect.height;
+        const x = (e.clientX - rect.left)*scaleX;
+        const y = (e.clientY - rect.top)*scaleY;
+        handleBoardClick(x, y);
+      });
+      canvas.addEventListener('touchstart', (e)=>{
+        e.preventDefault();
+        if (gameState.phase === 'BOARD') {
+          const rect = canvas.getBoundingClientRect();
+          const touch = e.touches[0];
+          const scaleX = canvas.width/rect.width, scaleY = canvas.height/rect.height;
+          const x = (touch.clientX - rect.left)*scaleX;
+          const y = (touch.clientY - rect.top)*scaleY;
+          handleBoardClick(x, y);
+        } else if (gameState.phase === 'ARENA' && arenaState) {
+          // Virtual controls: left half joystick, right half attack
+          const rect = canvas.getBoundingClientRect();
+          const touch = e.touches[0];
+          const tx = touch.clientX, ty = touch.clientY;
+          if (tx < window.innerWidth/2) {
+            // movement joystick
+            const centerX = window.innerWidth*0.25, centerY = window.innerHeight*0.5;
+            const dx = tx - centerX, dy = ty - centerY;
+            const dist = Math.sqrt(dx*dx+dy*dy);
+            if (dist > 5) {
+              arenaState.playerKey.right = dx>0?1:0;
+              arenaState.playerKey.left = dx<0?1:0;
+              arenaState.playerKey.down = dy>0?1:0;
+              arenaState.playerKey.up = dy<0?1:0;
+            }
+          } else {
+            arenaState.playerKey.attack = true;
+          }
+        }
+      }, {passive: false});
+      canvas.addEventListener('touchmove', (e)=>{
+        e.preventDefault();
+        if (gameState.phase==='ARENA' && arenaState) {
+          const touch = e.touches[0];
+          if (touch.clientX < window.innerWidth/2) {
+            const centerX = window.innerWidth*0.25, centerY = window.innerHeight*0.5;
+            const dx = touch.clientX - centerX, dy = touch.clientY - centerY;
+            arenaState.playerKey.right = dx>0?1:0;
+            arenaState.playerKey.left = dx<0?1:0;
+            arenaState.playerKey.down = dy>0?1:0;
+            arenaState.playerKey.up = dy<0?1:0;
+          }
+        }
+      }, {passive: false});
+      canvas.addEventListener('touchend', (e)=>{
+        if (gameState.phase==='ARENA') {
+          arenaState.playerKey.up=0; arenaState.playerKey.down=0;
+          arenaState.playerKey.left=0; arenaState.playerKey.right=0;
+          arenaState.playerKey.attack = false;
+        }
+      });
+
+      restartBtn.addEventListener('click', ()=>{
+        initGame();
+      });
+
+      // Start
+      resizeCanvas();
+      initGame();
+      window.requestAnimationFrame(()=>{});
+    })();
+  </script>
+</body>
+</html>
