@@ -1,0 +1,11 @@
+{
+  "game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "parent_game_id": null,
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense",
+  "description": "Defend a randomly generated maze path with 5 upgradable tower types against increasingly difficult waves of enemies.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-19T00:39:38.754640Z",
+  "version": 1,
+  "prompt": "make a simple tower defense game with only 1 simple map on a 20x20 grid. create 5 different type of towers, each with upgrades. enemies will come in waves that progressively get harder and give more money. the game will have a pause button. maps will randomly generate but make sure they are playable. enemies will come out from 1 end and go out the other end, the game will resemble a simple maze."
+}
