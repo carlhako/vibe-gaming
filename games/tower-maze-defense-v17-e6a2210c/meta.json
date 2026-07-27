@@ -1,0 +1,11 @@
+{
+  "game_id": "e6a2210ca39c49c18a2049190328e040",
+  "parent_game_id": "7d6df974c9014de79dc10c18395a3b5b",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v17)",
+  "description": "A tower defense maze game with seed-based map generation \u2014 enter or copy hex seeds to replay favorite layouts.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-20T10:00:38.068183Z",
+  "version": 1,
+  "prompt": "add a level seed text field, when a level is generated turn it into a hex string that can be reused to generate the same level. add a text box before the game has started displaying the level seed, make it so a user can input a level seed and have a little button next to it to load the map. do some basic check on it to make sure its a valid level seed, that the level is playable."
+}
