@@ -1,0 +1,11 @@
+{
+  "game_id": "481c40800d924bb4a87fc3b23267167b",
+  "parent_game_id": "63c8d22923b249cfbd963d17be06e825",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v37)",
+  "description": "Horde-survival wave RPG with destructible walls, skeleton minions, minigun, and railgun weapons.",
+  "requested_by": "web:7fbda6b03e03",
+  "created_at": "2026-07-25T10:25:18.968321Z",
+  "version": 1,
+  "prompt": "1. make it so the skeleton summons with the railgun do close to as much damage as the railgun the player uses and make it so it takes less time for the skeletons to charge the railgun to full.\r\n\r\n2. make it so the railgun has a huge damage increase and make it so there is no cooldown so as soon as you shoot a beam with the railgun you can charge another one back up."
+}
