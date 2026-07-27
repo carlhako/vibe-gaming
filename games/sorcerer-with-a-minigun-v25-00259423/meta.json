@@ -1,0 +1,11 @@
+{
+  "game_id": "0025942391a1416ea1707ec0cfa7d7b0",
+  "parent_game_id": "e2cbe8ea90ee4a93b5782e7a937cf104",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v25)",
+  "description": "Darkhold Arena wave-RPG where a sorcerer can wield a minigun and railgun, with destructible walls and skeleton minions.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-24T21:04:52.038714Z",
+  "version": 1,
+  "prompt": "fix the shop menu for the sorcerer there are now too many things and the next wave button covers the update for skeeltons with miniguns. there are 3 upgrades that are larger then the other upgrade. reduce the size of these so they are the same size as the rest but give them a red outline as they are major upgrades. Fix the text for the skeleton speed upgrade the description goes outside of its container reduce the lengh of the description."
+}
