@@ -1,0 +1,11 @@
+{
+  "game_id": "2cd2a702769c445d973b4e0e4fbec5a8",
+  "parent_game_id": "7bb51fd44209436dbb9e235a6e49cf15",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v34)",
+  "description": "Tower-defense maze game with unique towers, buffs, mints, branching paths, and a new Steam Roller unit that crushes enemies backward along the track.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-21T07:30:33.539231Z",
+  "version": 1,
+  "prompt": "add a new unit called the \"Steam Roller\" when placed it generates a mini steam roller at the end of the track and it goes backwards through the path. It will have a high HP and every enemy it hits its own hp goes into damage so if it hits an enemy with 100hp and kills it, the train looses 100hp repeat until it dies. level 1 has 500hp, level 2 has 2000hp and level 3 has 10000hp. level 2 upgrade cost 1000, level 3 upgrade cost 5000. if there are diverged tracks just make it go down the main track."
+}
