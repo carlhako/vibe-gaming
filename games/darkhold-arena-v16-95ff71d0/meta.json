@@ -1,0 +1,11 @@
+{
+  "game_id": "95ff71d0225f4e2daa681a5238512ed6",
+  "parent_game_id": "01e95889e64e4e0cb5e602cd959a9c95",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Darkhold Arena (v16)",
+  "description": "Wave-based arena RPG with character select, upgrade shop, destructible walls, skeleton minions, and now \u2014 witches that summon fast red devils from wave 5 onward!",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-24T02:34:05.538685Z",
+  "version": 1,
+  "prompt": "add a new enemy that spawns from wave 5, make it spawn off the map so its not visible when the player first spawns. The new unit will be a witch so use a small witch looking character. Once the witch spots you it will start spawning little red devils that have fairly low hp but move fast. When killing the witch you get 5 tokens. Have this boss spawn in every wave after and have its health and the little devils health increase slightly each wave."
+}
