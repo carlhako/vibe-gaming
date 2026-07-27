@@ -1,0 +1,11 @@
+{
+  "game_id": "db422fac249348acb4e47ea85af175c2",
+  "parent_game_id": "7ad6cc97b30042dfa2bfc3256240f784",
+  "root_game_id": "7ad6cc97b30042dfa2bfc3256240f784",
+  "title": "Star Vanguard (v2)",
+  "description": "A fast-paced space shooter with one-hit-kill lasers, instant nova ring, homing missiles, and a queue of up to 3 power-ups.",
+  "requested_by": "web:007d10387b5b",
+  "created_at": "2026-07-20T00:10:31.267924Z",
+  "version": 1,
+  "prompt": "The laser needs to be a 1 hit kill, the wave attack should also destroy the ships the moment the wave hits the enemies, not once the wave is complete. Add some more spread to the rockets, and make a new missile attachment that fires a few missiles one after the other that locks onto enemies.\r\n\r\nWhile we are here, lets make the secondary stack upto 3 items, not just 1, and cycle through them,\r\n\r\nFinally, make the enemy ships look more like space ships, add some variety to them with each version having a unique ability."
+}
