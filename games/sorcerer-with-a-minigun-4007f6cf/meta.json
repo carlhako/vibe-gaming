@@ -1,0 +1,11 @@
+{
+  "game_id": "4007f6cf427341b0ab748abc5cac8bed",
+  "parent_game_id": "ee685997b22b4e12ad8e065630564c81",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun",
+  "description": "Wave-based arena RPG with character classes, shop upgrades, destructible walls, and a tougher witch boss that summons devils faster.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-24T05:25:10.690804Z",
+  "version": 1,
+  "prompt": "Make the witch boss a bit harder, double its HP and spawn the red devils a little bit quicker, about 1.5x the current speed. Add a new option in the shop for the sorcerer and that is the speed of the skeletons, level 1 is their current speed, level 2 is the same speed as the player and level 3 they move faster then the player."
+}
