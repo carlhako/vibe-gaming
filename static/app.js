@@ -198,6 +198,7 @@ function renderLineageLink(item) {
 async function openInfoModal(gameId) {
   infoModalLastFocused = document.activeElement;
   resetReportUI(gameId);
+  resetAskAiUI(gameId);
   try {
     const res = await fetch(`/api/games/${encodeURIComponent(gameId)}/info`);
     if (!res.ok) return;
@@ -263,6 +264,8 @@ async function openInfoModal(gameId) {
       li.textContent = "No plays yet.";
       playsList.appendChild(li);
     }
+
+    populateAskAiHistory(data.ai_questions || []);
 
     infoBackdrop.hidden = false;
     document.getElementById("info-modal-close").focus();
@@ -370,5 +373,146 @@ reportSubmitBtn.addEventListener("click", async () => {
     reportStatusEl.textContent = "Network error — try again.";
   } finally {
     reportSubmitBtn.disabled = false;
+  }
+});
+
+// ---- Ask AI about this game ----
+// Async: POST enqueues a kind='ask' job, then we poll the same
+// /api/status/<job_id> endpoint the generation status page uses (its JSON
+// gains an `answer` field for this job kind) until it settles.
+const askAiToggleBtn = document.getElementById("info-modal-askai-toggle");
+const askAiForm = document.getElementById("info-modal-askai-form");
+const askAiQuestionEl = document.getElementById("info-modal-askai-question");
+const askAiSubmitBtn = document.getElementById("info-modal-askai-submit");
+const askAiStatusEl = document.getElementById("info-modal-askai-status");
+const askAiAnswerEl = document.getElementById("info-modal-askai-answer");
+const askAiThinkingEl = document.getElementById("info-modal-askai-thinking");
+const askAiHistoryEl = document.getElementById("info-modal-askai-history");
+const askAiHistoryListEl = document.getElementById("info-modal-askai-history-list");
+let currentAskAiGameId = null;
+let askAiPollTimer = null;
+
+function renderAskAiHistoryEntry(item) {
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = item.question;
+  const body = document.createElement("div");
+  body.className = "askai-answer-body";
+  body.innerHTML = item.answer; // server-sanitized (html_sanitize.py) — safe to trust
+  details.appendChild(summary);
+  details.appendChild(body);
+  return details;
+}
+
+function populateAskAiHistory(items) {
+  askAiHistoryListEl.innerHTML = "";
+  items.forEach((item) => askAiHistoryListEl.appendChild(renderAskAiHistoryEntry(item)));
+  askAiHistoryEl.hidden = items.length === 0;
+}
+
+function resetAskAiUI(gameId) {
+  currentAskAiGameId = gameId;
+  if (askAiPollTimer) {
+    clearInterval(askAiPollTimer);
+    askAiPollTimer = null;
+  }
+  askAiForm.hidden = true;
+  askAiQuestionEl.value = "";
+  askAiQuestionEl.disabled = false;
+  askAiSubmitBtn.disabled = false;
+  askAiStatusEl.hidden = true;
+  askAiStatusEl.textContent = "";
+  askAiAnswerEl.hidden = true;
+  askAiAnswerEl.innerHTML = "";
+  askAiThinkingEl.dataset.active = "0";
+}
+
+askAiToggleBtn.addEventListener("click", () => {
+  askAiForm.hidden = !askAiForm.hidden;
+});
+
+function pollAskAiJob(jobId) {
+  askAiPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/status/${encodeURIComponent(jobId)}`);
+      if (!res.ok) return;
+      const job = await res.json();
+      if (job.status === "success") {
+        clearInterval(askAiPollTimer);
+        askAiPollTimer = null;
+        askAiThinkingEl.dataset.active = "0";
+        askAiStatusEl.hidden = true;
+        askAiAnswerEl.hidden = false;
+        askAiAnswerEl.innerHTML = job.answer || ""; // server-sanitized — safe to trust
+        askAiQuestionEl.value = "";
+        askAiQuestionEl.disabled = false;
+        askAiSubmitBtn.disabled = false;
+        populateAskAiHistory([
+          { question: askAiLastQuestion, answer: job.answer || "" },
+          ...askAiCurrentHistory,
+        ]);
+      } else if (job.status === "failed") {
+        clearInterval(askAiPollTimer);
+        askAiPollTimer = null;
+        askAiThinkingEl.dataset.active = "0";
+        askAiStatusEl.hidden = false;
+        askAiStatusEl.textContent = job.error || "Something went wrong — try again.";
+        askAiQuestionEl.disabled = false;
+        askAiSubmitBtn.disabled = false;
+      }
+    } catch (err) {
+      // transient network error — keep polling, same posture as status.js
+    }
+  }, 1800);
+}
+
+let askAiLastQuestion = "";
+let askAiCurrentHistory = [];
+
+askAiSubmitBtn.addEventListener("click", async () => {
+  if (!currentAskAiGameId) return;
+  const question = askAiQuestionEl.value.trim();
+  if (!question) return;
+  askAiLastQuestion = question;
+  askAiCurrentHistory = Array.from(
+    askAiHistoryListEl.querySelectorAll("details")
+  ).map((d) => ({
+    question: d.querySelector("summary").textContent,
+    answer: d.querySelector(".askai-answer-body").innerHTML,
+  }));
+
+  askAiSubmitBtn.disabled = true;
+  askAiQuestionEl.disabled = true;
+  askAiAnswerEl.hidden = true;
+  askAiStatusEl.hidden = true;
+  try {
+    const res = await fetch(`/api/games/${encodeURIComponent(currentAskAiGameId)}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 202 && body.job_id) {
+      askAiThinkingEl.dataset.active = "1";
+      pollAskAiJob(body.job_id);
+    } else {
+      askAiQuestionEl.disabled = false;
+      askAiSubmitBtn.disabled = false;
+      askAiStatusEl.hidden = false;
+      if (res.status === 429) {
+        askAiStatusEl.textContent = "You're asking too quickly — try again in a few minutes.";
+      } else if (res.status === 503) {
+        askAiStatusEl.textContent = "This feature is currently unavailable — try again later.";
+      } else if (res.status === 400) {
+        askAiStatusEl.textContent = "Type a question first.";
+      } else {
+        askAiStatusEl.textContent = "Something went wrong — try again.";
+      }
+    }
+  } catch (err) {
+    askAiQuestionEl.disabled = false;
+    askAiSubmitBtn.disabled = false;
+    askAiStatusEl.hidden = false;
+    askAiStatusEl.textContent = "Network error — try again.";
   }
 });

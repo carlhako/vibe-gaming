@@ -21,6 +21,7 @@ import traceback
 from pathlib import Path
 
 import agent
+import ai_qa
 import db
 import game_generator
 
@@ -72,6 +73,15 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
                 db_conn=conn, games_dir=games_dir, job_id=job_id,
                 new_title=job.get("new_title"), creator_uid=job.get("creator_uid"),
             )
+        elif job["kind"] == "ask":
+            # A single quick DeepSeek call, not a forking retry loop — see
+            # ai_qa.py. Never produces a game_id (result["game_id"] stays
+            # None below, so result_game_id is never set on this job).
+            result = ai_qa.answer_question(
+                job["source_game_id"], job["prompt"], job["requested_by"], config,
+                db_conn=conn, games_dir=games_dir, job_id=job_id,
+                creator_uid=job.get("creator_uid"),
+            )
         else:
             raise ValueError(f"unknown job kind: {job['kind']!r}")
     except Exception as exc:  # noqa: BLE001 - a job must never take the worker thread down
@@ -93,6 +103,7 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
             duration_seconds=result["duration_seconds"],
             input_tokens=result["input_tokens"], output_tokens=result["output_tokens"],
             tokens_used=result["tokens_used"], cached_tokens=result.get("cached_tokens"),
+            answer=result.get("answer"),
             conn=conn,
         )
     else:
@@ -102,6 +113,7 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
             input_tokens=result["input_tokens"], output_tokens=result["output_tokens"],
             tokens_used=result["tokens_used"], cached_tokens=result.get("cached_tokens"),
             error=result["error"] or "unknown error",
+            answer=result.get("answer"),
             conn=conn,
         )
 

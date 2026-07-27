@@ -13,6 +13,7 @@
   --hue-2: #ff6b6b;
   --hue-3: #6ba3ff;
   --hue-4: #d38bff;
+  --hue-5: #4dd8d0;
   --chat-max-width: 1100px;
 }
 
@@ -1220,6 +1221,7 @@ body {
 .admin-tabs .admin-tab[data-hue="2"] { --tab-hue: var(--hue-2); }
 .admin-tabs .admin-tab[data-hue="3"] { --tab-hue: var(--hue-3); }
 .admin-tabs .admin-tab[data-hue="4"] { --tab-hue: var(--hue-4); }
+.admin-tabs .admin-tab[data-hue="5"] { --tab-hue: var(--hue-5); }
 
 .admin-tabs .admin-tab:hover {
   color: var(--ink);
@@ -2126,6 +2128,179 @@ body {
 .modal-report-actions {
   display: flex;
   justify-content: flex-end;
+}
+
+/* ---- Ask AI about this game ---- */
+
+.modal-ask-ai {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.modal-askai-form {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.modal-askai-form textarea {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.modal-askai-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+}
+
+/* A terminal-style blinking cursor while a question is in flight — the
+   one signature touch for this feature, echoing the mono/arcade-terminal
+   register already established by .status-timer elsewhere. */
+.askai-thinking {
+  color: var(--accent2);
+  font-size: 12px;
+  display: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.askai-thinking[data-active="1"] {
+  display: inline-flex;
+}
+
+.askai-thinking::after {
+  content: "\258b";
+  animation: askai-blink 1s steps(1) infinite;
+}
+
+@keyframes askai-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+.modal-askai-answer {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.6;
+  background: var(--panel-raised);
+  border: 1px solid var(--hue-1);
+  border-radius: 4px;
+  padding: 12px;
+  margin-top: 10px;
+}
+
+.modal-askai-answer[hidden] {
+  display: none;
+}
+
+.modal-askai-answer p:first-child { margin-top: 0; }
+.modal-askai-answer p:last-child { margin-bottom: 0; }
+.modal-askai-answer table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12.5px;
+  margin: 8px 0;
+}
+.modal-askai-answer th,
+.modal-askai-answer td {
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+  text-align: left;
+}
+.modal-askai-answer th {
+  color: var(--accent2);
+}
+
+.modal-askai-history {
+  margin-top: 16px;
+}
+
+.modal-askai-history h3 {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 8px;
+}
+
+.modal-askai-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.modal-askai-history-list details {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel-raised);
+  margin-bottom: 6px;
+}
+
+.modal-askai-history-list summary {
+  font-size: 12.5px;
+  color: var(--ink);
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.modal-askai-history-list summary::-webkit-details-marker {
+  display: none;
+}
+
+.modal-askai-history-list summary::before {
+  content: "\25b8";
+  display: inline-block;
+  color: var(--accent2);
+  margin-right: 6px;
+  transition: transform 0.15s ease;
+}
+
+.modal-askai-history-list details[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.modal-askai-history-list .askai-answer-body {
+  font-size: 12.5px;
+  line-height: 1.6;
+  padding: 0 10px 10px 24px;
+  border-top: 1px solid var(--line);
+  margin-top: 6px;
+  padding-top: 8px;
+}
+
+.ai-qa-answer {
+  max-width: 360px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-top: 6px;
+}
+
+.ai-qa-answer table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 11.5px;
+}
+.ai-qa-answer th,
+.ai-qa-answer td {
+  border: 1px solid var(--line);
+  padding: 3px 6px;
+  text-align: left;
 }
 
 /* ---- Arcade FX (index page only) ---- */

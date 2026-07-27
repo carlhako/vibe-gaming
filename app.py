@@ -90,6 +90,27 @@ def _load_rate_limit_config() -> dict:
 _RATE_LIMIT = _load_rate_limit_config()
 
 
+def _load_ask_rate_limit_config() -> dict:
+    """`askaiwebgame.rate_limit:` block from config.yaml — the "Ask AI about
+    this game" feature's own budget, kept separate from _RATE_LIMIT so a
+    burst of cheap single-shot questions can't eat into (or be blocked by)
+    real game generation's much tighter 5/hour default."""
+    config_path = _BASE_DIR / "config.yaml"
+    cfg = {}
+    if config_path.exists():
+        import yaml
+        with open(config_path) as f:
+            cfg = ((yaml.safe_load(f) or {}).get("askaiwebgame", {}) or {}).get("rate_limit", {})
+    return {
+        "max_requests": cfg.get("max_requests", 20),
+        "window_seconds": cfg.get("window_seconds", 3600),
+        "max_queue_size": cfg.get("max_queue_size", 5),
+    }
+
+
+_ASK_RATE_LIMIT = _load_ask_rate_limit_config()
+
+
 def get_db():
     """One SQLite connection per request, reused by every db.* call in that
     request and closed in teardown — instead of each call opening (and
@@ -452,6 +473,7 @@ def create_app(games_dir=None) -> Flask:
             "creator": game.get("creator_name", "anonymous"),
             "play_count": db.get_play_count(game_id, conn=get_db()),
             "recent_plays": db.get_recent_plays(game_id, limit=20, conn=get_db()),
+            "ai_questions": db.get_game_questions(game_id, limit=10, conn=get_db()),
             "ancestors": [
                 {"slug": g["slug"], "title": g["title"], "hidden": g.get("hidden", False)}
                 for g in lineage["ancestors"]
@@ -526,6 +548,54 @@ def create_app(games_dir=None) -> Flask:
             body["reason"] = "already_reported"
         resp = jsonify(body)
         resp.status_code = 200 if ok else 409
+        if set_cookie:
+            resp.set_cookie(
+                _VG_UID_COOKIE, vg_uid, max_age=_VG_UID_MAX_AGE,
+                httponly=False, samesite="Lax",
+            )
+        return resp
+
+    @app.post("/api/games/<game_id>/ask")
+    def ask_game(game_id):
+        """Queue a kind='ask' generation_requests job: send the game's full
+        source plus a player's question to DeepSeek, answered async by
+        job_runner (ai_qa.answer_question) — see /api/status/<job_id> for
+        the poll endpoint (its JSON gains an `answer` field once this job
+        succeeds) and /api/games/<game_id>/info's `ai_questions` for the
+        resulting per-game history."""
+        if not _GAME_ID_RE.match(game_id):
+            abort(404)
+        conn = get_db()
+        game = db.get_web_game(game_id, conn=conn)
+        if game is None:
+            abort(404)
+
+        if _ai_disabled():
+            return jsonify({"ok": False, "reason": "ai_disabled"}), 503
+
+        payload = request.get_json(silent=True) or {}
+        question = (payload.get("question") or "").strip()[:500]
+        if not question:
+            return jsonify({"ok": False, "reason": "empty_question"}), 400
+
+        vg_uid = request.cookies.get(_VG_UID_COOKIE)
+        set_cookie = vg_uid is None
+        if vg_uid is None:
+            vg_uid = uuid.uuid4().hex
+
+        if _ask_queue_full():
+            return jsonify({"ok": False, "reason": "queue_full"}), 503
+        if _ask_rate_limited(vg_uid):
+            return jsonify({"ok": False, "reason": "rate_limited"}), 429
+
+        job_id = uuid.uuid4().hex
+        db.create_generation_request(
+            job_id=job_id, kind="ask", prompt=question, source_game_id=game_id,
+            requested_by="web:" + vg_uid[:12], creator_uid=vg_uid,
+            ip_address=request.remote_addr or "unknown", conn=conn,
+        )
+        resp = jsonify({"ok": True, "job_id": job_id})
+        resp.status_code = 202
         if set_cookie:
             resp.set_cookie(
                 _VG_UID_COOKIE, vg_uid, max_age=_VG_UID_MAX_AGE,
@@ -624,6 +694,22 @@ def create_app(games_dir=None) -> Flask:
         limit still can't pile up an unbounded backlog of pending DeepSeek
         calls."""
         return db.count_active_generation_requests(conn=get_db()) >= _RATE_LIMIT["max_queue_size"]
+
+    def _ask_rate_limited(vg_uid: str) -> bool:
+        """Same shape as _rate_limited but scoped to kind='ask' jobs against
+        askaiwebgame's own (looser) budget."""
+        since_iso = db.seconds_ago_iso(_ASK_RATE_LIMIT["window_seconds"])
+        count = db.count_recent_generation_requests(
+            vg_uid, request.remote_addr or "unknown", since_iso, kind="ask", conn=get_db(),
+        )
+        return count >= _ASK_RATE_LIMIT["max_requests"]
+
+    def _ask_queue_full() -> bool:
+        """Same shape as _queue_full but scoped to kind='ask' jobs, so a
+        burst of questions can't be blocked by (or block) a real game
+        generation/enhancement backlog."""
+        return db.count_active_generation_requests(
+            kind="ask", conn=get_db()) >= _ASK_RATE_LIMIT["max_queue_size"]
 
     @app.post("/games/new")
     def new_game_submit():
@@ -989,6 +1075,9 @@ def create_app(games_dir=None) -> Flask:
             "source_game_id": job["source_game_id"],
             "source_title": source_title,
             "source_version": source_version,
+            # Only ever set for kind='ask' jobs (the sanitized HTML reply,
+            # once one succeeds) — None for every other kind.
+            "answer": job.get("answer"),
         })
 
     @app.get("/api/jobs/<job_id>/events")
@@ -1110,6 +1199,7 @@ def create_app(games_dir=None) -> Flask:
         admin_token = request.args.get("token")
         history_page, history_per = _page_params("history")
         plays_page, plays_per = _page_params("plays")
+        ai_qa_page, ai_qa_per = _page_params("ai_qa")
 
         history_total = db.count_generation_requests(conn=conn)
         history_pages = max(1, math.ceil(history_total / history_per))
@@ -1132,10 +1222,18 @@ def create_app(games_dir=None) -> Flask:
         plays_rows = db.get_play_history(
             limit=plays_per, offset=(plays_page - 1) * plays_per, conn=conn)
 
+        ai_qa_total = db.count_generation_requests(kind="ask", conn=conn)
+        ai_qa_pages = max(1, math.ceil(ai_qa_total / ai_qa_per))
+        ai_qa_page = min(ai_qa_page, ai_qa_pages)
+        ai_qa_rows = db.get_generation_history(
+            limit=ai_qa_per, offset=(ai_qa_page - 1) * ai_qa_per, kind="ask", conn=conn)
+        _attach_token_costs(ai_qa_rows, input_cost_per_million, output_cost_per_million)
+
         def _stats_url(**overrides):
             params = dict(token=admin_token,
                           history_page=history_page, history_per=history_per,
-                          plays_page=plays_page, plays_per=plays_per)
+                          plays_page=plays_page, plays_per=plays_per,
+                          ai_qa_page=ai_qa_page, ai_qa_per=ai_qa_per)
             params.update(overrides)
             return url_for("admin_stats",
                            **{k: v for k, v in params.items() if v is not None})
@@ -1157,10 +1255,16 @@ def create_app(games_dir=None) -> Flask:
 
         history_pager = _pager(
             "history", history_page, history_pages, history_per, history_total,
-            keep={"token": admin_token, "plays_page": plays_page, "plays_per": plays_per})
+            keep={"token": admin_token, "plays_page": plays_page, "plays_per": plays_per,
+                  "ai_qa_page": ai_qa_page, "ai_qa_per": ai_qa_per})
         plays_pager = _pager(
             "plays", plays_page, plays_pages, plays_per, plays_total,
-            keep={"token": admin_token, "history_page": history_page, "history_per": history_per})
+            keep={"token": admin_token, "history_page": history_page, "history_per": history_per,
+                  "ai_qa_page": ai_qa_page, "ai_qa_per": ai_qa_per})
+        ai_qa_pager = _pager(
+            "ai_qa", ai_qa_page, ai_qa_pages, ai_qa_per, ai_qa_total,
+            keep={"token": admin_token, "history_page": history_page, "history_per": history_per,
+                  "plays_page": plays_page, "plays_per": plays_per})
 
         return render_template(
             "admin_stats.html",
@@ -1172,6 +1276,7 @@ def create_app(games_dir=None) -> Flask:
             input_cost_per_million=input_cost_per_million,
             output_cost_per_million=output_cost_per_million,
             plays_rows=plays_rows, plays_pager=plays_pager,
+            ai_qa_rows=ai_qa_rows, ai_qa_pager=ai_qa_pager,
             page_sizes=_ADMIN_PAGE_SIZES,
             open_report_count=open_report_count,
             ai_generation_enabled=ai_generation_enabled,

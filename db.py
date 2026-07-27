@@ -267,6 +267,7 @@ _ADDED_COLUMNS = {
         ("tokens_used", "INTEGER"), ("creator_uid", "TEXT"),
         ("input_tokens", "INTEGER"), ("output_tokens", "INTEGER"),
         ("ip_address", "TEXT"), ("cached_tokens", "INTEGER"),
+        ("answer", "TEXT"),
     ],
     "generation_attempts": [
         ("duration_seconds", "REAL"), ("raw_response", "TEXT"),
@@ -513,13 +514,18 @@ def get_recent_plays(game_id, limit=20, conn=None):
     return [r["played_at"] for r in rows]
 
 
-def count_generation_requests(conn=None) -> int:
+def count_generation_requests(kind=None, conn=None) -> int:
     c = _c(conn)
-    row = c.execute("SELECT COUNT(*) AS n FROM generation_requests").fetchone()
+    query = "SELECT COUNT(*) AS n FROM generation_requests"
+    params: list = []
+    if kind is not None:
+        query += " WHERE kind=?"
+        params.append(kind)
+    row = c.execute(query, params).fetchone()
     return row["n"]
 
 
-def get_generation_history(limit=20, offset=0, conn=None):
+def get_generation_history(limit=20, offset=0, kind=None, conn=None):
     """One page of generation/enhancement jobs, newest first — every run,
     failures included. Joins in the resulting game's title/slug (NULL for
     failed or still-running jobs) and the requester's username if their
@@ -528,15 +534,16 @@ def get_generation_history(limit=20, offset=0, conn=None):
     response came back, e.g. a transport failure) for the admin history
     page's "JSON" detail dialog, and a has_agent_events flag so the page
     can offer a transcript replay only for the ReAct-agent jobs that have
-    one (single-file jobs emit no agent_events at all)."""
+    one (single-file jobs emit no agent_events at all). `kind`, if given,
+    restricts to that job kind alone (e.g. the admin AI Q&A tab passes
+    kind='ask')."""
     c = _c(conn)
-    rows = c.execute(
-        """
+    query = """
         SELECT gr.job_id, gr.kind, gr.prompt, gr.new_title, gr.status,
                gr.requested_by, gr.creator_uid, gr.created_at,
                gr.error, gr.model, gr.effort, gr.attempts,
                gr.input_tokens, gr.output_tokens, gr.tokens_used, gr.cached_tokens,
-               gr.duration_seconds,
+               gr.duration_seconds, gr.answer,
                gr.source_game_id,
                wg.title AS result_title, wg.slug AS result_slug,
                u.username AS creator_username,
@@ -553,10 +560,31 @@ def get_generation_history(limit=20, offset=0, conn=None):
         LEFT JOIN web_games wg ON wg.game_id = gr.result_game_id
         LEFT JOIN users u ON u.uid = gr.creator_uid
         LEFT JOIN web_games src ON src.game_id = gr.source_game_id
-        ORDER BY gr.created_at DESC, gr.job_id
-        LIMIT ? OFFSET ?
+    """
+    params: list = []
+    if kind is not None:
+        query += " WHERE gr.kind=?"
+        params.append(kind)
+    query += " ORDER BY gr.created_at DESC, gr.job_id LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    rows = c.execute(query, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_game_questions(game_id, limit=10, conn=None):
+    """Answered 'ask' jobs for game_id, newest first — the info modal's
+    "Previous questions" history list. Only successful, answered jobs
+    (a failed ask has no answer text worth showing a player)."""
+    c = _c(conn)
+    rows = c.execute(
+        """
+        SELECT job_id, prompt AS question, answer, model, created_at
+        FROM generation_requests
+        WHERE kind='ask' AND source_game_id=? AND status='success' AND answer IS NOT NULL
+        ORDER BY created_at DESC
+        LIMIT ?
         """,
-        (limit, offset),
+        (game_id, limit),
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -754,17 +782,24 @@ def create_generation_request(job_id, kind, prompt, requested_by, source_game_id
     c.commit()
 
 
-def count_recent_generation_requests(creator_uid, ip_address, since_iso, conn=None) -> int:
+def count_recent_generation_requests(creator_uid, ip_address, since_iso, kind=None, conn=None) -> int:
     """Count of generation_requests created at or after since_iso, matching
     creator_uid OR ip_address — same "block on cookie or IP, whichever fires
     first" anti-abuse posture as the two UNIQUE constraints on `ratings`,
-    reused here for request-volume rate limiting rather than vote dedup."""
+    reused here for request-volume rate limiting rather than vote dedup.
+    `kind`, if given, scopes the count to that job kind alone — e.g. so
+    'ask' jobs get their own rate-limit bucket instead of competing with
+    game generation's budget."""
     c = _c(conn)
-    row = c.execute(
+    query = (
         "SELECT COUNT(*) AS n FROM generation_requests "
-        "WHERE created_at >= ? AND (creator_uid = ? OR ip_address = ?)",
-        (since_iso, creator_uid, ip_address),
-    ).fetchone()
+        "WHERE created_at >= ? AND (creator_uid = ? OR ip_address = ?)"
+    )
+    params: list = [since_iso, creator_uid, ip_address]
+    if kind is not None:
+        query += " AND kind=?"
+        params.append(kind)
+    row = c.execute(query, params).fetchone()
     return row["n"]
 
 
@@ -779,10 +814,13 @@ def get_generation_request(job_id, conn=None):
 def update_generation_request(job_id, status=None, result_game_id=None, attempts=None,
                                model=None, effort=None, duration_seconds=None,
                                input_tokens=None, output_tokens=None,
-                               tokens_used=None, cached_tokens=None, error=None, conn=None):
+                               tokens_used=None, cached_tokens=None, error=None,
+                               answer=None, conn=None):
     """Sparse update: only columns explicitly passed (non-None) are touched,
     except `error` which can be intentionally cleared by passing an empty
-    string — pass None to leave it alone."""
+    string — pass None to leave it alone. `answer` is only ever set by
+    kind='ask' jobs (the sanitized HTML reply); every other kind leaves it
+    NULL forever."""
     c = _c(conn)
     fields = {"updated_at": _now()}
     if status is not None:
@@ -807,6 +845,8 @@ def update_generation_request(job_id, status=None, result_game_id=None, attempts
         fields["cached_tokens"] = cached_tokens
     if error is not None:
         fields["error"] = error
+    if answer is not None:
+        fields["answer"] = answer
     set_clause = ", ".join(f"{k}=?" for k in fields)
     c.execute(
         f"UPDATE generation_requests SET {set_clause} WHERE job_id=?",
@@ -891,16 +931,20 @@ def count_generating(conn=None) -> int:
     return row["n"]
 
 
-def count_active_generation_requests(conn=None) -> int:
+def count_active_generation_requests(kind=None, conn=None) -> int:
     """Total jobs currently sitting in the queue or being worked, across
     every requester — 'generating' is capped at 1 by claim_next_queued_request,
     but nothing else bounds how many can pile up as 'queued'. Used to cap
     total queue depth independently of the per-requester rate limit (see
-    app.py's _queue_full)."""
+    app.py's _queue_full). `kind`, if given, scopes the count to that job
+    kind alone — e.g. so 'ask' jobs get their own queue-depth cap."""
     c = _c(conn)
-    row = c.execute(
-        "SELECT COUNT(*) AS n FROM generation_requests WHERE status IN ('queued', 'generating')"
-    ).fetchone()
+    query = "SELECT COUNT(*) AS n FROM generation_requests WHERE status IN ('queued', 'generating')"
+    params: list = []
+    if kind is not None:
+        query += " AND kind=?"
+        params.append(kind)
+    row = c.execute(query, params).fetchone()
     return row["n"]
 
 

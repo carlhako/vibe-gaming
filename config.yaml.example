@@ -106,6 +106,22 @@ multifile_agent:
                                # (agent.DEFAULT_MODULE_WARN_RATIO), so it also scales down
                                # automatically during explode's tighter 120000 ceiling.
 
+# "Ask AI about this game" (kind='ask' jobs) — a single quick DeepSeek call,
+# not a multi-attempt generation, so effort/timeout/max_tokens are tuned
+# much lower than newaiwebgame/enhanceaiwebgame above. Its own rate_limit
+# block keeps it from competing with real game generation's queue/budget
+# (db.count_recent_generation_requests/count_active_generation_requests take
+# a kind= filter for exactly this).
+askaiwebgame:
+  model: null                # null -> ai_client.MODEL_DEFAULT (deepseek-v4-flash)
+  effort: null                # null -> fast non-thinking path; a lookup/summarize task doesn't need chain-of-thought
+  timeout_seconds: 90
+  max_tokens: 4000            # answers are short; bounds cost/latency
+  rate_limit:
+    max_requests: 20          # looser than generation's 5/hour — a much cheaper call
+    window_seconds: 3600
+    max_queue_size: 5
+
 job_runner:
   workers: 1                 # poll-loop threads per process (dev) / per gunicorn worker (prod)
   poll_interval_seconds: 1   # how often an idle worker checks for a newly queued job

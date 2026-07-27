@@ -49,6 +49,7 @@
           <button type="button" class="admin-tab" data-tab="users" data-hue="4" role="tab">Users</button>
           <button type="button" class="admin-tab" data-tab="history" data-hue="1" role="tab">History</button>
           <button type="button" class="admin-tab" data-tab="plays" data-hue="2" role="tab">Play history</button>
+          <button type="button" class="admin-tab" data-tab="ai_qa" data-hue="5" role="tab">AI Q&amp;A</button>
         </div>
 
         {% macro tokencell(tokens, cost) %}{% if tokens is none %}—{% else %}{{ tokens }} <span class="token-cost">(${{ '%.4f'|format(cost or 0) }})</span>{% endif %}{% endmacro %}
@@ -322,6 +323,53 @@
           </table>
           {% else %}
           <p class="form-hint">No plays recorded yet.</p>
+          {% endif %}
+        </div>
+
+        <div class="admin-panel" id="tab-ai_qa" role="tabpanel">
+          <h2>Ask AI about this game — history</h2>
+          {{ pager(ai_qa_pager) }}
+          {% if ai_qa_rows %}
+          <p class="form-hint">
+            Estimated cost assumes ${{ '%.2f'|format(input_cost_per_million) }} / 1M input
+            tokens and ${{ '%.2f'|format(output_cost_per_million) }} / 1M output tokens
+            (<code>DEEPSEEK_INPUT_COST_PER_MILLION</code> / <code>DEEPSEEK_OUTPUT_COST_PER_MILLION</code>
+            in <code>.env</code>).
+          </p>
+          <div class="table-scroll">
+          <table class="stats-table">
+            <thead><tr><th>When</th><th>Game</th><th>Question</th><th>Answer</th><th>Requested by</th><th>Status</th><th>Model</th><th>Input tokens</th><th>Output tokens</th><th>Total tokens</th><th>Links</th></tr></thead>
+            <tbody>
+              {% for r in ai_qa_rows %}
+              <tr class="{{ 'is-hidden-row' if r.status == 'failed' }}">
+                <td><span class="local-ts" data-utc="{{ r.created_at }}">{{ r.created_at[:19].replace('T', ' ') }}</span></td>
+                <td>{% if r.source_title %}{{ r.source_title }}{% else %}—{% endif %}</td>
+                <td>{{ r.prompt[:80] ~ ('…' if r.prompt|length > 80 else '') }}</td>
+                <td>
+                  {% if r.answer %}
+                  <details><summary class="link-btn">View answer</summary><div class="ai-qa-answer">{{ r.answer|safe }}</div></details>
+                  {% else %}—{% endif %}
+                </td>
+                <td>{{ r.creator_username or (r.creator_uid[:8] ~ '…' if r.creator_uid else r.requested_by) }}</td>
+                <td title="{{ r.error or '' }}">{{ r.status }}{% if r.status == 'failed' and r.error %} &#9432;{% endif %}</td>
+                <td>{{ r.model or '—' }}{% if r.effort %} <span class="form-hint">({{ r.effort }})</span>{% endif %}</td>
+                <td class="token-cell">{{ tokencell(r.input_tokens, r.input_cost) }}</td>
+                <td class="token-cell">{{ tokencell(r.output_tokens, r.output_cost) }}</td>
+                <td class="token-cell">{{ tokencell(r.tokens_used, r.total_cost) }}</td>
+                <td>
+                  <div class="history-actions">
+                    <a class="game-row-play-link" href="{{ url_for('job_status_page', job_id=r.job_id) }}"
+                       target="_blank" rel="noopener"
+                       title="The exact status page the requester saw, replayed">Status &#8599;</a>
+                  </div>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          </div>
+          {% else %}
+          <p class="form-hint">No questions asked yet.</p>
           {% endif %}
         </div>
       </div>
