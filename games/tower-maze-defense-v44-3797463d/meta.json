@@ -1,0 +1,12 @@
+{
+  "game_id": "3797463d21574bf0a99aa3926193b03f",
+  "parent_game_id": "d71ca4821021420f8226a8dc4aa18512",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v44)",
+  "description": "Enhanced tower defense with projectile pass-through, upgrade-all buttons, and rich maze generation.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-26T23:03:57.268682Z",
+  "version": 3,
+  "prompt": "add a new feature once you pass round 5, there is a 50% chance of a glowing purple block to be generated somewhere random on the map. the block takes 100 hits to destroy it, when its destroy 50-100 gold explodes out of it as well as 5 enemy units and 1 boss witch. Each round increases the number of enemy units that come out of it by +1 and the amount of gold +10",
+  "format": "multi-file"
+}

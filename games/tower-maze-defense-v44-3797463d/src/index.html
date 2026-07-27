@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tower Maze Defense</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="game-container">
+    <div id="main-area">
+        <div id="canvas-wrap">
+            <canvas id="gameCanvas" width="616" height="616"></canvas>
+            <div id="game-over-overlay">
+                <h1 style="color:#e74c3c;">GAME OVER</h1>
+                <div class="sub" id="final-wave">Wave 0</div>
+                <button id="restart-btn">Play Again</button>
+            </div>
+            <div id="difficulty-overlay" class="show">
+                <h1>🏰 Tower Maze Defense</h1>
+                <div class="subtitle">Select Difficulty</div>
+                <div id="seed-section-overlay">
+                    <label for="seed-input-overlay">🗺 Seed:</label>
+                    <input type="text" id="seed-input-overlay" maxlength="8" autocomplete="off" spellcheck="false">
+                    <button class="seed-btn load-btn" id="seed-load-overlay">Load</button>
+                    <button class="seed-btn rand-btn" id="seed-random-overlay" title="Random seed">🎲</button>
+                </div>
+                <div id="seed-error-overlay"></div>
+                <div id="difficulty-buttons">
+                    <button class="diff-btn easy-btn">🟢 Easy<div class="detail">Standard enemies</div></button>
+                    <button class="diff-btn med-btn">🟡 Medium<div class="detail">Enemies 1.2× HP</div></button>
+                    <button class="diff-btn hard-btn">🔴 Hard<div class="detail">Enemies 1.4× HP<br>20% less income</div></button>
+                    <button class="diff-btn sandbox-btn">🛠️ Sandbox<div class="detail">All free · Med difficulty<br>For testing units</div></button>
+                </div>
+            </div>
+        </div>
+        <div id="bottom-dock">
+            <div class="dock-group">
+                <span class="dock-label">⚔ Attack</span>
+                <div class="dock-row">
+                    <button class="tower-btn" data-type="arrow" title="Arrow Tower — $65"><span class="ticon">🏹</span><span class="tname">Arrow</span><span class="cost">$65</span></button>
+                    <button class="tower-btn" data-type="cannon" title="Cannon Tower — $130"><span class="ticon">💥</span><span class="tname">Cannon</span><span class="cost">$130</span></button>
+                    <button class="tower-btn" data-type="ice" title="Ice Tower — $95"><span class="ticon">❄️</span><span class="tname">Ice</span><span class="cost">$95</span></button>
+                    <button class="tower-btn" data-type="sniper" title="Laser Tower — $190"><span class="ticon">🔫</span><span class="tname">Laser</span><span class="cost">$190</span></button>
+                    <button class="tower-btn" data-type="tesla" title="Tesla Tower — $260"><span class="ticon">⚡</span><span class="tname">Tesla</span><span class="cost">$260</span></button>
+                </div>
+            </div>
+            <div class="dock-group">
+                <span class="dock-label">✨ Buff</span>
+                <div class="dock-row">
+                    <button class="tower-btn buff-btn" data-type="rangeBuff" title="Range+ Buff — $100"><span class="ticon">📡</span><span class="tname">Range+</span><span class="cost">$100</span></button>
+                    <button class="tower-btn buff-btn" data-type="speedBuff" title="Speed+ Buff — $110"><span class="ticon">⏫</span><span class="tname">Speed+</span><span class="cost">$110</span></button>
+                    <button class="tower-btn buff-btn" data-type="attackBuff" title="Power+ Buff — $120"><span class="ticon">💪</span><span class="tname">Power+</span><span class="cost">$120</span></button>
+                </div>
+            </div>
+            <div class="dock-group">
+                <span class="dock-label">💰 Econ</span>
+                <div class="dock-row">
+                    <button class="tower-btn econ-btn" data-type="mint" title="Mint — $500"><span class="ticon">💰</span><span class="tname">Mint</span><span class="cost">$500</span></button>
+                </div>
+            </div>
+            <div class="dock-group">
+                <span class="dock-label">🚂 Special</span>
+                <div class="dock-row">
+                    <button class="tower-btn special-btn" data-type="steamRoller" title="Steam Roller — $1000"><span class="ticon">🚂</span><span class="tname">Roller</span><span class="cost">$1000</span></button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="right-sidebar">
+        <div id="action-bar">
+            <button id="wave-btn" class="primary" title="Start Wave">▶</button>
+            <button id="new-map-btn" title="New Map">🗺</button>
+            <button id="pause-btn" title="Pause">⏸</button>
+            <button id="speed-btn" title="Game Speed">1×</button>
+            <button id="upgrade-all-cheap-btn" title="Upgrade All — Cheapest First">↑¢</button>
+            <button id="upgrade-all-expensive-btn" title="Upgrade All — Priciest First">↑$</button>
+        </div>
+        <div id="difficulty-badge"><span id="difficulty-label">Easy</span></div>
+        <div id="stats">
+            <span>💰 <span class="stat-val" id="money-val">120</span></span>
+            <span>❤️ <span class="stat-val" id="lives-val">10</span></span>
+            <span>🌊 <span class="stat-val" id="wave-val">0</span></span>
+            <span>⚔️ <span class="stat-val" id="kill-val">0</span></span>
+            <span>🏗️ <span class="stat-val" id="tower-count-val">0</span></span>
+            <span>💥 DPS <span class="stat-val" id="dps-val">0</span></span>
+        </div>
+        <div id="seed-display-panel">
+            <span class="seed-label">🗺 Seed</span>
+            <span class="seed-value" id="seed-display-text"></span>
+            <button id="seed-copy-btn" title="Copy seed to clipboard">📋</button>
+        </div>
+        <div id="info-box"><div>Select a tower to place it on the grid. Each tower has a unique attack style. Buff towers boost nearby attack towers. Hold and drag to build rows!</div></div>
+        <div id="tower-controls">
+            <div id="upgrade-btn">⬆ Upgrade (??)</div>
+            <div id="target-btns">
+                <button data-mode="nearest">🎯 Nearest</button>
+                <button data-mode="first">🚩 First</button>
+                <button data-mode="last">🏁 Last</button>
+                <button data-mode="random">🎲 Random</button>
+            </div>
+            <div id="delete-btn">🗑 Delete (50% refund)</div>
+        </div>
+    </div>
+</div>
+<script src="config.js"></script>
+<script src="utils.js"></script>
+<script src="pathgen.js"></script>
+<script src="entities.js"></script>
+<script src="combat.js"></script>
+<script src="render.js"></script>
+<script src="ui.js"></script>
+<script src="game.js"></script>
+<script src="input.js"></script>
+</body>
+</html>
