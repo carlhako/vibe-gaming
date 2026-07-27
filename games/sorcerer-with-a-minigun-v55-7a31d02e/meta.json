@@ -1,0 +1,12 @@
+{
+  "game_id": "7a31d02e01864ce1b38eb31481a32492",
+  "parent_game_id": "0d1b84452ce24b62b7cf440942f2df83",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v55)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-27T11:50:59.260022Z",
+  "version": 14,
+  "prompt": "add a little i icon on the upgrade for the annihilator in the shop once a player can see the upgrade. when clicked it opens up a dialog with the story about it.\r\n\r\nCopilot said: The Annihilator\r\nLong before the Darkhold Arena was built, the Sorcerer Kings fought a war against something they could not kill.\r\nThe Void.\r\nNo army could stop it. No spell could contain it. Entire kingdoms vanished into black storms that consumed stone, steel, flesh, and soul alike.\r\nIn desperation, the Archmages gathered beneath the ruins of Blackspire and forged a weapon that violated every law of magic.\r\nThey fused a Railgun powered by starfire with a demonic war engine powered by stolen souls.\r\nThe result was The Annihilator.\r\nThe weapon did not fire bullets.\r\nIt did not fire spells.\r\nIt fired concentrated tears in reality itself.\r\nEach shot ripped open a microscopic rift into the Void, unleashing enough force to erase anything in its path. Mountains were split in half. Castles disappeared in moments. Entire battlefields were reduced to smoking glass.\r\nThe weapon was so powerful that even its creators could not wield it safely.\r\nAs The Annihilator fired, the weapon consumed more energy than its frame could contain. Its barrels glowed white-hot, its runes cracked, and reality itself began to distort around the wielder. If pushed too far, the weapon threatened to destroy its owner along with everything nearby.\r\nThe Archmages sealed it away beneath the Darkhold and erased its existence from every known record.\r\nFor centuries it remained hidden.\r\nForgotten.\r\nWaiting.\r\nNow, after mastering every weapon, every spell, every upgrade, and every forbidden art known to the Sorcerers, you have become powerful enough to uncover its resting place.\r\nThe warnings carved into its prison read:\r\n\r\n\"This is not a weapon.\r\nIt is the last mistake of the First Age.\"\r\n\r\nAnd yet...\r\nYou picked it up anyway.",
+  "format": "multi-file"
+}
