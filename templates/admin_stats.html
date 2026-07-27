@@ -252,7 +252,7 @@
           </p>
           <div class="table-scroll">
           <table class="stats-table">
-            <thead><tr><th>When</th><th>Kind</th><th>Title</th><th>Requested by</th><th>Status</th><th>Attempts</th><th>Model</th><th>Duration</th><th>Input tokens</th><th>Input cached</th><th>Output tokens</th><th>Total tokens</th><th>Links</th></tr></thead>
+            <thead><tr><th>When</th><th>Kind</th><th>Title</th><th>Requested by</th><th>Status</th><th>Git</th><th>Attempts</th><th>Model</th><th>Duration</th><th>Input tokens</th><th>Input cached</th><th>Output tokens</th><th>Total tokens</th><th>Links</th></tr></thead>
             <tbody>
               {% for r in history_rows %}
               <tr class="{{ 'is-hidden-row' if r.status == 'failed' }}">
@@ -260,7 +260,8 @@
                 <td>{{ 'new' if r.kind == 'create' else r.kind }}{% if r.kind in ('enhance', 'explode') and r.source_title %} <span class="form-hint">of {{ r.source_title }}</span>{% endif %}</td>
                 <td>{{ r.result_title or r.new_title or (r.prompt[:60] ~ ('…' if r.prompt|length > 60 else '')) }}</td>
                 <td>{{ r.creator_username or (r.creator_uid[:8] ~ '…' if r.creator_uid else r.requested_by) }}</td>
-                <td title="{{ r.error or '' }}">{{ r.status }}{% if r.status == 'failed' and r.error %} &#9432;{% endif %}{% if r.git_push_status == 'failed' %} <span class="form-hint" title="git push to GitHub failed: {{ r.git_push_error }}">&#9888;&#65039; git push failed</span>{% endif %}</td>
+                <td title="{{ r.error or '' }}">{{ r.status }}{% if r.status == 'failed' and r.error %} &#9432;{% endif %}</td>
+                <td{% if r.git_push_status == 'failed' %} title="{{ r.git_push_error }}"{% endif %}>{% if r.git_push_status == 'pushed' %}&#9989;{% elif r.git_push_status == 'failed' %}&#9888;&#65039;{% elif r.kind in ('create', 'enhance', 'explode') %}&#8212;{% else %}{% endif %}</td>
                 <td>{{ r.attempts or '—' }}</td>
                 <td>{{ r.model or '—' }}{% if r.effort %} <span class="form-hint">({{ r.effort }})</span>{% endif %}</td>
                 <td>{{ '%.1fs'|format(r.duration_seconds) if r.duration_seconds is not none else '—' }}</td>
