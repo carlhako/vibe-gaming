@@ -1,0 +1,11 @@
+{
+  "game_id": "484b79cab76c4f09a789691ece1b41cb",
+  "parent_game_id": "366d8f56a4d440bb98f64e4d2a15964e",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Darkhold Arena (v3)",
+  "description": "A wave-based arena RPG where you choose a champion, slay monsters, collect tokens, and upgrade your abilities between rounds.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-21T23:00:06.797898Z",
+  "version": 1,
+  "prompt": "fix the bug where the player doesn't move when pressing wsad until i click out of the games boundary, clicking within the game boundary attacks but i still cant move."
+}
