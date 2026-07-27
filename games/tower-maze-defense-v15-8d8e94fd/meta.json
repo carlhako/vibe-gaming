@@ -1,0 +1,11 @@
+{
+  "game_id": "8d8e94fd0e5f4bd9bf99e32ef759ae8b",
+  "parent_game_id": "9bfde0a54cab4cbd88977fc455b097f5",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v15)",
+  "description": "Enhanced tower defense with maze-style paths. Boss units now stun nearby towers every 10s and spawn minions every 15s.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-20T08:58:14.280236Z",
+  "version": 1,
+  "prompt": "make some changes to the boss unit. The boss unit will stun the closest tower as it moves along once every 10 seconds. Make the boss unit randomly spawn another unit except another boss every 15 seconds."
+}
