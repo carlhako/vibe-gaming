@@ -1,0 +1,12 @@
+{
+  "game_id": "f3e9feeb8e34439eba987ad0855bc072",
+  "parent_game_id": "6ff857930cb8455aba0c35e9bca0cf49",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v40)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-26T10:40:54.111375Z",
+  "version": 1,
+  "prompt": "make the vitality upgrade also improve your spawned skeleton's hp. increase by the same hp as the main player.",
+  "format": "multi-file"
+}
