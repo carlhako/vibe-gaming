@@ -1,0 +1,11 @@
+{
+  "game_id": "fb71c547499143c9a5a31643b8159f15",
+  "parent_game_id": "eabe9d51c9be4390b1cd5a4f020ee513",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v23)",
+  "description": "Place attack, buff, and economy towers on a procedurally-generated maze to defend against waves of enemies. Three new buff towers boost nearby towers' range, fire rate, or damage.",
+  "requested_by": "web:007d10387b5b",
+  "created_at": "2026-07-21T02:01:10.268490Z",
+  "version": 1,
+  "prompt": "Lets add three new towers to our TD game, these will be buffs, and because we now have 3 styles of tower (Attack, Buff and Upgrades) lets separate these into groups.\r\n\r\nThe three buff towers (All buff towers should have a range of 3 squares)\r\nRange Increase - This will increase the range of all towers within its range by 10%, 15% and 20% (level 1-3)\r\n\r\nSpeed Increase - Increase the rate of fire of all towers in range from 5%, 10% and 15% (Level 1-3)\r\n\r\nAttach Increase - Increase the damage of all tower in range for 10%, 15% and 20% (level 1-3)"
+}
