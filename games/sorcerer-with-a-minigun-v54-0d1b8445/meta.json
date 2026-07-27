@@ -1,0 +1,12 @@
+{
+  "game_id": "0d1b84452ce24b62b7cf440942f2df83",
+  "parent_game_id": "ff59bc05554c43ce859b911248792cd2",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v54)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-27T11:10:05.603577Z",
+  "version": 13,
+  "prompt": "When the annihilator is selected and you spawn skeletons they have no weapon. Change this behaviors so half have a mini gun and half have a rail gun regardless if you have purchased these weapons from the store. add some new amulets, 1 for 100% chance of getting gold when destroying a block but don't stop more amulets from being generated. another for cooling the annihilator, when equipped you can shoot it for twice as long before it overheats.",
+  "format": "multi-file"
+}
