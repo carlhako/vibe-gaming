@@ -1,0 +1,11 @@
+{
+  "game_id": "eff5c06c758849498e004e690f45f56b",
+  "parent_game_id": "2cd2a702769c445d973b4e0e4fbec5a8",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v35)",
+  "description": "Build towers along procedurally generated mazes with loops and splits. New Sandbox mode lets you test all units for free on medium difficulty.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-21T07:53:14.823628Z",
+  "version": 1,
+  "prompt": "add a button on the screen when the game is first started called sandbox. It loads the game in medium hardness but everything is free, this is for testing units."
+}
