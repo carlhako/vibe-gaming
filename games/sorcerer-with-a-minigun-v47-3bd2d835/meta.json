@@ -1,0 +1,12 @@
+{
+  "game_id": "3bd2d83573a84bf8ba6c4e778f67c44d",
+  "parent_game_id": "e02147d0bcc64ce88c7966a3919130fa",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v47)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-27T07:23:27.928935Z",
+  "version": 7,
+  "prompt": "make the following changes to the game.\r\n\r\n1, change the stats bar to fix the layout issues at the bottom of the screen. Move the buttons to switch between minigun and rail gun left aligned so they sit under the HP bar. move the AMULET box to the lower right about 3/4 across the screen aligned to the bottom.\r\n\r\n2. adjust the skeletons with railguns so when they are not shooting they charge up their rail guns and hold them at full charge, this way as soon as there is an enemy they are charged and ready to shoot.",
+  "format": "multi-file"
+}
