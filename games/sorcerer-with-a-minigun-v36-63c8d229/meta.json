@@ -1,0 +1,11 @@
+{
+  "game_id": "63c8d22923b249cfbd963d17be06e825",
+  "parent_game_id": "6767fb03b75a4564a4a07c6c9519cbef",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v36)",
+  "description": "A wave-based arena RPG where you play as a sorcerer, wizard, or knight, battling skeletons, demons, and witches with destructible walls and upgradeable abilities.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-25T09:48:33.764240Z",
+  "version": 1,
+  "prompt": "fix the shop when the player has enough money for an upgrade the button should be green, currently they are all red."
+}
