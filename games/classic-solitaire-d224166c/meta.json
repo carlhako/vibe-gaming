@@ -1,0 +1,11 @@
+{
+  "game_id": "d224166ce7f9431d856064848a9d365a",
+  "parent_game_id": null,
+  "root_game_id": "d224166ce7f9431d856064848a9d365a",
+  "title": "Classic Solitaire",
+  "description": "A faithful recreation of the Windows 95 Klondike Solitaire with drag-and-drop, double-click auto-move, scoring, and green felt visuals.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-20T04:12:12.862568Z",
+  "version": 1,
+  "prompt": "make a solitaire game just like what was included in windows 95."
+}
