@@ -1,0 +1,11 @@
+{
+  "game_id": "9c84ac772c974817a468180109c21aa0",
+  "parent_game_id": "f0610a2e5058482abab716098c93e2ba",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v5)",
+  "description": "Enhanced tower defense with a winding maze path, multiple tower types, upgrades, and balanced difficulty.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-19T06:15:38.456388Z",
+  "version": 1,
+  "prompt": "The game is too hard on the first round I cant kill all the enemies, make it slightly easier but not too much on a scale of 0-100, make it 80."
+}
