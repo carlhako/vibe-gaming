@@ -1,0 +1,11 @@
+{
+  "game_id": "85efce55ffeb435c846363ec2f1d222b",
+  "parent_game_id": "d224166ce7f9431d856064848a9d365a",
+  "root_game_id": "d224166ce7f9431d856064848a9d365a",
+  "title": "Classic Solitaire (v2)",
+  "description": "A polished browser version of solitaire with drag-and-drop, auto-move, and timer \u2013 now with corrected stacking logic.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-20T04:17:43.796486Z",
+  "version": 1,
+  "prompt": "fix the game, i couldn't drag a black 6 onto a red 7."
+}
