@@ -1,0 +1,11 @@
+{
+  "game_id": "b06901d718ef49d7830797ade802b826",
+  "parent_game_id": "7962a303913341bdbfcb301f2fe76ce7",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v22)",
+  "description": "Darkhold Arena wave-RPG: Sorcerer gains a charge-up railgun upgrade as an alternative to the minigun. Hold LMB to charge, release to fire a devastating piercing beam.",
+  "requested_by": "web:7fbda6b03e03",
+  "created_at": "2026-07-24T10:26:45.955694Z",
+  "version": 1,
+  "prompt": "on the sorcerer character add a railgun upgrade like the minigun but it does not shoot as fast as the minigun and it needs to charge up but make it so it does alot of damage because of it having to charge up and not have fast attacking speed"
+}
