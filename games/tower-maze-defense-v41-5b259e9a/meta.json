@@ -1,0 +1,11 @@
+{
+  "game_id": "5b259e9a9aa24eddaf115e9aa3c708be",
+  "parent_game_id": "efdec6803a49463c83e9043c4d186e41",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v41)",
+  "description": "Enhanced tower defense with drag-to-build rows of towers and laser beams that stop at enemies.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-07-24T09:58:32.442776Z",
+  "version": 1,
+  "prompt": "allow purchasing multiple structures by holding and dragging mouse (eg to build a row, if finances allow). currently weapons pass through enemies - dont draw eg lasers past the enemy, only to the enemy"
+}
