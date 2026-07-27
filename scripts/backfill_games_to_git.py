@@ -26,6 +26,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from dotenv import load_dotenv
+
+load_dotenv()  # GITHUB_PUSH_TOKEN lives in .env, same as app.py/ai_client.py
+
 import git_sync
 
 GAMES_DIR = git_sync.REPO_ROOT / "games"
