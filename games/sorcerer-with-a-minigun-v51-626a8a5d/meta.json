@@ -1,0 +1,12 @@
+{
+  "game_id": "626a8a5db6954caf960a2519c5157c18",
+  "parent_game_id": "b2ce677099d9452a85b37c6509ccf54e",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v51)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-27T10:47:30.933480Z",
+  "version": 11,
+  "prompt": "fix the annihilator weapon its not showing when its selected. Secondly it doesnt heat up as you use it, it should progressively heat up until its too hot to shoot and it stops shooting. It cant be shot again until it cools back down.",
+  "format": "multi-file"
+}
