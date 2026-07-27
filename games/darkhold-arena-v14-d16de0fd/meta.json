@@ -1,0 +1,11 @@
+{
+  "game_id": "d16de0fd20334114800e96162ba2e369",
+  "parent_game_id": "7e9ff8ee61a143da8bda502742a0f826",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Darkhold Arena (v14)",
+  "description": "Top-down wave survival RPG. Choose a sorcerer, wizard, or knight, blast through destructible walls, and upgrade between waves. New: skeletons can now wield miniguns.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-24T01:46:25.635163Z",
+  "version": 1,
+  "prompt": "add another option in the shop for sorcerer. This is skeletons with miniguns. this requires level 3 archers, it cost 200 coins and after purchasing all skeletons are spawned with miniguns, this replaces the archer skeletons. give the skeletons the same minigun as the sorcerer gets from its minigun power up."
+}
