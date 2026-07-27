@@ -1,0 +1,11 @@
+{
+  "game_id": "2287e526b7dc41b1b0c10f579dc58d98",
+  "parent_game_id": null,
+  "root_game_id": "2287e526b7dc41b1b0c10f579dc58d98",
+  "title": "Toy Pile Panic!",
+  "description": "Top-down physics game: clear 50 toy cars, blocks, and trains from a pile by tapping only the topmost objects before time runs out!",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-21T08:57:15.048327Z",
+  "version": 1,
+  "prompt": "make a game that is a top down view of a pile of random objects. each object is a 3d model and has realistic physics where they roll and tumble over each other. the level starts with the level full of around 50 objects all ontop of each other. you have to clear the object as fast as you can by tapping on them, you have to clear them from the top down you cant click and remove an object that has something else ontop of it or you loose a point. if you run out of time 1minute or loose your 5 points its game over. make the objects toys like toy cars, blocks, toy train."
+}

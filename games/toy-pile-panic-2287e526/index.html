@@ -1,0 +1,1359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Toy Pile Panic!</title>
+    <style>
+        :root {
+            --bg: #1a1a2e;
+            --surface: #16213e;
+            --gold: #f0c040;
+            --danger: #e74c3c;
+            --success: #2ecc71;
+            --text: #f0e6d3;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: var(--bg);
+            overflow: hidden;
+            font-family: 'Segoe UI', 'Roboto', system-ui, sans-serif;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            height: 100vh;
+            width: 100vw;
+            cursor: default;
+        }
+
+        #game-container {
+            position: fixed;
+            inset: 0;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #hud {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            align-items: stretch;
+            padding: 16px;
+        }
+
+        .hud-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        #score-panel {
+            background: rgba(22, 33, 62, 0.85);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 2px solid rgba(240, 192, 64, 0.4);
+            border-radius: 16px;
+            padding: 10px 18px;
+            color: var(--text);
+            font-weight: 700;
+            font-size: 1.2rem;
+            letter-spacing: 0.5px;
+        }
+        #score-panel .label {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--gold);
+            opacity: 0.9;
+        }
+        #score-panel .value {
+            font-size: 2rem;
+            font-weight: 900;
+            line-height: 1;
+            color: #fff;
+        }
+
+        #timer-panel {
+            background: rgba(22, 33, 62, 0.85);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 2px solid rgba(240, 192, 64, 0.4);
+            border-radius: 16px;
+            padding: 10px 22px;
+            text-align: center;
+            color: var(--text);
+        }
+        #timer-panel .label {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--gold);
+            opacity: 0.9;
+        }
+        #timer-panel .value {
+            font-size: 2.6rem;
+            font-weight: 900;
+            line-height: 1;
+            color: #fff;
+            font-variant-numeric: tabular-nums;
+            font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+        }
+        #timer-panel.urgent .value {
+            color: #e74c3c;
+            animation: pulse 0.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%,
+            100% {
+                transform: scale(1);
+            }
+            50% {
+                transform: scale(1.08);
+            }
+        }
+
+        #lives-panel {
+            background: rgba(22, 33, 62, 0.85);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 2px solid rgba(240, 192, 64, 0.4);
+            border-radius: 16px;
+            padding: 10px 18px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--text);
+        }
+        #lives-panel .label {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--gold);
+            opacity: 0.9;
+            margin-right: 4px;
+        }
+        .heart {
+            font-size: 1.6rem;
+            transition: all 0.3s;
+            filter: drop-shadow(0 0 6px rgba(231, 76, 60, 0.6));
+        }
+        .heart.lost {
+            opacity: 0.25;
+            filter: grayscale(1);
+            transform: scale(0.8);
+        }
+
+        #overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+        }
+        #overlay.active {
+            pointer-events: all;
+        }
+
+        .overlay-card {
+            background: rgba(22, 33, 62, 0.95);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 2px solid rgba(240, 192, 64, 0.6);
+            border-radius: 24px;
+            padding: 32px 40px;
+            text-align: center;
+            color: var(--text);
+            box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+            transform: scale(0);
+            transition: transform 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        #overlay.active .overlay-card {
+            transform: scale(1);
+        }
+        .overlay-card h1 {
+            font-size: 2.4rem;
+            font-weight: 900;
+            margin-bottom: 6px;
+            color: #fff;
+        }
+        .overlay-card h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--gold);
+            margin-bottom: 16px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+        .overlay-card .stat {
+            font-size: 1rem;
+            margin: 6px 0;
+            color: #ccc;
+        }
+        .overlay-card .stat strong {
+            color: #fff;
+            font-size: 1.3rem;
+        }
+        .overlay-card button {
+            margin-top: 20px;
+            padding: 14px 36px;
+            font-size: 1.1rem;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            border: none;
+            border-radius: 50px;
+            background: var(--gold);
+            color: #1a1a2e;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 8px 24px rgba(240, 192, 64, 0.35);
+        }
+        .overlay-card button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 32px rgba(240, 192, 64, 0.5);
+        }
+        .overlay-card button:active {
+            transform: scale(0.95);
+        }
+
+        #message-toast {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0);
+            z-index: 80;
+            pointer-events: none;
+            font-size: 3rem;
+            font-weight: 900;
+            color: #fff;
+            text-shadow: 0 0 40px rgba(240, 192, 64, 0.8), 0 4px 8px rgba(0, 0, 0, 0.6);
+            transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        #message-toast.show {
+            transform: translate(-50%, -50%) scale(1);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container"></div>
+
+    <div id="hud">
+        <div class="hud-row">
+            <div id="score-panel">
+                <div class="label">Cleared</div>
+                <div class="value" id="score-value">0</div>
+            </div>
+            <div id="timer-panel">
+                <div class="label">Time</div>
+                <div class="value" id="timer-value">1:00</div>
+            </div>
+            <div id="lives-panel">
+                <span class="label">Lives</span>
+                <span class="heart" id="h1">❤️</span>
+                <span class="heart" id="h2">❤️</span>
+                <span class="heart" id="h3">❤️</span>
+                <span class="heart" id="h4">❤️</span>
+                <span class="heart" id="h5">❤️</span>
+            </div>
+        </div>
+    </div>
+
+    <div id="message-toast"></div>
+
+    <div id="overlay" class="active">
+        <div class="overlay-card" id="overlay-card">
+            <h1>🧸 Toy Pile Panic!</h1>
+            <h2>Clear the pile from the top down!</h2>
+            <div class="stat">Tap toys that have <strong>nothing</strong> on top of them</div>
+            <div class="stat">⚠️ Tapping a blocked toy costs a life</div>
+            <div class="stat">⏱️ You have <strong>60 seconds</strong> · 💖 <strong>5 lives</strong></div>
+            <button id="btn-start">Start Game</button>
+        </div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.157.0/build/three.module.js"
+            }
+        }
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js">
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // ─────────────────────────────────────
+        // DOM ELEMENTS
+        // ─────────────────────────────────────
+        const container = document.getElementById('game-container');
+        const overlay = document.getElementById('overlay');
+        const overlayCard = document.getElementById('overlay-card');
+        const btnStart = document.getElementById('btn-start');
+        const scoreValue = document.getElementById('score-value');
+        const timerValue = document.getElementById('timer-value');
+        const timerPanel = document.getElementById('timer-panel');
+        const messageToast = document.getElementById('message-toast');
+        const hearts = [document.getElementById('h1'), document.getElementById('h2'), document.getElementById('h3'),
+            document.getElementById('h4'), document.getElementById('h5')
+        ];
+
+        // ─────────────────────────────────────
+        // THREE.JS SETUP
+        // ─────────────────────────────────────
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.2;
+        container.appendChild(renderer.domElement);
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color('#e8dcc8');
+        scene.fog = new THREE.Fog('#e8dcc8', 10, 25);
+
+        const frustumSize = 7.5;
+        const aspect = window.innerWidth / window.innerHeight;
+        const camera = new THREE.OrthographicCamera(
+            -frustumSize * aspect / 2,
+            frustumSize * aspect / 2,
+            frustumSize / 2,
+            -frustumSize / 2,
+            0.5,
+            30
+        );
+        camera.position.set(0, 9.5, 0.5);
+        camera.lookAt(0, 1.2, 0);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight('#fff5e8', 1.8);
+        scene.add(ambientLight);
+
+        const sunLight = new THREE.DirectionalLight('#ffffff', 4.5);
+        sunLight.position.set(5, 12, 3);
+        sunLight.castShadow = true;
+        sunLight.shadow.mapSize.width = 1024;
+        sunLight.shadow.mapSize.height = 1024;
+        sunLight.shadow.camera.near = 0.5;
+        sunLight.shadow.camera.far = 40;
+        sunLight.shadow.camera.left = -8;
+        sunLight.shadow.camera.right = 8;
+        sunLight.shadow.camera.top = 8;
+        sunLight.shadow.camera.bottom = -8;
+        sunLight.shadow.bias = -0.0005;
+        sunLight.shadow.normalBias = 0.02;
+        scene.add(sunLight);
+
+        const fillLight = new THREE.DirectionalLight('#c8d8ff', 1.2);
+        fillLight.position.set(-3, 4, -2);
+        scene.add(fillLight);
+
+        // ─────────────────────────────────────
+        // CANNON.JS PHYSICS WORLD
+        // ─────────────────────────────────────
+        const world = new CANNON.World();
+        world.gravity.set(0, -12, 0);
+        world.broadphase = new CANNON.SAPBroadphase(world);
+        world.solver.iterations = 15;
+        world.defaultContactMaterial.friction = 0.6;
+        world.defaultContactMaterial.restitution = 0.15;
+
+        const contactMaterial = new CANNON.ContactMaterial(
+            new CANNON.Material('toy'),
+            new CANNON.Material('toy'), { friction: 0.7, restitution: 0.1 }
+        );
+        world.addContactMaterial(contactMaterial);
+
+        // ─────────────────────────────────────
+        // FLOOR & CONTAINER
+        // ─────────────────────────────────────
+        const CONTAINER_HALF = 2.6;
+        const WALL_HEIGHT = 1.8;
+        const WALL_THICKNESS = 0.25;
+
+        // Floor - physics
+        const floorBody = new CANNON.Body({ mass: 0, shape: new CANNON.Plane() });
+        floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+        floorBody.position.set(0, 0, 0);
+        world.addBody(floorBody);
+
+        // Floor - visual
+        const floorGeom = new THREE.PlaneGeometry(CONTAINER_HALF * 2 + 1, CONTAINER_HALF * 2 + 1);
+        const floorMat = new THREE.MeshStandardMaterial({
+            color: '#c9b99a',
+            roughness: 0.7,
+            metalness: 0.05
+        });
+        const floorMesh = new THREE.Mesh(floorGeom, floorMat);
+        floorMesh.rotation.x = -Math.PI / 2;
+        floorMesh.position.y = 0.001;
+        floorMesh.receiveShadow = true;
+        scene.add(floorMesh);
+
+        // Play mat design - colorful grid
+        const matGroup = new THREE.Group();
+        const colors = ['#e8d5b0', '#f0dcc0', '#e5cfb5', '#ecd8b8', '#e0caaa'];
+        for (let ix = -2; ix <= 2; ix++) {
+            for (let iz = -2; iz <= 2; iz++) {
+                const tileGeom = new THREE.PlaneGeometry(0.95, 0.95);
+                const tileMat = new THREE.MeshStandardMaterial({
+                    color: colors[(ix + 2) * 5 + (iz + 2)] || colors[0],
+                    roughness: 0.65,
+                    metalness: 0.02
+                });
+                const tile = new THREE.Mesh(tileGeom, tileMat);
+                tile.rotation.x = -Math.PI / 2;
+                tile.position.set(ix * 1.0, 0.002, iz * 1.0);
+                tile.receiveShadow = true;
+                matGroup.add(tile);
+            }
+        }
+        scene.add(matGroup);
+
+        // Walls
+        function createWall(x, z, w, d) {
+            const body = new CANNON.Body({
+                mass: 0,
+                shape: new CANNON.Box(new CANNON.Vec3(w / 2, WALL_HEIGHT / 2, d / 2))
+            });
+            body.position.set(x, WALL_HEIGHT / 2, z);
+            world.addBody(body);
+
+            const geom = new THREE.BoxGeometry(w, WALL_HEIGHT, d);
+            const mat = new THREE.MeshStandardMaterial({
+                color: '#f5ede0',
+                roughness: 0.5,
+                metalness: 0.1
+            });
+            const mesh = new THREE.Mesh(geom, mat);
+            mesh.position.copy(body.position);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            scene.add(mesh);
+
+            return { body, mesh };
+        }
+
+        const hw = CONTAINER_HALF + WALL_THICKNESS / 2;
+        const wallLen = CONTAINER_HALF * 2 + WALL_THICKNESS * 2;
+        createWall(0, -hw, wallLen, WALL_THICKNESS); // front
+        createWall(0, hw, wallLen, WALL_THICKNESS); // back
+        createWall(-hw, 0, WALL_THICKNESS, wallLen); // left
+        createWall(hw, 0, WALL_THICKNESS, wallLen); // right
+
+        // ─────────────────────────────────────
+        // TOY OBJECT CREATION
+        // ─────────────────────────────────────
+        const toyDataMap = new Map(); // bodyId → { body, group, type }
+        const meshToBodyId = new Map(); // mesh → bodyId
+        const blockedBy = new Map(); // bodyId → Set of blocker bodyIds
+        const allToyMeshes = [];
+
+        const CAR_COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22', '#e91e63'];
+        const BLOCK_COLORS = ['#ff6b6b', '#ffd93d', '#6bcb77', '#4d96ff', '#ff922b', '#cc5de8', '#20c997', '#ff6b9d',
+            '#5c7cfa', '#f06595'
+        ];
+        const TRAIN_COLORS = ['#2c3e50', '#c0392b', '#1a5c2a', '#5d3a1a', '#1a3a5c', '#4a1a2e'];
+
+        const carBodyShape = new CANNON.Box(new CANNON.Vec3(0.55, 0.22, 0.32));
+        const blockShape = new CANNON.Box(new CANNON.Vec3(0.38, 0.38, 0.38));
+        const trainBodyShape = new CANNON.Box(new CANNON.Vec3(0.7, 0.28, 0.34));
+        const trainBoilerShape = new CANNON.Cylinder(0.2, 0.2, 0.55, 8);
+
+        function createToyCar(x, y, z, color) {
+            const group = new THREE.Group();
+            const bodyMat = new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.4 });
+            const darkMat = new THREE.MeshStandardMaterial({ color: '#1a1a1a', roughness: 0.5, metalness: 0.3 });
+            const wheelMat = new THREE.MeshStandardMaterial({ color: '#111111', roughness: 0.7, metalness: 0.1 });
+
+            // Main body
+            const mainBody = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.4, 0.6), bodyMat);
+            mainBody.position.y = 0.32;
+            mainBody.castShadow = true;
+            mainBody.receiveShadow = true;
+            group.add(mainBody);
+
+            // Cabin
+            const cabin = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.3, 0.55), darkMat);
+            cabin.position.set(0.1, 0.62, 0);
+            cabin.castShadow = true;
+            group.add(cabin);
+
+            // Wheels
+            for (let fx = -1; fx <= 1; fx += 2) {
+                for (let fz = -1; fz <= 1; fz += 2) {
+                    const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.08, 12), wheelMat);
+                    wheel.rotation.z = Math.PI / 2;
+                    wheel.position.set(fx * 0.35, 0.14, fz * 0.28);
+                    wheel.castShadow = true;
+                    group.add(wheel);
+                }
+            }
+
+            // Headlights
+            const lightMat = new THREE.MeshStandardMaterial({ color: '#ffffcc', roughness: 0.2, emissive: '#ffffaa',
+                emissiveIntensity: 0.5 });
+            const hl1 = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), lightMat);
+            hl1.position.set(0.55, 0.28, 0.18);
+            group.add(hl1);
+            const hl2 = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), lightMat);
+            hl2.position.set(0.55, 0.28, -0.18);
+            group.add(hl2);
+
+            group.position.set(x, y, z);
+            group.rotation.y = Math.random() * Math.PI * 2;
+            scene.add(group);
+
+            const body = new CANNON.Body({ mass: 0.8, shape: carBodyShape });
+            body.position.set(x, y, z);
+            body.quaternion.setFromEuler(0, Math.random() * Math.PI * 2, (Math.random() - 0.5) * 0.3);
+            body.linearDamping = 0.3;
+            body.angularDamping = 0.4;
+            world.addBody(body);
+
+            return { body, group, type: 'car' };
+        }
+
+        function createBlock(x, y, z, color) {
+            const group = new THREE.Group();
+            const size = 0.7 + Math.random() * 0.3;
+            const geom = new THREE.BoxGeometry(size, size * 0.9, size);
+            const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.15 });
+            const mesh = new THREE.Mesh(geom, mat);
+            mesh.position.y = size * 0.45;
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            group.add(mesh);
+
+            // Decorative stripe on some blocks
+            if (Math.random() > 0.5) {
+                const stripeGeom = new THREE.BoxGeometry(size * 0.7, size * 0.15, size * 0.15);
+                const stripeMat = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.3, metalness: 0.1,
+                    emissive: '#ffffff', emissiveIntensity: 0.15 });
+                const stripe = new THREE.Mesh(stripeGeom, stripeMat);
+                stripe.position.y = size * 0.9;
+                group.add(stripe);
+            }
+
+            group.position.set(x, y, z);
+            group.rotation.set(Math.random() * 0.4, Math.random() * Math.PI * 2, Math.random() * 0.4);
+            scene.add(group);
+
+            const halfExt = size / 2;
+            const shape = new CANNON.Box(new CANNON.Vec3(halfExt, halfExt * 0.9, halfExt));
+            const body = new CANNON.Body({ mass: 0.6 + Math.random() * 0.6, shape });
+            body.position.set(x, y, z);
+            body.quaternion.setFromEuler(Math.random() * 0.4, Math.random() * Math.PI * 2, Math.random() * 0.4);
+            body.linearDamping = 0.3;
+            body.angularDamping = 0.4;
+            world.addBody(body);
+
+            return { body, group, type: 'block' };
+        }
+
+        function createToyTrain(x, y, z, color) {
+            const group = new THREE.Group();
+            const bodyMat = new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.5 });
+            const darkMat = new THREE.MeshStandardMaterial({ color: '#111111', roughness: 0.5, metalness: 0.3 });
+            const wheelMat = new THREE.MeshStandardMaterial({ color: '#1a1a1a', roughness: 0.6, metalness: 0.2 });
+            const goldMat = new THREE.MeshStandardMaterial({ color: '#d4a017', roughness: 0.3, metalness: 0.7,
+                emissive: '#8b6914', emissiveIntensity: 0.2 });
+
+            // Boiler (cylinder)
+            const boiler = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.55, 16), bodyMat);
+            boiler.rotation.x = Math.PI / 2;
+            boiler.position.set(0.25, 0.28, 0);
+            boiler.castShadow = true;
+            group.add(boiler);
+
+            // Cab
+            const cab = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.45, 0.5), darkMat);
+            cab.position.set(-0.2, 0.35, 0);
+            cab.castShadow = true;
+            group.add(cab);
+
+            // Smokestack
+            const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 0.25, 12), goldMat);
+            stack.position.set(0.45, 0.48, 0);
+            stack.castShadow = true;
+            group.add(stack);
+
+            // Cowcatcher
+            const cowGeom = new THREE.BoxGeometry(0.08, 0.15, 0.4);
+            const cow = new THREE.Mesh(cowGeom, darkMat);
+            cow.position.set(0.55, 0.12, 0);
+            cow.rotation.z = 0.4;
+            group.add(cow);
+
+            // Wheels
+            for (let fx = -1; fx <= 1; fx += 2) {
+                for (let fz = -1; fz <= 1; fz += 2) {
+                    const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.06, 10), wheelMat);
+                    wheel.rotation.z = Math.PI / 2;
+                    wheel.position.set(fx * 0.22, 0.1, fz * 0.2);
+                    wheel.castShadow = true;
+                    group.add(wheel);
+                }
+            }
+
+            group.position.set(x, y, z);
+            group.rotation.y = Math.random() * Math.PI * 2;
+            scene.add(group);
+
+            const body = new CANNON.Body({ mass: 1.0, shape: trainBodyShape });
+            body.position.set(x, y, z);
+            body.quaternion.setFromEuler(0, Math.random() * Math.PI * 2, (Math.random() - 0.5) * 0.3);
+            body.linearDamping = 0.3;
+            body.angularDamping = 0.4;
+            world.addBody(body);
+
+            return { body, group, type: 'train' };
+        }
+
+        function addBlocker(blockedId, blockerId) {
+            if (!blockedBy.has(blockedId)) blockedBy.set(blockedId, new Set());
+            blockedBy.get(blockedId).add(blockerId);
+        }
+
+        function removeBlocker(blockedId, blockerId) {
+            const set = blockedBy.get(blockedId);
+            if (set) set.delete(blockerId);
+        }
+
+        function isBlocked(bodyId) {
+            const set = blockedBy.get(bodyId);
+            return set && set.size > 0;
+        }
+
+        function registerToy(toyData) {
+            toyDataMap.set(toyData.body.id, toyData);
+            blockedBy.set(toyData.body.id, new Set());
+            toyData.group.traverse(child => {
+                if (child.isMesh) {
+                    meshToBodyId.set(child, toyData.body.id);
+                    allToyMeshes.push(child);
+                }
+            });
+        }
+
+        function removeToy(bodyId, animate = true) {
+            const data = toyDataMap.get(bodyId);
+            if (!data) return;
+
+            world.removeBody(data.body);
+
+            if (animate) {
+                spawnParticles(data.group.position.clone(), data.type);
+                // Quick scale-down animation
+                const startTime = performance.now();
+                const origScale = data.group.scale.clone();
+                function animStep(ts) {
+                    const elapsed = (ts - startTime) / 1000;
+                    const t = Math.min(elapsed / 0.25, 1);
+                    const s = 1 - t * t;
+                    data.group.scale.setScalar(Math.max(s, 0.01));
+                    data.group.position.y += 0.02;
+                    if (t < 1) {
+                        requestAnimationFrame(animStep);
+                    } else {
+                        scene.remove(data.group);
+                        disposeGroup(data.group);
+                    }
+                }
+                requestAnimationFrame(animStep);
+            } else {
+                scene.remove(data.group);
+                disposeGroup(data.group);
+            }
+
+            // Clean up meshToBodyId
+            data.group.traverse(child => {
+                if (child.isMesh) {
+                    meshToBodyId.delete(child);
+                    const idx = allToyMeshes.indexOf(child);
+                    if (idx >= 0) allToyMeshes.splice(idx, 1);
+                }
+            });
+
+            // Clean blockedBy
+            for (const [id, blockers] of blockedBy) {
+                blockers.delete(bodyId);
+            }
+            blockedBy.delete(bodyId);
+            toyDataMap.delete(bodyId);
+        }
+
+        function disposeGroup(group) {
+            group.traverse(child => {
+                if (child.geometry && child.geometry !== group.geometry) child.geometry.dispose();
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach(m => m.dispose());
+                    } else {
+                        child.material.dispose();
+                    }
+                }
+            });
+        }
+
+        // ─────────────────────────────────────
+        // PARTICLES
+        // ─────────────────────────────────────
+        const particles = [];
+        const particleGeom = new THREE.SphereGeometry(0.06, 6, 6);
+
+        function spawnParticles(position, type) {
+            const colors = type === 'car' ? ['#ff6b6b', '#ffd93d', '#ff922b', '#ffffff'] :
+                type === 'block' ? ['#6bcb77', '#4d96ff', '#ffd93d', '#ff6b9d', '#ffffff'] :
+                ['#2c3e50', '#d4a017', '#c0392b', '#f39c12', '#ffffff'];
+
+            for (let i = 0; i < 18; i++) {
+                const mat = new THREE.MeshStandardMaterial({
+                    color: colors[Math.floor(Math.random() * colors.length)],
+                    roughness: 0.4,
+                    emissive: colors[Math.floor(Math.random() * colors.length)],
+                    emissiveIntensity: 0.6
+                });
+                const particle = new THREE.Mesh(particleGeom, mat);
+                particle.position.copy(position);
+                particle.position.x += (Math.random() - 0.5) * 0.6;
+                particle.position.z += (Math.random() - 0.5) * 0.6;
+                particle.userData = {
+                    velocity: new THREE.Vector3(
+                        (Math.random() - 0.5) * 4,
+                        2 + Math.random() * 5,
+                        (Math.random() - 0.5) * 4
+                    ),
+                    life: 0.6 + Math.random() * 0.8,
+                    born: performance.now() / 1000
+                };
+                scene.add(particle);
+                particles.push(particle);
+            }
+        }
+
+        function updateParticles(now) {
+            const dt = 1 / 60;
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                const age = now - p.userData.born;
+                if (age > p.userData.life) {
+                    scene.remove(p);
+                    p.material.dispose();
+                    particles.splice(i, 1);
+                } else {
+                    p.userData.velocity.y -= 9.8 * dt;
+                    p.position.x += p.userData.velocity.x * dt;
+                    p.position.y += p.userData.velocity.y * dt;
+                    p.position.z += p.userData.velocity.z * dt;
+                    if (p.position.y < 0) p.position.y = 0;
+                    const alpha = 1 - age / p.userData.life;
+                    p.material.opacity = alpha;
+                    p.material.transparent = true;
+                    p.scale.setScalar(alpha);
+                }
+            }
+        }
+
+        // ─────────────────────────────────────
+        // GAME STATE
+        // ─────────────────────────────────────
+        const TOTAL_OBJECTS = 50;
+        const GAME_DURATION = 60;
+        const MAX_LIVES = 5;
+
+        let score = 0;
+        let lives = MAX_LIVES;
+        let timeRemaining = GAME_DURATION;
+        let gameState = 'init'; // 'init' | 'settling' | 'playing' | 'gameover'
+        let gameStartTime = 0;
+        let settleStartTime = 0;
+        const SETTLE_DURATION = 2.2; // seconds for physics to settle
+        let lastBlockedUpdate = 0;
+        let hoveredBodyId = null;
+        let prevHoveredBodyId = null;
+
+        // ─────────────────────────────────────
+        // HIGHLIGHTING
+        // ─────────────────────────────────────
+        const highlightMaterial = new THREE.MeshStandardMaterial({
+            color: '#ffffff',
+            roughness: 0.2,
+            emissive: '#ffffff',
+            emissiveIntensity: 0.9,
+            transparent: true,
+            opacity: 0.5,
+            depthTest: true,
+            depthWrite: false
+        });
+
+        const dangerHighlightMaterial = new THREE.MeshStandardMaterial({
+            color: '#ff0000',
+            roughness: 0.2,
+            emissive: '#ff0000',
+            emissiveIntensity: 0.9,
+            transparent: true,
+            opacity: 0.5,
+            depthTest: true,
+            depthWrite: false
+        });
+
+        const highlightGeom = new THREE.TorusGeometry(0.05, 0.03, 8, 16);
+        let highlightIndicator = null;
+
+        function updateHighlightIndicator() {
+            if (highlightIndicator) {
+                scene.remove(highlightIndicator);
+                if (highlightIndicator.geometry) highlightIndicator.geometry.dispose();
+                if (highlightIndicator.material) highlightIndicator.material.dispose();
+                highlightIndicator = null;
+            }
+
+            if (hoveredBodyId && gameState === 'playing') {
+                const data = toyDataMap.get(hoveredBodyId);
+                if (data) {
+                    const pos = data.body.position.clone();
+                    const blocked = isBlocked(hoveredBodyId);
+                    const ringGeom = new THREE.TorusGeometry(0.5, 0.06, 8, 24);
+                    const ringMat = (blocked ? dangerHighlightMaterial : highlightMaterial).clone();
+                    highlightIndicator = new THREE.Mesh(ringGeom, ringMat);
+                    highlightIndicator.rotation.x = -Math.PI / 2;
+                    highlightIndicator.position.set(pos.x, pos.y + 0.05, pos.z);
+                    highlightIndicator.renderOrder = 999;
+                    highlightIndicator.material.depthTest = true;
+                    highlightIndicator.material.depthWrite = false;
+                    scene.add(highlightIndicator);
+                }
+            }
+        }
+
+        // ─────────────────────────────────────
+        // UPDATE BLOCKED STATUS
+        // ─────────────────────────────────────
+        function updateBlockedStatus() {
+            // Clear all blocker sets
+            for (const [id, set] of blockedBy) {
+                set.clear();
+            }
+
+            const toys = Array.from(toyDataMap.values());
+            // Update AABBs
+            for (const toy of toys) {
+                toy.body.aabbNeedsUpdate = true;
+                toy.body.computeAABB();
+            }
+
+            for (let i = 0; i < toys.length; i++) {
+                for (let j = i + 1; j < toys.length; j++) {
+                    const a = toys[i];
+                    const b = toys[j];
+                    const aAABB = a.body.aabb;
+                    const bAABB = b.body.aabb;
+
+                    const overlapX = aAABB.lowerBound.x < bAABB.upperBound.x && aAABB.upperBound.x > bAABB.lowerBound
+                        .x;
+                    const overlapZ = aAABB.lowerBound.z < bAABB.upperBound.z && aAABB.upperBound.z > bAABB.lowerBound
+                        .z;
+
+                    if (!overlapX || !overlapZ) continue;
+
+                    const yDiff = a.body.position.y - b.body.position.y;
+                    const aBottom = aAABB.lowerBound.y;
+                    const aTop = aAABB.upperBound.y;
+                    const bBottom = bAABB.lowerBound.y;
+                    const bTop = bAABB.upperBound.y;
+
+                    if (yDiff > 0.08 && aBottom < bTop + 0.5 && aBottom > bBottom - 0.2) {
+                        addBlocker(b.body.id, a.body.id);
+                    } else if (yDiff < -0.08 && bBottom < aTop + 0.5 && bBottom > aBottom - 0.2) {
+                        addBlocker(a.body.id, b.body.id);
+                    }
+                }
+            }
+        }
+
+        // ─────────────────────────────────────
+        // RAYCASTING / INPUT
+        // ─────────────────────────────────────
+        const raycaster = new THREE.Raycaster();
+        raycaster.far = 20;
+        const mouse = new THREE.Vector2();
+
+        function getIntersection(clientX, clientY) {
+            mouse.x = (clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            return raycaster.intersectObjects(allToyMeshes, false);
+        }
+
+        function handleClick(clientX, clientY) {
+            if (gameState !== 'playing') return;
+
+            const hits = getIntersection(clientX, clientY);
+            if (hits.length === 0) return;
+
+            const hitMesh = hits[0].object;
+            const bodyId = meshToBodyId.get(hitMesh);
+            if (!bodyId) return;
+
+            const data = toyDataMap.get(bodyId);
+            if (!data) return;
+
+            const blocked = isBlocked(bodyId);
+
+            if (blocked) {
+                // Penalty!
+                lives--;
+                updateHUD();
+                showToast('❌ BLOCKED!', '#e74c3c');
+                shakeScreen(0.3);
+                if (lives <= 0) {
+                    endGame(false);
+                }
+            } else {
+                // Success!
+                score++;
+                removeToy(bodyId, true);
+                updateHUD();
+                showToast('✓', '#2ecc71');
+                // Small camera bounce
+                camera.position.y += 0.15;
+                setTimeout(() => { camera.position.y -= 0.15; }, 80);
+
+                // Check win
+                if (toyDataMap.size === 0) {
+                    endGame(true);
+                }
+
+                // Update blocked status immediately
+                updateBlockedStatus();
+                lastBlockedUpdate = performance.now() / 1000;
+            }
+        }
+
+        function handleHover(clientX, clientY) {
+            if (gameState !== 'playing') {
+                if (hoveredBodyId !== null) {
+                    prevHoveredBodyId = hoveredBodyId;
+                    hoveredBodyId = null;
+                    updateHighlightIndicator();
+                    renderer.domElement.style.cursor = 'default';
+                }
+                return;
+            }
+
+            const hits = getIntersection(clientX, clientY);
+            if (hits.length === 0) {
+                prevHoveredBodyId = hoveredBodyId;
+                hoveredBodyId = null;
+                updateHighlightIndicator();
+                renderer.domElement.style.cursor = 'default';
+                return;
+            }
+
+            const hitMesh = hits[0].object;
+            const bodyId = meshToBodyId.get(hitMesh);
+            if (bodyId !== hoveredBodyId) {
+                prevHoveredBodyId = hoveredBodyId;
+                hoveredBodyId = bodyId;
+                updateHighlightIndicator();
+                if (bodyId && isBlocked(bodyId)) {
+                    renderer.domElement.style.cursor = 'not-allowed';
+                } else if (bodyId) {
+                    renderer.domElement.style.cursor = 'pointer';
+                } else {
+                    renderer.domElement.style.cursor = 'default';
+                }
+            }
+        }
+
+        // ─────────────────────────────────────
+        // SCREEN SHAKE
+        // ─────────────────────────────────────
+        let shakeAmount = 0;
+        let shakeDuration = 0;
+        const cameraRestPos = camera.position.clone();
+
+        function shakeScreen(intensity) {
+            shakeAmount = intensity;
+            shakeDuration = 0.25;
+        }
+
+        // ─────────────────────────────────────
+        // TOAST MESSAGE
+        // ─────────────────────────────────────
+        let toastTimeout = null;
+
+        function showToast(text, color) {
+            if (toastTimeout) clearTimeout(toastTimeout);
+            messageToast.textContent = text;
+            messageToast.style.color = color;
+            messageToast.style.textShadow = `0 0 40px ${color}, 0 4px 8px rgba(0,0,0,0.6)`;
+            messageToast.classList.add('show');
+            toastTimeout = setTimeout(() => {
+                messageToast.classList.remove('show');
+                toastTimeout = null;
+            }, 600);
+        }
+
+        // ─────────────────────────────────────
+        // HUD UPDATE
+        // ─────────────────────────────────────
+        function updateHUD() {
+            scoreValue.textContent = score;
+            const mins = Math.floor(timeRemaining / 60);
+            const secs = Math.floor(timeRemaining % 60);
+            timerValue.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+
+            if (timeRemaining <= 15) {
+                timerPanel.classList.add('urgent');
+            } else {
+                timerPanel.classList.remove('urgent');
+            }
+
+            for (let i = 0; i < MAX_LIVES; i++) {
+                if (i < lives) {
+                    hearts[i].classList.remove('lost');
+                } else {
+                    hearts[i].classList.add('lost');
+                }
+            }
+        }
+
+        // ─────────────────────────────────────
+        // GAME FLOW
+        // ─────────────────────────────────────
+        function spawnAllToys() {
+            const spawnArea = CONTAINER_HALF - 0.6;
+            const types = [];
+            // 20 blocks, 20 cars, 10 trains
+            for (let i = 0; i < 20; i++) types.push('block');
+            for (let i = 0; i < 20; i++) types.push('car');
+            for (let i = 0; i < 10; i++) types.push('train');
+            // Shuffle
+            for (let i = types.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [types[i], types[j]] = [types[j], types[i]];
+            }
+
+            const toys = [];
+            for (let i = 0; i < TOTAL_OBJECTS; i++) {
+                const x = (Math.random() - 0.5) * spawnArea * 2;
+                const z = (Math.random() - 0.5) * spawnArea * 2;
+                const y = 2.5 + Math.random() * 4.5 + i * 0.15;
+                const type = types[i];
+
+                let toyData;
+                if (type === 'car') {
+                    toyData = createToyCar(x, y, z, CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)]);
+                } else if (type === 'block') {
+                    toyData = createBlock(x, y, z, BLOCK_COLORS[Math.floor(Math.random() * BLOCK_COLORS.length)]);
+                } else {
+                    toyData = createToyTrain(x, y, z, TRAIN_COLORS[Math.floor(Math.random() * TRAIN_COLORS.length)]);
+                }
+                registerToy(toyData);
+                toys.push(toyData);
+            }
+            return toys;
+        }
+
+        function startGame() {
+            // Clean up existing toys
+            const existingIds = Array.from(toyDataMap.keys());
+            for (const id of existingIds) {
+                removeToy(id, false);
+            }
+            particles.forEach(p => {
+                scene.remove(p);
+                p.material.dispose();
+            });
+            particles.length = 0;
+
+            score = 0;
+            lives = MAX_LIVES;
+            timeRemaining = GAME_DURATION;
+            hoveredBodyId = null;
+            prevHoveredBodyId = null;
+            updateHighlightIndicator();
+
+            spawnAllToys();
+            updateBlockedStatus();
+            updateHUD();
+
+            gameState = 'settling';
+            settleStartTime = performance.now() / 1000;
+            overlay.classList.remove('active');
+            renderer.domElement.style.cursor = 'default';
+
+            // Update overlay card for settling
+            overlayCard.innerHTML = `
+                <h1>⏳ Settling...</h1>
+                <h2>Toys are tumbling into place</h2>
+                <div class="stat">Get ready!</div>
+            `;
+            overlay.classList.add('active');
+
+            // We'll remove the overlay after settling
+        }
+
+        function onSettlingComplete() {
+            updateBlockedStatus();
+            lastBlockedUpdate = performance.now() / 1000;
+            gameState = 'playing';
+            gameStartTime = performance.now() / 1000;
+            overlay.classList.remove('active');
+            showToast('GO!', '#f0c040');
+            updateHUD();
+        }
+
+        function endGame(won) {
+            gameState = 'gameover';
+            renderer.domElement.style.cursor = 'default';
+            hoveredBodyId = null;
+            updateHighlightIndicator();
+
+            const remaining = toyDataMap.size;
+            const cleared = TOTAL_OBJECTS - remaining;
+            const timeUsed = GAME_DURATION - timeRemaining;
+
+            let title, subtitle;
+            if (won) {
+                title = '🎉 You Win!';
+                subtitle = 'All toys cleared!';
+            } else if (lives <= 0) {
+                title = '💔 Game Over';
+                subtitle = 'Out of lives!';
+            } else {
+                title = '⏰ Time\'s Up!';
+                subtitle = 'Ran out of time!';
+            }
+
+            overlayCard.innerHTML = `
+                <h1>${title}</h1>
+                <h2>${subtitle}</h2>
+                <div class="stat">Toys cleared: <strong>${cleared} / ${TOTAL_OBJECTS}</strong></div>
+                <div class="stat">Time used: <strong>${timeUsed.toFixed(1)}s</strong></div>
+                <div class="stat">Lives left: <strong>${Math.max(0, lives)}</strong></div>
+                <div class="stat">Final score: <strong>${cleared}</strong></div>
+                <button id="btn-restart">Play Again</button>
+            `;
+            overlay.classList.add('active');
+
+            const btnRestart = document.getElementById('btn-restart');
+            if (btnRestart) {
+                btnRestart.addEventListener('click', startGame);
+            }
+        }
+
+        // ─────────────────────────────────────
+        // EVENT LISTENERS
+        // ─────────────────────────────────────
+        renderer.domElement.addEventListener('click', (e) => {
+            handleClick(e.clientX, e.clientY);
+        });
+
+        renderer.domElement.addEventListener('mousemove', (e) => {
+            handleHover(e.clientX, e.clientY);
+        });
+
+        renderer.domElement.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (e.touches.length === 1) {
+                handleClick(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        }, { passive: false });
+
+        renderer.domElement.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (e.touches.length === 1) {
+                handleHover(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        }, { passive: false });
+
+        renderer.domElement.addEventListener('touchend', (e) => {
+            hoveredBodyId = null;
+            updateHighlightIndicator();
+            renderer.domElement.style.cursor = 'default';
+        });
+
+        window.addEventListener('resize', () => {
+            const a = window.innerWidth / window.innerHeight;
+            camera.left = -frustumSize * a / 2;
+            camera.right = frustumSize * a / 2;
+            camera.top = frustumSize / 2;
+            camera.bottom = -frustumSize / 2;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        btnStart.addEventListener('click', startGame);
+
+        // ─────────────────────────────────────
+        // GAME LOOP
+        // ─────────────────────────────────────
+        const clock = new THREE.Clock();
+        let physicsAccumulator = 0;
+        const PHYSICS_DT = 1 / 60;
+
+        function animate(timestamp) {
+            requestAnimationFrame(animate);
+
+            const now = timestamp / 1000;
+            const rawDt = Math.min(clock.getDelta(), 0.1);
+
+            if (gameState === 'settling') {
+                // Fast-forward physics
+                const elapsed = now - settleStartTime;
+                const substeps = 3;
+                for (let i = 0; i < substeps; i++) {
+                    world.step(PHYSICS_DT / substeps);
+                }
+
+                // Update all mesh positions
+                for (const [id, data] of toyDataMap) {
+                    data.group.position.copy(data.body.position);
+                    data.group.quaternion.copy(data.body.quaternion);
+                }
+
+                if (elapsed >= SETTLE_DURATION) {
+                    onSettlingComplete();
+                }
+            } else if (gameState === 'playing') {
+                // Update timer
+                const gameElapsed = now - gameStartTime;
+                timeRemaining = Math.max(0, GAME_DURATION - gameElapsed);
+                updateHUD();
+
+                if (timeRemaining <= 0) {
+                    endGame(false);
+                    return;
+                }
+
+                // Physics
+                physicsAccumulator += rawDt;
+                let steps = 0;
+                while (physicsAccumulator >= PHYSICS_DT && steps < 5) {
+                    world.step(PHYSICS_DT);
+                    physicsAccumulator -= PHYSICS_DT;
+                    steps++;
+                }
+                if (physicsAccumulator > 0 && steps === 0) {
+                    world.step(physicsAccumulator);
+                    physicsAccumulator = 0;
+                }
+
+                // Update mesh positions
+                for (const [id, data] of toyDataMap) {
+                    data.group.position.copy(data.body.position);
+                    data.group.quaternion.copy(data.body.quaternion);
+                }
+
+                // Update blocked status periodically
+                if (now - lastBlockedUpdate > 0.25) {
+                    updateBlockedStatus();
+                    lastBlockedUpdate = now;
+                    // Refresh highlight
+                    if (hoveredBodyId) {
+                        updateHighlightIndicator();
+                    }
+                }
+
+                // Update particles
+                updateParticles(now);
+
+                // Screen shake
+                if (shakeDuration > 0) {
+                    shakeDuration -= rawDt;
+                    const s = shakeAmount * (shakeDuration / 0.25);
+                    camera.position.x = cameraRestPos.x + (Math.random() - 0.5) * s * 2;
+                    camera.position.z = cameraRestPos.z + (Math.random() - 0.5) * s * 2;
+                    if (shakeDuration <= 0) {
+                        camera.position.x = cameraRestPos.x;
+                        camera.position.z = cameraRestPos.z;
+                        shakeAmount = 0;
+                    }
+                }
+
+            } else if (gameState === 'gameover') {
+                // Still step physics for visual interest
+                physicsAccumulator += rawDt;
+                while (physicsAccumulator >= PHYSICS_DT) {
+                    world.step(PHYSICS_DT);
+                    physicsAccumulator -= PHYSICS_DT;
+                }
+                for (const [id, data] of toyDataMap) {
+                    data.group.position.copy(data.body.position);
+                    data.group.quaternion.copy(data.body.quaternion);
+                }
+                updateParticles(now);
+            } else {
+                // 'init' state - idle physics
+                physicsAccumulator += rawDt;
+                while (physicsAccumulator >= PHYSICS_DT) {
+                    world.step(PHYSICS_DT);
+                    physicsAccumulator -= PHYSICS_DT;
+                }
+                for (const [id, data] of toyDataMap) {
+                    data.group.position.copy(data.body.position);
+                    data.group.quaternion.copy(data.body.quaternion);
+                }
+            }
+
+            renderer.render(scene, camera);
+
+            // Update highlight indicator position
+            if (highlightIndicator && hoveredBodyId && gameState === 'playing') {
+                const data = toyDataMap.get(hoveredBodyId);
+                if (data) {
+                    const pos = data.body.position;
+                    highlightIndicator.position.set(pos.x, pos.y + 0.08, pos.z);
+                }
+            }
+        }
+
+        // ─────────────────────────────────────
+        // INITIAL SETUP
+        // ─────────────────────────────────────
+        function initScene() {
+            // Spawn initial toys for the preview
+            spawnAllToys();
+            updateBlockedStatus();
+
+            // Run a quick settle so the pile looks nice in the background
+            for (let i = 0; i < 100; i++) {
+                world.step(1 / 60);
+            }
+            for (const [id, data] of toyDataMap) {
+                data.group.position.copy(data.body.position);
+                data.group.quaternion.copy(data.body.quaternion);
+            }
+            updateBlockedStatus();
+            updateHUD();
+        }
+
+        initScene();
+        updateHUD();
+        requestAnimationFrame(animate);
+    </script>
+</body>
+</html>
