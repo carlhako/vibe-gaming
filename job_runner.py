@@ -114,8 +114,8 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
         if job["kind"] in ("create", "enhance", "explode") and git_sync.is_enabled(config):
             try:
                 git_sync.push_game(games_dir / result["slug"], job["prompt"], config)
-            except git_sync.GitSyncError as exc:
-                print(f"job_runner: git push failed for job {job_id}: {exc}")
+            except Exception as exc:  # noqa: BLE001 - best-effort push must never take the worker thread down
+                print(f"job_runner: git push failed for job {job_id}: {exc}\n{traceback.format_exc()}")
     else:
         db.update_generation_request(
             job_id, status="failed", attempts=result["attempts"], model=result["model"],

@@ -194,6 +194,76 @@ function renderLineageLink(item) {
   return link;
 }
 
+function formatTokenCount(n) {
+  return n == null ? "—" : n.toLocaleString();
+}
+
+function renderUsageTable(usage) {
+  const el = document.getElementById("info-modal-usage");
+  if (!usage || usage.total_tokens == null) {
+    el.hidden = true;
+    el.innerHTML = "";
+    return;
+  }
+  el.innerHTML = "";
+  const table = document.createElement("table");
+  table.className = "modal-usage-table";
+  const headRow = document.createElement("tr");
+  ["Input", "Cached", "Output", "Total", "Time"].forEach((label) => {
+    const th = document.createElement("th");
+    th.textContent = label;
+    headRow.appendChild(th);
+  });
+  const valRow = document.createElement("tr");
+  [
+    formatTokenCount(usage.input_tokens),
+    formatTokenCount(usage.cached_tokens),
+    formatTokenCount(usage.output_tokens),
+    formatTokenCount(usage.total_tokens),
+    usage.duration_seconds != null ? formatDuration(usage.duration_seconds) : "—",
+  ].forEach((val) => {
+    const td = document.createElement("td");
+    td.textContent = val;
+    valRow.appendChild(td);
+  });
+  table.appendChild(headRow);
+  table.appendChild(valRow);
+  el.appendChild(table);
+  el.hidden = false;
+}
+
+// Adds a peek-then-expand toggle to a container: CSS clamps its height until
+// the "expanded" class is added. Rebuilt fresh each modal open, so it's safe
+// to call repeatedly on the same element.
+function makeCollapsible(wrapEl) {
+  wrapEl.classList.remove("expanded");
+  wrapEl.classList.add("collapsible-preview");
+  const next = wrapEl.nextElementSibling;
+  if (next && next.classList.contains("collapsible-toggle")) next.remove();
+
+  // Only add the toggle if the content actually overflows the collapsed height.
+  if (wrapEl.scrollHeight <= wrapEl.clientHeight + 2) {
+    wrapEl.classList.add("no-overflow");
+    return;
+  }
+  wrapEl.classList.remove("no-overflow");
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "collapsible-toggle";
+  const setLabel = () => {
+    const expanded = wrapEl.classList.contains("expanded");
+    btn.innerHTML = expanded ? "&#9652; Show less" : "&#9662; Show more";
+    btn.setAttribute("aria-expanded", String(expanded));
+  };
+  btn.addEventListener("click", () => {
+    wrapEl.classList.toggle("expanded");
+    setLabel();
+  });
+  setLabel();
+  wrapEl.insertAdjacentElement("afterend", btn);
+}
+
 async function openInfoModal(gameId) {
   infoModalLastFocused = document.activeElement;
   resetReportUI(gameId);
@@ -216,36 +286,49 @@ async function openInfoModal(gameId) {
     document.getElementById("info-modal-prompt").textContent =
       data.prompt || "(no prompt recorded)";
 
+    renderUsageTable(data.usage);
+
+    const promptWrap = document.getElementById("info-modal-prompt-wrap");
+    makeCollapsible(promptWrap);
+
     const lineageEl = document.getElementById("info-modal-lineage");
     lineageEl.innerHTML = "";
 
     if (data.ancestors.length) {
+      const historyWrap = document.createElement("div");
+      historyWrap.className = "modal-lineage-section";
       const h = document.createElement("h3");
       h.textContent = "History";
-      lineageEl.appendChild(h);
+      historyWrap.appendChild(h);
       const chain = data.ancestors.concat([{ title: data.title, slug: null }]);
       chain.forEach((item, i) => {
         if (item.slug) {
-          lineageEl.appendChild(renderLineageLink(item));
+          historyWrap.appendChild(renderLineageLink(item));
         } else {
           const span = document.createElement("span");
           span.textContent = item.title;
-          lineageEl.appendChild(span);
+          historyWrap.appendChild(span);
         }
         if (i < chain.length - 1) {
-          lineageEl.appendChild(document.createTextNode(" → "));
+          historyWrap.appendChild(document.createTextNode(" → "));
         }
       });
+      lineageEl.appendChild(historyWrap);
+      makeCollapsible(historyWrap);
     }
 
     if (data.siblings.length) {
+      const forksWrap = document.createElement("div");
+      forksWrap.className = "modal-lineage-section";
       const h2 = document.createElement("h3");
       h2.textContent = "Other forks";
-      lineageEl.appendChild(h2);
+      forksWrap.appendChild(h2);
       data.siblings.forEach((s) => {
-        lineageEl.appendChild(renderLineageLink(s));
-        lineageEl.appendChild(document.createElement("br"));
+        forksWrap.appendChild(renderLineageLink(s));
+        forksWrap.appendChild(document.createElement("br"));
       });
+      lineageEl.appendChild(forksWrap);
+      makeCollapsible(forksWrap);
     }
 
     const count = data.play_count || 0;
@@ -263,6 +346,7 @@ async function openInfoModal(gameId) {
       li.textContent = "No plays yet.";
       playsList.appendChild(li);
     }
+    makeCollapsible(document.getElementById("info-modal-plays-wrap"));
 
     populateAskAiHistory(data.ai_questions || []);
 

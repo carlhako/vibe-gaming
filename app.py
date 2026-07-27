@@ -489,6 +489,14 @@ def create_app(games_dir=None) -> Flask:
         if game is None:
             abort(404)
         lineage = build_lineage(games, game_id)
+        usage_row = db.get_generation_request_for_game(game_id, conn=get_db())
+        usage = {
+            "input_tokens": usage_row["input_tokens"] if usage_row else None,
+            "output_tokens": usage_row["output_tokens"] if usage_row else None,
+            "cached_tokens": usage_row["cached_tokens"] if usage_row else None,
+            "total_tokens": (usage_row["tokens_used"] if usage_row else None) or game.get("tokens_used"),
+            "duration_seconds": (usage_row["duration_seconds"] if usage_row else None) or game.get("duration_seconds"),
+        }
         return jsonify({
             "game_id": game_id,
             "title": game["title"],
@@ -498,6 +506,7 @@ def create_app(games_dir=None) -> Flask:
             "effort": game.get("effort"),
             "tokens_used": game.get("tokens_used"),
             "duration_seconds": game.get("duration_seconds"),
+            "usage": usage,
             "created_at": game.get("created_at"),
             "version": game.get("version"),
             "creator": game.get("creator_name", "anonymous"),

@@ -168,13 +168,18 @@
     <div class="modal" id="info-modal" role="dialog" aria-modal="true" aria-labelledby="info-modal-title">
       <button class="modal-close" id="info-modal-close" aria-label="Close">&times;</button>
       <h2 id="info-modal-title"></h2>
+      <div class="modal-usage" id="info-modal-usage" hidden></div>
       <p class="modal-meta" id="info-modal-meta"></p>
       <a class="modal-download" id="info-modal-download" download>&#8595; Download to play offline</a>
-      <p class="modal-prompt" id="info-modal-prompt"></p>
+      <div class="modal-prompt-wrap" id="info-modal-prompt-wrap">
+        <p class="modal-prompt" id="info-modal-prompt"></p>
+      </div>
       <div class="modal-lineage" id="info-modal-lineage"></div>
       <div class="modal-plays">
         <h3 id="info-modal-play-count"></h3>
-        <ul class="modal-plays-list" id="info-modal-plays-list"></ul>
+        <div class="modal-plays-wrap" id="info-modal-plays-wrap">
+          <ul class="modal-plays-list" id="info-modal-plays-list"></ul>
+        </div>
       </div>
       <div class="modal-ask-ai">
         <button type="button" class="link-btn" id="info-modal-askai-toggle">Ask AI about this game</button>

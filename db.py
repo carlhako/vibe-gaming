@@ -811,6 +811,18 @@ def get_generation_request(job_id, conn=None):
     return dict(row) if row else None
 
 
+def get_generation_request_for_game(game_id, conn=None):
+    """Usage/timing for the job that produced this game, if any (bundled games have none)."""
+    c = _c(conn)
+    row = c.execute(
+        "SELECT input_tokens, output_tokens, cached_tokens, tokens_used, duration_seconds "
+        "FROM generation_requests WHERE result_game_id=? AND status='success' "
+        "ORDER BY updated_at DESC LIMIT 1",
+        (game_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def update_generation_request(job_id, status=None, result_game_id=None, attempts=None,
                                model=None, effort=None, duration_seconds=None,
                                input_tokens=None, output_tokens=None,
