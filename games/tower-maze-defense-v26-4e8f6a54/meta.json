@@ -1,0 +1,11 @@
+{
+  "game_id": "4e8f6a544ebd48598bd66bf3777f54d9",
+  "parent_game_id": "69344b1d832e4f10bae8663db09fed09",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v26)",
+  "description": "Tower defense with procedurally generated mazes featuring loops and split paths. Place towers, upgrade them, and survive waves of enemies.",
+  "requested_by": "web:007d10387b5b",
+  "created_at": "2026-07-21T03:49:53.961843Z",
+  "version": 1,
+  "prompt": "U like the general look and feel of the path now, But can we remove the rounded corners, keep the boarder outlines and shading etc. While we are at it, remove the yellow path colour for the secondary paths on split paths, and instead make an obvious Y indicator showing the path splits."
+}
