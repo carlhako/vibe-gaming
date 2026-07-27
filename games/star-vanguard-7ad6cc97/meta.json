@@ -1,0 +1,11 @@
+{
+  "game_id": "7ad6cc97b30042dfa2bfc3256240f784",
+  "parent_game_id": null,
+  "root_game_id": "7ad6cc97b30042dfa2bfc3256240f784",
+  "title": "Star Vanguard",
+  "description": "A top-down space shoot 'em up where you pilot a starship with mouse control, battle enemy formations, and collect power-ups from glowing foes to unleash devastating secondary weapons.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-19T23:10:19.716882Z",
+  "version": 1,
+  "prompt": "make a space shoot em up, make the background stars and enemies come from the top down. enemies will be futuristic laser shooting that fly in formation and change direction randomly. When you click your mouse into the game you then fly the spaceship by moving the mouse around, left click for primary and second click for secondary. secondary weapon is a power up that you collect from destroying a enemy that has a random glow, when you destroy it a token is generated for a power up. powerup will be missiles, mega laser things like that."
+}
