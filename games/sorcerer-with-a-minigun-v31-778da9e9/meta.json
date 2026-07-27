@@ -1,0 +1,11 @@
+{
+  "game_id": "778da9e93b254ef3a74abd52ef8bd30a",
+  "parent_game_id": "edef45b59ebc44d1893af1eda13a5370",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v31)",
+  "description": "Darkhold Arena wave-RPG: skeleton summons now mirror your equipped weapon \u2014 minigun skellies when you wield the minigun, railgun skellies when you wield the railgun, falling back to normal skeletons when the matching upgrade isn't purchased.",
+  "requested_by": "web:7fbda6b03e03",
+  "created_at": "2026-07-25T00:17:01.219296Z",
+  "version": 1,
+  "prompt": "make it so the skeleton summons have what weapon i have equipped so if i have bought the minigun skeletons and the minigun then when i use the minigun they will be using the minigun and of i get the railgun but not railgun skeletons then make them use the minigun instead of the rail gun and if minigun skeletons were no bought either then make it so they are just normal skeletons"
+}
