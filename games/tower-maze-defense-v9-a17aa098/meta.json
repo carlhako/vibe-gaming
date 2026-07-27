@@ -1,0 +1,11 @@
+{
+  "game_id": "a17aa0987dfa4de68f7afe051e6930cc",
+  "parent_game_id": "09afe4d03bcb44838582659340cfb6b8",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v9)",
+  "description": "Build towers along a procedurally generated maze path to stop waves of enemies \u2014 now with a Mint tower that earns money per wave and bosses with 30x health.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-19T09:35:58.179227Z",
+  "version": 1,
+  "prompt": "change the default target from nearest to first. Make the bosses harder instead of 10x health make it 30x. Add a new tower a money maker, it costs 500 but gives 50 per wave on level 1, each upgrade increments it by 50 and costs 5x for each upgrade."
+}
