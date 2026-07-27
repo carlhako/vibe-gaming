@@ -226,6 +226,32 @@ _SNAPSHOT_MARKER_RE = re.compile(r"^=====\s+(?:BEGIN|END)\b.*=====\s*$", re.M)
 # default, like DEFAULT_AGENT_MODEL, because config.yaml is gitignored.
 DEFAULT_EDIT_COMPACT_BYTES = 8_000
 
+# Sprint 6a made the conversation append-only, which means it only ever grows.
+# That is the right trade — a resent cached token costs 1/120th of a fresh one,
+# so retention is nearly free while mutation collapses the cache — but it moves
+# where a long run dies. Pruning used to hold the message list roughly flat; now
+# the context window itself is the ceiling, and hitting it is an API 400 in the
+# middle of a run that may have every module already written on disk.
+#
+# So the loop watches its own input size and lands the plane. Past this figure
+# it tells the model once to stop exploring and finish; past 95% of
+# ai.CONTEXT_WINDOW_TOKENS it ends the run itself, which hands control to the
+# forced final verification below — a run that stops at the guard still ships
+# whatever passed build/scan/smoke, where a 400 ships nothing.
+#
+# 700_000 of a documented 1M window leaves ~350K of headroom: enough for a
+# 400_000-byte snapshot (~100K tokens) plus several more turns of large tool
+# results, and the nudge needs room to be acted on, not just heard.
+# Overridable via cfg["context_soft_limit_tokens"]; a CODE default, like
+# DEFAULT_AGENT_MODEL, because config.yaml is gitignored.
+DEFAULT_CONTEXT_SOFT_LIMIT_TOKENS = 700_000
+
+# Fraction of ai.CONTEXT_WINDOW_TOKENS at which the run stops on its own. Not
+# 100%: the check reads the PREVIOUS call's billed input, and the next request
+# is always bigger (this turn's assistant message and tool results are already
+# appended), so the margin absorbs one turn's growth.
+_CONTEXT_HARD_LIMIT_RATIO = 0.95
+
 
 class SourceSnapshot(NamedTuple):
     """The full source of a multi-file game as handed to the model.
@@ -2120,6 +2146,14 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     assistant message and tool results created in the CURRENT turn, which
     have not been sent yet — it shortens the suffix, never the prefix.
 
+    The price of append-only is that the conversation only grows, so the
+    context window becomes the run's real ceiling. The loop watches its own
+    billed input size and lands the plane rather than letting the API 400
+    mid-run: one nudge to stop exploring and finish past
+    cfg["context_soft_limit_tokens"], then an orderly stop past 95% of
+    ai.CONTEXT_WINDOW_TOKENS, which falls through to the forced final
+    verification and ships whatever is already correct on disk.
+
     `extra_verify(game_dir, built_html) -> str | None` is an optional gate
     run only after build->scan->smoke has already passed; returning a string
     turns that finish() into a failure carrying it as the detail. explode
@@ -2149,6 +2183,10 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         "module_warn_bytes", int(max_module_bytes * DEFAULT_MODULE_WARN_RATIO)
     )
     edit_compact_bytes = cfg.get("edit_compact_bytes", DEFAULT_EDIT_COMPACT_BYTES)
+    context_soft_limit = cfg.get(
+        "context_soft_limit_tokens", DEFAULT_CONTEXT_SOFT_LIMIT_TOKENS
+    )
+    context_hard_limit = int(ai.CONTEXT_WINDOW_TOKENS * _CONTEXT_HARD_LIMIT_RATIO)
     # Sprint 6a removed read-result pruning outright; a config still carrying
     # the key is stale, and saying so beats silently ignoring it. Warn rather
     # than fail: an out-of-date config.yaml must not stop a production run.
@@ -2204,6 +2242,14 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     # but a nudge would have converged it cleanly with steps to spare.
     edited_since_finish = False
     nudged_refinish = False
+    # The context guard reads the PREVIOUS call's billed input rather than
+    # estimating the next one: ask_result.input_tokens is what the provider
+    # actually charged for the whole message list, which is the only figure
+    # that accounts for the system prompt, the snapshot, and every tool result
+    # exactly as the provider counts them. Starts at 0 so the first turn is
+    # never blocked.
+    last_input_tokens = 0
+    nudged_context = False
     finish_nudge_at = _finish_nudge_threshold(max_steps)
     summary = ""
     last_candidate_summary = ""
@@ -2249,6 +2295,44 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         return False, detail
 
     for step_num in range(1, max_steps + 1):
+        # Context guard, checked HERE — before the request, not after the one
+        # that revealed the size. Both branches then act on a conversation
+        # that ends in a tool result or a user message, so appending a user
+        # message is valid and a break loses nothing this turn: every tool
+        # call from the previous turn has already been executed and written to
+        # disk, which is what the forced final verification below picks up.
+        if last_input_tokens >= context_hard_limit:
+            error = (
+                f"context window nearly full: the last request billed "
+                f"{last_input_tokens:,} input tokens, at or past "
+                f"{context_hard_limit:,} ("
+                f"{int(_CONTEXT_HARD_LIMIT_RATIO * 100)}% of "
+                f"{ai.CONTEXT_WINDOW_TOKENS:,}). Stopping before the API "
+                "rejects the next request"
+            )
+            break
+        if last_input_tokens >= context_soft_limit and not nudged_context:
+            # One nudge, once. Worded the way every other nudge here is (see
+            # _compact_write_calls' note): lead with what to do, never with
+            # "you have a problem" — the transcript-imitation lesson is that
+            # alarm wording makes this model re-check state, which is the one
+            # thing that cannot help when the conversation is already too big.
+            nudged_context = True
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"CONTEXT WARNING: this conversation has grown to "
+                    f"{last_input_tokens:,} input tokens and cannot grow "
+                    "indefinitely — past roughly "
+                    f"{context_hard_limit:,} the run has to stop wherever it "
+                    "is. Stop exploring: do not call read_file or search "
+                    "again unless a change you are about to make genuinely "
+                    "depends on it. Make the edits you have left with "
+                    "edit_file (or write_file where a whole module really "
+                    "does change) and call finish(summary) as soon as they "
+                    "are done."
+                ),
+            })
         try:
             ask_result = ai.ask_with_tools(
                 messages, tools=AGENT_TOOLS, tool_choice="auto",
@@ -2261,6 +2345,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         total_input_tokens += ask_result.input_tokens
         total_output_tokens += ask_result.output_tokens
         total_cached_tokens += ask_result.cached_tokens
+        last_input_tokens = ask_result.input_tokens
         last_model = ask_result.model or "default"
         last_effort = ask_result.effort
         messages.append(ask_result.message)

@@ -1679,3 +1679,103 @@ def test_edit_file_events_never_carry_the_edited_text(isolated_db, games_dir):
     for _role, content, data in edits:
         blob = json.dumps([content, data])
         assert "count += 1;" not in blob and "count += 6;" not in blob
+
+
+# ---------------------------------------------------------------------------
+# Sprint 6a step 4: the append-only context guard
+#
+# Append-only means the conversation only ever grows, so the context window is
+# now the run's real ceiling. Running into it is an API 400 mid-run, which
+# ships nothing even when every module is already written and correct — the
+# guard's whole job is to convert that into an orderly stop that still reaches
+# the forced final verification.
+# ---------------------------------------------------------------------------
+
+def test_a_run_past_the_context_soft_limit_is_told_once_to_stop_exploring(
+        isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("read_map", {})], tokens=(900, 5)),
+        _turn([("read_file", {"path": "core.js"})], tokens=(950, 5)),
+        _turn([("edit_file", {"path": "core.js", "old_string": "count += 1;",
+                              "new_string": "count += 3;"})], tokens=(980, 5)),
+        _turn([("finish", {"summary": "count by threes"})], tokens=(990, 5)),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses,
+                            config=_edit_config(context_soft_limit_tokens=800))
+
+    assert result["success"], result["error"]
+    # First call is never blocked or nudged (last_input_tokens starts at 0),
+    # and the nudge lands before the call after the one that crossed 800.
+    assert not [m for m in seen[0] if "CONTEXT WARNING" in str(m.get("content"))]
+    warnings = [m for m in seen[-1] if "CONTEXT WARNING" in str(m.get("content"))]
+    assert len(warnings) == 1, "the context nudge must fire exactly once per run"
+    warning = warnings[0]
+    assert warning["role"] == "user"
+    assert "900" in warning["content"]
+    assert "do not call read_file or search again" in warning["content"]
+    assert "finish(summary)" in warning["content"]
+
+    # It has to be appended where a user message is legal — never between an
+    # assistant message carrying tool_calls and its tool results.
+    before = seen[1][seen[1].index(warning) - 1]
+    assert before["role"] in ("tool", "user")
+
+
+def test_the_context_nudge_stays_silent_below_the_soft_limit(isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("edit_file", {"path": "core.js", "old_string": "count += 1;",
+                              "new_string": "count += 4;"})], tokens=(500, 5)),
+        _turn([("finish", {"summary": "count by fours"})], tokens=(600, 5)),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses,
+                            config=_edit_config(context_soft_limit_tokens=800))
+
+    assert result["success"], result["error"]
+    assert not [m for m in seen[-1] if "CONTEXT WARNING" in str(m.get("content"))]
+
+
+def test_a_run_past_the_context_hard_limit_stops_and_ships_what_it_wrote(
+        isolated_db, games_dir):
+    """The point of stopping ourselves rather than letting the API 400: the
+    edit already on disk is still verified and still ships."""
+    _setup_source_game(games_dir)
+    huge = int(ai.CONTEXT_WINDOW_TOKENS * agent._CONTEXT_HARD_LIMIT_RATIO) + 1
+    responses = [
+        _turn([("edit_file", {"path": "core.js", "old_string": "count += 1;",
+                              "new_string": "count += 7;"})], tokens=(huge, 5)),
+        # Never reached — the guard stops the loop before this request.
+        _turn([("read_file", {"path": "core.js"})], tokens=(huge, 5)),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses, config=_edit_config(max_steps=30))
+
+    assert len(seen) == 1, "the guard must stop before making a second request"
+    assert result["success"], result["error"]
+    assert "without calling finish" in result["notes"]
+    assert "count += 7;" in (games_dir / result["slug"] / "src" / "core.js").read_text()
+
+
+def test_a_run_that_hits_the_context_ceiling_with_nothing_written_says_so(
+        isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    huge = int(ai.CONTEXT_WINDOW_TOKENS * agent._CONTEXT_HARD_LIMIT_RATIO) + 1
+    responses = [
+        _turn([("read_map", {})], tokens=(huge, 5)),
+        _turn([("read_file", {"path": "core.js"})], tokens=(huge, 5)),
+    ]
+
+    result, seen = _run(games_dir, responses, config=_edit_config(max_steps=30))
+
+    assert len(seen) == 1
+    assert not result["success"]
+    assert "context window nearly full" in result["error"]
+    assert f"{ai.CONTEXT_WINDOW_TOKENS:,}" in result["error"]
+    # A failed run leaves no half-written fork behind.
+    assert not any(p.name.startswith("click-counter-v2") for p in games_dir.iterdir())

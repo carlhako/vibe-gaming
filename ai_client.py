@@ -81,6 +81,26 @@ MODEL_PRO = "deepseek-v4-pro"        # 1.6T total / 49B active MoE, 1M ctx — b
 # way 150000 has, so this constant only claims what's actually been proven:
 MAX_OUTPUT_TOKENS = 150000
 
+# The INPUT side's ceiling — everything the model can see at once: system
+# prompt, every prior turn, every tool result. Distinct from MAX_OUTPUT_TOKENS
+# above, which caps a single response.
+#
+# Source: DeepSeek's own docs (api-docs.deepseek.com) and config.yaml.example's
+# model table both give 1M context for deepseek-v4-flash and deepseek-v4-pro.
+# The largest input actually observed live is far below it (~1.6M tokens across
+# a whole 60-turn agent run, no single call close to this), so treat this the
+# way MAX_OUTPUT_TOKENS' comment above insists on being treated: it is a
+# DOCUMENTED figure, not a probed one. Re-verify before trusting it as a hard
+# boundary — the 65536 lesson is that a number nobody has tested is just a
+# number somebody wrote down.
+#
+# Only consumer today: agent.py's context guard, which stops a run at 95% of
+# this rather than letting the API 400 mid-run. That use is conservative in the
+# right direction — if the real window is larger, the guard fires early and the
+# run's files are still verified and shipped; if it were smaller, the guard
+# would fire late and the run would end the way it does today anyway.
+CONTEXT_WINDOW_TOKENS = 1_048_576
+
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 
 _logger = logging.getLogger(__name__)

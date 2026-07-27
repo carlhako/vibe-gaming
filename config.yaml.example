@@ -110,6 +110,18 @@ multifile_agent:
                                # the snapshot's version with my edits applied,
                                # in order" something the model can check from
                                # the transcript instead of taking on faith.
+  context_soft_limit_tokens: 700000  # once a request bills this much input, the
+                               # loop tells the model ONCE to stop exploring and
+                               # finish; past 95% of ai_client.CONTEXT_WINDOW_TOKENS
+                               # (1M, documented not probed) it ends the run itself
+                               # and force-verifies what is on disk. Needed because
+                               # the conversation is append-only as of Sprint 6a, so
+                               # it only ever grows -- and running into the window
+                               # is an API 400 mid-run, which ships nothing even
+                               # when every module is already written and correct.
+                               # 700000 leaves ~350K of headroom: a 400000-byte
+                               # snapshot is ~100K tokens, and the nudge needs room
+                               # to be acted on, not just heard.
   # context_prune_after_steps  # REMOVED in Sprint 6a (2026-07). Read results are no
                                # longer pruned at all, and this key is ignored -- delete it
                                # from your config.yaml if it is still there (_run_react_loop

@@ -324,7 +324,7 @@ the half-written fork) — it's the multi-file-source counterpart
 `job_runner.py` dispatches to instead of `game_enhancer.enhance_game()`.
 Config lives under `multifile_agent:` in `config.yaml` (model/effort/
 max_steps/max_verification_retries/max_module_bytes/snapshot_max_bytes/
-edit_compact_bytes).
+edit_compact_bytes/context_soft_limit_tokens).
 
 **The model starts with the whole source in hand, not a directory to
 explore.** `_build_source_snapshot()` reads every file of the staged fork —
@@ -391,6 +391,28 @@ the prefix. `tests/agent_harness.py`'s `scripted_asks` asserts the invariant on
 every agent test rather than in one dedicated case, because a run that mutates
 its prefix still writes the right files, passes verification and ships; only
 the bill changes, so nothing else would catch a regression.
+
+**The price of append-only is that the conversation only grows, so the context
+window becomes the run's real ceiling — and the loop lands the plane itself
+rather than letting the API 400 mid-run.** Pruning used to hold the message
+list roughly flat; now nothing does, and hitting the window would throw away a
+run that may have every module already written and correct on disk. So
+`_run_react_loop` checks its own billed input size at the *top* of each turn,
+before the request — using the previous call's `ask_result.input_tokens`, the
+only figure that counts the system prompt, the snapshot and every tool result
+the way the provider actually charges for them. Past
+`context_soft_limit_tokens` (700,000) it appends **one** user message telling
+the model to stop exploring and finish the edits it has left; past 95% of
+`ai_client.CONTEXT_WINDOW_TOKENS` it ends the run, which falls straight through
+to the forced final verification and ships whatever passes build → scan →
+smoke. Checking at the top of the turn is what makes both branches safe: the
+conversation there always ends in a tool result or a user message, so appending
+one is legal, and a stop loses nothing, since the previous turn's tool calls
+have already run and written to disk. `CONTEXT_WINDOW_TOKENS` (1,048,576) is a
+**documented** figure from DeepSeek's docs, not a probed one — its comment
+carries the same "re-verify before trusting it" warning `MAX_OUTPUT_TOKENS`
+earned the hard way, and the 95% margin means an over-estimate only makes the
+guard fire early, which is the harmless direction.
 
 **`edit_file(path, old_string, new_string)` replaces one exact span, so a
 small change stops costing a whole-module rewrite.** `write_file` costs the
