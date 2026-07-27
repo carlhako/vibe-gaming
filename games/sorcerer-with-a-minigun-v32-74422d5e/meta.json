@@ -1,0 +1,11 @@
+{
+  "game_id": "74422d5e4647448fab75a2bdda452ebd",
+  "parent_game_id": "778da9e93b254ef3a74abd52ef8bd30a",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v32)",
+  "description": "Wave-based arena shooter. Choose your champion, blast enemies, and upgrade between waves. Skeleton railgun minions now charge up before firing.",
+  "requested_by": "web:7fbda6b03e03",
+  "created_at": "2026-07-25T01:18:29.577469Z",
+  "version": 1,
+  "prompt": "make it so the skeleton summons that use the railgun fully charge the railgun up before shooting the railgun at an enemy"
+}
