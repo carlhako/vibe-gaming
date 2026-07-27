@@ -1,0 +1,11 @@
+{
+  "game_id": "508aceeb16e94888be64fbd01798cbe9",
+  "parent_game_id": "9c84ac772c974817a468180109c21aa0",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v6)",
+  "description": "Build towers with no limit, delete them for a refund, and set each tower's targeting mode to nearest, first, last, or random.",
+  "requested_by": "web:7780682e550f",
+  "created_at": "2026-07-19T07:59:47.087514Z",
+  "version": 1,
+  "prompt": "remove tower limit of 15. Add the ability to delete a tower. and make it so i can change the towers target to first, last, random."
+}
