@@ -1,0 +1,11 @@
+{
+  "game_id": "88bbdc115a34465f914f91fc7f2d7715",
+  "parent_game_id": "0025942391a1416ea1707ec0cfa7d7b0",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v26)",
+  "description": "Darkhold Arena wave RPG \u2013 fixed stuck-key bug when tabbing out, added 1/2 keys for direct weapon selection with HUD icons.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-24T21:28:54.976015Z",
+  "version": 1,
+  "prompt": "there is a bug when you are holding down a key to move and you accidently click outside of the browser window. the character gets stuck moving 1 direction.\r\n\r\nhere is a code snippet that will fix the issue at around line 1008. \r\n\r\nwindow.addEventListener('blur', () => {\r\n    for (const k in keys) keys[k] = false;\r\n    mouseDown.left = false;\r\n    mouseDown.right = false;\r\n});\r\ndocument.addEventListener('visibilitychange', () => {\r\n    if (document.hidden) {\r\n        for (const k in keys) keys[k] = false;\r\n        mouseDown.left = false;\r\n        mouseDown.right = false;\r\n    }\r\n});\r\n\r\nWhy it happens: the game tracks movement with a keys object set by window.addEventListener('keydown', ...) / keyup (around lines 996\u20131008), and player movement just reads keys['w'], keys['a'], etc. (lines 1738\u20131741). If a key is held down and then you click on something outside the browser window (another app, taskbar, a second monitor, an OS dialog), the browser tab loses focus. The keyup event for that key fires on the OS-level target, not on your page \u2014 since the window is no longer focused, the page never receives it. So keys['w'] stays true forever, and the sorcerer keeps walking in that direction until you press and release that key again inside the game.\r\n\r\n\r\nsecondly add the option to pick between railgun and minigun when you are the scorcerer. add a little icon down the bottom of the screen when you have purchased them and link them to a key, number 1 for minigun and number 2 for railgun, this will switch between weapon. make it remember your selection between waves."
+}
