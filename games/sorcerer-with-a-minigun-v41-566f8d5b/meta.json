@@ -1,0 +1,12 @@
+{
+  "game_id": "566f8d5bcfdd42f490c4a14d632d200e",
+  "parent_game_id": "f3e9feeb8e34439eba987ad0855bc072",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v41)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-26T23:13:02.082103Z",
+  "version": 2,
+  "prompt": "add a new feature once you pass round 5, there is a 50% chance of a glowing purple block to be generated somewhere random on the map. the block takes 100 hits to destroy it, when its destroy 50-100 gold explodes out of it as well as 5 enemy units and 1 boss witch. Each round increases the number of enemy units that come out of it by +1 and the amount of gold +10",
+  "format": "multi-file"
+}
