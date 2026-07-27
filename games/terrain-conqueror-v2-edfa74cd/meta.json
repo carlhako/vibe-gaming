@@ -1,0 +1,11 @@
+{
+  "game_id": "edfa74cd78b34fc788cb512c25d4eebd",
+  "parent_game_id": "2999a94b72a54ca3800aab39f8fc3b4e",
+  "root_game_id": "2999a94b72a54ca3800aab39f8fc3b4e",
+  "title": "Terrain Conqueror (v2)",
+  "description": "A physics-based off-road driving game where you conquer increasingly treacherous terrain, collect coins, and upgrade your vehicle between levels.",
+  "requested_by": "web:007d10387b5b",
+  "created_at": "2026-07-20T05:31:29.538750Z",
+  "version": 1,
+  "prompt": "On the right track, car bounces uncontrollably at the start, and gravity appears too strong, needs a little more float."
+}
