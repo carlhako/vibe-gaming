@@ -1,0 +1,11 @@
+{
+  "game_id": "073a4e0c53384e60824947307bf5c8e4",
+  "parent_game_id": "b8b049527c8045baa71dde23da945190",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v2) (v3)",
+  "description": "Defend a winding maze path with upgradeable towers in a 20x20 grid",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-19T06:00:25.418906Z",
+  "version": 1,
+  "prompt": "enhance the map generation, the whole game is a 20x20 grid and the line for the bad guys usually just goes from one side to the other, make the line more wavy using more of the map."
+}
