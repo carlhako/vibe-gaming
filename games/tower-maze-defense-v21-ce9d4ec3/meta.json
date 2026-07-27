@@ -1,0 +1,11 @@
+{
+  "game_id": "ce9d4ec3dc4e4345b211fad8f2088340",
+  "parent_game_id": "3e3651801e164d6d944e0d7ff219dbc5",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v21)",
+  "description": "Enhanced tower defense with unique 3D-like tower models, lightning effects, piercing laser beams, and ice wave tails.",
+  "requested_by": "web:007d10387b5b",
+  "created_at": "2026-07-21T01:26:39.859372Z",
+  "version": 1,
+  "prompt": "The towers in this tower defense game now have their own functions, but lets make some tweaks, the laser turret fires through enemies, which is the desired effect, but it stops at the edge of its range, the range should only affect targeting, the laser should continue through the entire stage.\r\n\r\nThe tesla is working as intended, but lets make that beam look more lightning like, add some sparks and 3-4 jiggered lines that move in an electrical path, and maybe a little glow.\r\n\r\nThe ice towers look great, but lets make the wave a touch slower and have a tail effect to the wave, the fire rate is good, just slow the speed of the wave about 30%\r\n\r\nThe top down view is perfect, but lets give each tower their own model, not just a circle with a symbol, Arrow should look like a little crossbow, the cannon should look like a cannon, the laser a laser, etc, and their model should change slightly as you upgrade them."
+}
