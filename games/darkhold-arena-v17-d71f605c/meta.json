@@ -1,0 +1,11 @@
+{
+  "game_id": "d71f605c7eac4b9c9baea8f873a780e4",
+  "parent_game_id": "95ff71d0225f4e2daa681a5238512ed6",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Darkhold Arena (v17)",
+  "description": "Wave-based arena RPG. Choose Sorcerer, Wizard, or Knight. Enemies spawn at map edges in later waves to prevent instant-death swarms.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-24T02:58:35.749403Z",
+  "version": 1,
+  "prompt": "in later waves around wave 7 or 8 there are too many enemies when you spawn and you die straight away. Adjust where they spawn on the map so most spawn away from you and you."
+}
