@@ -1,0 +1,11 @@
+{
+  "game_id": "01e95889e64e4e0cb5e602cd959a9c95",
+  "parent_game_id": "7e9ff8ee61a143da8bda502742a0f826",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Darkhold Arena (v13)",
+  "description": "Wave-survival RPG with destructible walls, skeletal minions, and a new 200-coin Sorcerer upgrade that equips all skeletons with rapid-fire homing miniguns.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-24T01:36:19.756285Z",
+  "version": 1,
+  "prompt": "add another option in the shot for sorcerer which is skeletons with miniguns. it cost 200 coins and after purchasing all skeletons are spawned with miniguns, this replaces the archer skeletons. give the skeletons the same minigun as the sorcerer gets from its minigun power up."
+}
