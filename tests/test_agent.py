@@ -958,6 +958,103 @@ def test_a_later_stall_gets_its_own_nudge_after_a_real_write(isolated_db, games_
     assert len(stall_nudges) == 2, "each stall after real progress earns its own nudge"
 
 
+# ---------------------------------------------------------------------------
+# 8. The re-finish budget nudge. Job d6ca3a88 (2026-07-27) fixed a failed
+#    finish at ~step 54 of 60, then burned its last turns re-reading to check
+#    the fix by hand instead of calling finish again — the forced verification
+#    shipped it, but a nudge would have converged it cleanly. The low-budget
+#    warning it needed was gated on verification_attempts == 0, so a run that
+#    had already failed one finish could never get it.
+#
+#    CONFIG's max_steps is 10, so _finish_nudge_threshold is max(5, 10//4) == 5:
+#    the nudge fires once steps_left <= 5, i.e. from step 5 on.
+# ---------------------------------------------------------------------------
+
+_REFINISH_NUDGE_MARK = "you have since edited files to fix it"
+
+
+def _refinish_nudges(messages):
+    return [m for m in messages if m.get("role") == "user"
+            and _REFINISH_NUDGE_MARK in (m.get("content") or "")]
+
+
+def test_a_failed_finish_then_an_edit_near_budget_end_nudges_to_refinish(
+        isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})]),  # 1
+        _turn([("finish", {"summary": "first attempt"})]),                      # 2 -> fails
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})]),  # 3 fix
+        _turn([("read_file", {"path": "style.css"})]),                          # 4 steps_left 6
+        _turn([("read_file", {"path": "index.html"})]),                         # 5 steps_left 5 -> nudge
+        _turn([("finish", {"summary": "fixed on retry"})]),                     # 6 -> passes
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test",
+                     side_effect=[(False, "console.error: boom"), (True, "ok")]):
+        result, seen = _run(games_dir, responses, config=CONFIG, job_id="job-refinish")
+
+    assert result["success"], result["error"]
+    # Two real verifications (fail then pass) — NOT the forced last-ditch one.
+    assert result["attempts"] == 2
+    assert result["notes"] == "fixed on retry"
+    assert [a["outcome"] for a in db.get_generation_attempts("job-refinish")] == \
+        ["smoke_test_failed", "success"]
+    # The nudge was delivered on the turn after step 5, so it is in the
+    # conversation sent to the finishing call.
+    assert len(_refinish_nudges(seen[-1])) == 1, \
+        "a failed finish + a later edit near budget end must nudge to re-finish"
+
+
+def test_the_refinish_nudge_re_arms_after_each_failed_finish(isolated_db, games_dir):
+    """It answers one specific fix-cycle. A run that fails finish, fixes it and
+    is nudged, then fails finish AGAIN and fixes it again must earn a second
+    nudge — same re-arming logic as the stall nudge."""
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})]),  # 1
+        _turn([("finish", {"summary": "attempt 1"})]),                          # 2 -> fails
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})]),  # 3 fix
+        _turn([("read_file", {"path": "style.css"})]),                          # 4
+        _turn([("read_file", {"path": "index.html"})]),                         # 5 -> nudge 1
+        _turn([("finish", {"summary": "attempt 2"})]),                          # 6 -> fails, re-arm
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})]),  # 7 fix again
+        _turn([("read_file", {"path": "style.css"})]),                          # 8 -> nudge 2
+        _turn([("finish", {"summary": "attempt 3"})]),                          # 9 -> passes
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test",
+                     side_effect=[(False, "boom"), (False, "boom"), (True, "ok")]):
+        result, seen = _run(games_dir, responses, config=CONFIG)
+
+    assert result["success"], result["error"]
+    assert result["attempts"] == 3
+    assert len(_refinish_nudges(seen[-1])) == 2, \
+        "each failed finish followed by an edit earns its own re-finish nudge"
+
+
+def test_the_refinish_nudge_does_not_fire_before_a_finish_has_failed(
+        isolated_db, games_dir):
+    """The verification_attempts == 0 path owns the pre-first-finish case; the
+    re-finish nudge must stay silent until a finish has actually failed."""
+    _setup_source_game(games_dir)
+    # Write, then read-only turns deep into the budget, then finish — a first
+    # finish never fails here, so the re-finish nudge has no cycle to answer.
+    responses = (
+        [_turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})])]
+        + [_turn([("read_file", {"path": p})])
+           for p in ("style.css", "index.html", "game.md")]
+        + [_turn([("finish", {"summary": "done"})])]
+    )
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses, config=CONFIG)
+
+    assert result["success"], result["error"]
+    assert _refinish_nudges(seen[-1]) == [], \
+        "no re-finish nudge before any finish has failed"
+
+
 def test_resolve_failure_for_unknown_source_returns_clean_error(isolated_db, games_dir):
     # No source registered at all -> resolve_target fails before any
     # ask_with_tools call is made.

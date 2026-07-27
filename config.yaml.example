@@ -90,7 +90,16 @@ multifile_agent:
                                # (see docs/multifile-agent/05-migration-and-pilot.md).
                                # What actually drives granularity is the prompt's target
                                # module count, source_bytes / 25000.
-  context_prune_after_steps: 3 # steps a read_file result rides along before being pruned
+  context_prune_after_steps: 6 # steps a read_file result rides along before being pruned.
+                               # Was 3, raised because a wide change (a feature spanning
+                               # ~7 modules) cycles back to a file many steps later, so a
+                               # 3-step horizon pruned it just before reuse and forced a
+                               # whole-file re-read -- the agent path's dominant token cost
+                               # (job d6ca3a88 re-read config.js 10x, render.js 6x for one
+                               # feature). Pruning also churns the prompt-cache prefix, so a
+                               # re-read costs a full-price new turn AND a step where a
+                               # resent-but-un-pruned read is mostly cached. Starting point;
+                               # a size-aware horizon is a possible later refinement.
   # module_warn_bytes: 225000   # soft lint threshold (transcript note only, never blocks
                                # the write). Optional: defaults to half of whichever
                                # max_module_bytes ceiling applies to the current pass

@@ -1614,8 +1614,8 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
       - a read_file result is replaced with a _PRUNE_SENTINEL placeholder
         once either the same path is later rewritten (unchanged from
         Sprint 2) or it's simply gone stale — outstanding for more than
-        `cfg["context_prune_after_steps"]` steps (default 3) without being
-        rewritten.
+        `cfg["context_prune_after_steps"]` steps (default 6) without being
+        rewritten. See that default below for why 3 was too eager.
 
     `extra_verify(game_dir, built_html) -> str | None` is an optional gate
     run only after build->scan->smoke has already passed; returning a string
@@ -1639,7 +1639,19 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     module_warn_bytes = cfg.get(
         "module_warn_bytes", int(max_module_bytes * DEFAULT_MODULE_WARN_RATIO)
     )
-    max_read_age_steps = cfg.get("context_prune_after_steps", 3)
+    # 6, not the 3 this started at. A wide change spanning ~7 modules cycles
+    # back to a given file many steps later, not within 3 — job d6ca3a88
+    # (2026-07-27) re-read config.js 10x, map.js/input.js 8x, combat.js/update.js
+    # 7x, render.js (73KB) 6x for one feature, and whole-file re-reads are the
+    # agent path's dominant token cost. Pruning is also self-defeating against
+    # the prompt cache: every prune mutates the messages prefix and invalidates
+    # the cached tokens downstream of it (that run cached only ~48%). A resent
+    # but un-pruned read is mostly cached; a re-read is a full-price new turn
+    # AND a consumed step, so letting a read survive a normal read->...->write
+    # cycle is cheaper on both axes. Kept modest — a huge module still shouldn't
+    # ride along forever; a size-aware horizon (prune render.js sooner than a
+    # 4KB config.js) is a possible future refinement, not done here.
+    max_read_age_steps = cfg.get("context_prune_after_steps", 6)
     # `or` rather than a get() default, so an explicitly blank model in a
     # config still lands on the agent's own default instead of falling
     # through to ai_client's app-wide one (see DEFAULT_AGENT_MODEL).
@@ -1675,6 +1687,17 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     nudged_to_finish = False
     nudged_to_write = False
     nudged_low_budget = False
+    # The re-finish nudge (below) answers a different budget failure from
+    # nudged_low_budget: not "you never verified" but "you called finish, it
+    # failed, you fixed it, now re-verify instead of re-reading to check by
+    # hand". edited_since_finish tracks whether any write has landed since the
+    # last finish attempt; nudged_refinish is re-armed on every new finish so
+    # each fix-cycle earns one nudge. Job d6ca3a88 (2026-07-27) fixed a TDZ
+    # failure at ~step 54 of 60 and then spent its last six turns re-reading to
+    # be sure rather than calling finish — the forced verification shipped it,
+    # but a nudge would have converged it cleanly with steps to spare.
+    edited_since_finish = False
+    nudged_refinish = False
     finish_nudge_at = _finish_nudge_threshold(max_steps)
     summary = ""
     last_candidate_summary = ""
@@ -1813,6 +1836,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                 if touched_path and content.startswith("OK:"):
                     made_progress = True
                     wrote_anything = True
+                    edited_since_finish = True
                     written_paths.add(touched_path)
                     # Re-arm the stall nudge below: it answers a specific
                     # stall, and a real write means the run moved on. Job
@@ -1862,6 +1886,12 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                 success = True
                 break
             error = detail
+            # A finish just failed. Re-arm the re-finish nudge and require a
+            # fresh write before it can fire, so it points the model back at
+            # finish only once it has actually edited something to fix this
+            # failure — not on the very next read.
+            edited_since_finish = False
+            nudged_refinish = False
             if verification_attempts >= max_verification_retries:
                 messages.append({
                     "role": "tool", "tool_call_id": finish_call.id,
@@ -1874,11 +1904,38 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
             })
             continue
 
-        # Running out of budget with nothing verified yet — independent of
-        # write cadence, which is why this is separate from the no-progress
-        # guard below (see _finish_nudge_threshold).
+        # Two budget nudges, both independent of write cadence (which is why
+        # they sit apart from the no-progress guard below, see
+        # _finish_nudge_threshold): one for a run that has never verified and
+        # is running low, and one for a run that failed a finish, fixed it, and
+        # is now re-reading instead of re-verifying. Only one fires per turn.
         steps_left = max_steps - step_num
-        if (verification_attempts == 0 and not nudged_low_budget
+        if (verification_attempts > 0 and edited_since_finish
+                and not nudged_refinish and steps_left <= finish_nudge_at):
+            # A finish already failed and the model has since edited files to
+            # fix it, but the budget is running low and it hasn't re-verified.
+            # Job d6ca3a88's wasted tail (see edited_since_finish's comment):
+            # it re-read its own modules to convince itself the fix was right
+            # instead of just calling finish, which checks it far more strictly
+            # and hands back the exact failure if not. Lead with "you fixed it,
+            # verify" — the transcript-imitation lesson in _compact_write_calls
+            # is that "you stalled" wording makes the model re-check state
+            # rather than move on.
+            nudged_refinish = True
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"BUDGET WARNING: {steps_left} turn(s) remain. You called "
+                    "finish, it failed, and you have since edited files to fix "
+                    "it. Call finish(summary) again NOW to re-verify — the "
+                    "build, safety scan and smoke test check your fix far more "
+                    "reliably than re-reading the modules by hand, and if "
+                    "anything is still wrong you get the exact failure back and "
+                    "can keep editing. Do not spend your remaining turns "
+                    "re-reading to check manually."
+                ),
+            })
+        elif (verification_attempts == 0 and not nudged_low_budget
                 and steps_left <= finish_nudge_at):
             nudged_low_budget = True
             if wrote_anything:
