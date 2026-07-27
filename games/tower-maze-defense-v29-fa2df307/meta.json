@@ -1,0 +1,11 @@
+{
+  "game_id": "fa2df30739234868bf5d88aabd18164a",
+  "parent_game_id": "54f0c00433814255afda74dceda2cd0d",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v29)",
+  "description": "Tower defense with procedural mazes, splits, loops, buff/economy towers, and a money-explosion celebration when mints pay out.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-21T05:01:34.080848Z",
+  "version": 1,
+  "prompt": "when you have one or more mints, at the end of the round explode money out of the centre of the game screen showing how much money you made, make it 1 note per 50 coins."
+}
