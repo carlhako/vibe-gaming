@@ -1,0 +1,12 @@
+{
+  "game_id": "dd28bc578ded478388ab683b5cba9bb2",
+  "parent_game_id": "9c7f9e89eac9418995096860f9543c7a",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v45)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-27T01:17:37.732981Z",
+  "version": 5,
+  "prompt": "When a new amulet is found there is no equip button. The scenario was i had no prior amulet. Make sure the equip button always shows and also display what the amulet does. It says amulet of regeneration but doesn't say what it does. Also the icon for the amulet doesn't show in the dialog that has popped up.",
+  "format": "multi-file"
+}
