@@ -1,0 +1,11 @@
+{
+  "game_id": "73b0caeb3490466cbd3f3f8bffa2b4bf",
+  "parent_game_id": "9ffd8c471a0e47e09641680db2682fbf",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Darkhold Arena (v7)",
+  "description": "Wave-based arena RPG where enemies and skeletons intelligently navigate around walls using raycast steering instead of getting stuck on corners.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-23T06:00:47.894965Z",
+  "version": 1,
+  "prompt": "improve the intelligence of both the enemy and the sorcerers skeletons, if they can see an enemy and there is a wall in the way make them walk around the wall instead of just bouncing around unable to get through."
+}
