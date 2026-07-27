@@ -1,0 +1,11 @@
+{
+  "game_id": "bca11f773377450b96f03bae1a26ed64",
+  "parent_game_id": "b06901d718ef49d7830797ade802b826",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v23)",
+  "description": "Horde-wave arena RPG with destructible walls, minions, witches, and an arcane railgun that now requires Fireball DMG Lv5.",
+  "requested_by": "web:7fbda6b03e03",
+  "created_at": "2026-07-24T10:42:50.302648Z",
+  "version": 1,
+  "prompt": "make it so you need to get fireball damage lv5 for the railgun instead of homing flames lv2"
+}
