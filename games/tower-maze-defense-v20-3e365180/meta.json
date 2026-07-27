@@ -1,0 +1,11 @@
+{
+  "game_id": "3e3651801e164d6d944e0d7ff219dbc5",
+  "parent_game_id": "920e6a4e5724420a9d567521334f567e",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v20)",
+  "description": "A tower-defense maze game where each tower has unique mechanics: Arrow fires fast single shots, Cannon splashes, Ice pulses AOE slows, Laser pierces through enemies, Tesla chains lightning, and Mint generates income.",
+  "requested_by": "web:007d10387b5b",
+  "created_at": "2026-07-21T01:07:25.220040Z",
+  "version": 1,
+  "prompt": "Adjust the games towers to function more unique form each other. The arrow tower can stay as it is, the Cannon, should have a small splash damage when it hits (say 1 tile each side of its hit location), the Ice should be an AOE wave that pulses from the tower. The Sniper, lets change that to a laser, keep the fire rate etc the same, but make it fire through enemies, and all in the line will take damage, the tesla should have an electricity effect when firing, that jumps to 2 more targets within 2 tiles range, upgrading this tower should also increase how many jumps it can do. The mint."
+}
