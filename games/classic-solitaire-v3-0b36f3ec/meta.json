@@ -1,0 +1,11 @@
+{
+  "game_id": "0b36f3ecb40641f7930892f6efdfe0e3",
+  "parent_game_id": "85efce55ffeb435c846363ec2f1d222b",
+  "root_game_id": "d224166ce7f9431d856064848a9d365a",
+  "title": "Classic Solitaire (v3)",
+  "description": "A polished Klondike Solitaire game with drag-and-drop, double-click auto-foundation, scoring, and timer.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-07-24T07:55:03.915094Z",
+  "version": 1,
+  "prompt": "moving a card onto a valid other card does not seem to work, fix please"
+}
