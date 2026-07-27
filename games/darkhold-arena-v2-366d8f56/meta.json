@@ -1,0 +1,11 @@
+{
+  "game_id": "366d8f56a4d440bb98f64e4d2a15964e",
+  "parent_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Darkhold Arena (v2)",
+  "description": "Animated weapon-swing primary attacks and fully-connected procedural maps. Survive waves, collect tokens, and upgrade in the shop.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-21T22:49:23.555583Z",
+  "version": 1,
+  "prompt": "animate the primary attack so the player swings their weapon to hit the enemy. \r\n\r\nfix the first level so you can get to all areas on the map, there were enemies captures in areas i couldn't get to."
+}
