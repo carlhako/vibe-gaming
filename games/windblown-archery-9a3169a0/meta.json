@@ -1,0 +1,11 @@
+{
+  "game_id": "9a3169a079ec48a0b5785c2c8a53f325",
+  "parent_game_id": null,
+  "root_game_id": "9a3169a079ec48a0b5785c2c8a53f325",
+  "title": "Windblown Archery",
+  "description": "Hold and release to shoot arrows at the target while judging the wind shown by blowing leaves.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-19T11:12:15.375459Z",
+  "version": 1,
+  "prompt": "a side view game where you are an archer on the left and on the right there is a target,  you press and hold to shoot an arrow, the longer you hold it the more power is used to shoot. there is wind indicated by blowing leaves the faster the leaves the more wind. if you hit the target you win."
+}
