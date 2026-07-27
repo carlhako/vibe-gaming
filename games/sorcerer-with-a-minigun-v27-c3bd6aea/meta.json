@@ -1,0 +1,11 @@
+{
+  "game_id": "c3bd6aead58a469d87f30db7dae0d04b",
+  "parent_game_id": "88bbdc115a34465f914f91fc7f2d7715",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v27)",
+  "description": "Horde-survival arena RPG with destructible walls, summonable minions, minigun, railgun, and a new dash ability. Select the Sorcerer and fight through waves of enemies.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-24T22:09:12.046271Z",
+  "version": 1,
+  "prompt": "make the following changes:\r\n1. modify the railgun for the sorcerer so it doesnt automatically discharge when its fully charged, it only discharges when you release the mouse button.\r\n\r\n2. move the weapon select boxes to the very bottom corner of the game, this is the boxes to select 1 for minigun, 2 for rail gun.\r\n\r\n3. add a dash button, make the key spacebar and the character quickly dashes that direction. add a dash cooldown next to the weapon cooldown. make it so you can only dash every 5 seconds.\r\n\r\n4. on the game loading screen where you select characters, grey out the wizard and knight and put some text over them saying not currently available. make the button greyed out for them too and make it so you cant select them."
+}
