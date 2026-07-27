@@ -1,0 +1,11 @@
+{
+  "game_id": "35136ee8e316422ebda0eba8e2cec393",
+  "parent_game_id": "4838d79817854aaeb4740eabb307ffaa",
+  "root_game_id": "2999a94b72a54ca3800aab39f8fc3b4e",
+  "title": "BAD CAR GAME (v7)",
+  "description": "Conquer brutal terrain with a souped-up off-road truck \u2014 now faster and with a jump button (Space). Upgrade between levels and don't flip!",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-20T06:22:14.594776Z",
+  "version": 1,
+  "prompt": "the car moves too slow, speed it up a bit and add a jump button with spacebar"
+}
