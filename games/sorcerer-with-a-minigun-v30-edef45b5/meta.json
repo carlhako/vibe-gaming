@@ -1,0 +1,11 @@
+{
+  "game_id": "edef45b59ebc44d1893af1eda13a5370",
+  "parent_game_id": "c7605a29a33743da8c98ccd962fbe332",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v30)",
+  "description": "Darkhold Arena wave-survival RPG with enhanced enemy visuals: skeletons now have full bone rigs, demons have hunched muscular bodies with horns and claws, and brutes are massive troll-like monsters.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-24T23:45:42.296875Z",
+  "version": 1,
+  "prompt": ". I want to improve how a few enemies look. Please edit the code directly and give me back the full updated file.\r\n\r\nThe basic \"skeleton\" enemy (in the drawEnemy function, the else if (enemy.type === 'skeleton') block) is just a filled rectangle body with a plain circle head \u2014 it looks like a chess pawn. Replace it with a proper bone/skeleton look: ribcage, spine, pelvis, jointed arms and legs, and a skull with a jaw, teeth, and glowing red eye sockets.\r\n\r\nImportant: the code ALREADY has a well-drawn, fully detailed skeleton rig elsewhere \u2014 look at the drawMinion function (this is what the player's summoned skeleton minion looks like). It has a spine, curved ribs, a pelvis, articulated bone arms/legs, and a detailed skull with jaw, teeth, and glowing red eyes. Reuse that same visual style/approach for the enemy skeleton so both skeletons look consistent, just simplified since the enemy doesn't need the full walk-cycle animation the minion has.\r\n\r\nAlso give the \"demon\" and \"brute\" enemies (same drawEnemy function) a visual pass so they don't look like a plain rectangle + circle either \u2014 make them fit a dark cave setting better (more hunched/monstrous posture, texture/detail, less blocky).\r\nKeep the \"ghost\"/wraith enemy as is, it already looks fine.\r\n\r\nKeep the rest of the game logic untouched \u2014 this should only be a visual/drawing change, not a gameplay change."
+}
