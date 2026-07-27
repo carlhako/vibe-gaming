@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Hakko – Project Tesseract</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+    canvas { image-rendering: pixelated; width: min(960px, 100vw); height: min(720px, 100vh); display: block; }
+    #ui-overlay {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      display: none; flex-direction: column; align-items: center; pointer-events: none;
+    }
+    .menu-panel {
+      background: #2a2a3a; border: 3px solid #8a8aaa; border-radius: 8px;
+      padding: 20px; min-width: 300px; text-align: center; color: #e0e0f0;
+      font-family: 'Courier New', monospace; pointer-events: auto;
+      box-shadow: 0 0 20px rgba(0,0,0,0.8);
+    }
+    button, .btn {
+      background: #4a4a6a; border: 2px solid #7a7aaa; color: #fff; font-family: inherit;
+      padding: 8px 16px; margin: 5px; cursor: pointer; border-radius: 4px; font-size: 14px;
+    }
+    button:hover { background: #5a5a8a; }
+    button:active { background: #3a3a5a; }
+    .menu-panel h2 { margin-bottom: 15px; color: #ffd700; }
+    .row { display: flex; justify-content: space-between; margin: 6px 0; }
+    .bar { background: #444; height: 10px; border-radius: 5px; overflow: hidden; }
+    .bar-fill { height: 100%; background: #66cc66; }
+    .battle-stats { text-align: left; }
+    #dialogue-box {
+      position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+      width: 80%; background: rgba(0,0,0,0.85); border: 2px solid #aaa;
+      color: #fff; padding: 15px; font-family: 'Courier New', monospace;
+      display: none; pointer-events: auto; border-radius: 6px;
+    }
+    .hidden { display: none !important; }
+    .flex { display: flex; align-items: center; gap: 10px; }
+  </style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div id="ui-overlay"></div>
+<div id="dialogue-box"></div>
+<script>
+// ─── project tesseract: hakko rpg ───────────────────────────────
+// all game state in global variables (sandbox: no storage apis)
+// ─────────────────────────────────────────────────────────────────
+const TILE_SIZE = 32;
+const VIEW_W = 20, VIEW_H = 15;
+const CANVAS_W = VIEW_W * TILE_SIZE, CANVAS_H = VIEW_H * TILE_SIZE;
+
+const canvas = document.getElementById('gameCanvas');
+canvas.width = CANVAS_W;
+canvas.height = CANVAS_H;
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+const overlay = document.getElementById('ui-overlay');
+const dialogueBox = document.getElementById('dialogue-box');
+
+let globalState = {
+  mapId: 'starter_village',
+  playerX: 10, playerY: 10, playerDir: 2, // 0:up,1:right,2:down,3:left
+  activeDeck: [], // array of Hakko objects (max 5)
+  storage: [],
+  inventory: [
+    { itemId: 'basic_tesseract', qty: 10 },
+    { itemId: 'heal_food', qty: 5 },
+    { itemId: 'status_cure', qty: 2 }
+  ],
+  money: 200,
+  badges: [],
+  codex: {}, // keyed by hakkoId, { seen, caught, studied }
+  scholarRank: 0, scholarScore: 0,
+  quests: {}, // active quests
+  dayTimer: 600, // seconds in day (10 min day, 5 min night) => simplified
+  dayLength: 600, nightLength: 300,
+  currentTime: 0, // seconds in current cycle
+  isNight: false,
+  flags: {},
+};
+
+// constants
+const ITEMS = {
+  basic_tesseract: { name:'Basic Tesseract', tier:1, catchMod:1.0 },
+  stable_tesseract: { name:'Stable Tesseract', tier:2, catchMod:1.3 },
+  reinforced_tesseract: { name:'Reinforced Tesseract', tier:3, catchMod:1.7 },
+  heal_food: { name:'Heal Food', healFlat:50, status:false },
+  great_food: { name:'Great Food', healFlat:200, status:false },
+  status_cure: { name:'Status Cure', healStatus:true, healFlat:0 },
+  revive: { name:'Revive', revive:true, healFlat:50 },
+};
+
+// ─── MAP DATA ───────────────────────────────────────────────────
+const maps = {
+  starter_village: {
+    name: 'Twinleaf Grove',
+    w: 30, h: 25,
+    tiles: [], // 2d array of tile ids
+    collision: [], // 0 or 1
+    exits: { right: {map:'route_1_south', x:1, y:12} },
+    npcs: [
+      { id:'mom', x:6, y:9, dir:2, script:'mom_greet' },
+      { id:'researcher', x:20, y:15, dir:2, script:'researcher_intro' },
+    ],
+    items: [],
+    trainers: [],
+    encounters: [], // wild zone definitions
+    fastTravel: true,
+  },
+  route_1_south: {
+    name: 'Route 01 (South)',
+    w: 40, h: 15,
+    tiles: [], collision: [],
+    exits: { left:{map:'starter_village', x:29, y:12}, up:{map:'town1', x:20, y:14} },
+    npcs: [],
+    items: [{ id:'heal_food', x:15, y:7 }],
+    trainers: [
+      { x:10, y:5, name:'Bug Catcher Tim', team:[ {id:'hak_weevil', level:5}, {id:'hak_caterpod', level:6} ] },
+    ],
+    encounters: [
+      { type:'grass', area:{x:5,y:3,w:10,h:5}, species:['hak_weevil','hak_caterpod'] },
+      { type:'grass', area:{x:25,y:3,w:10,h:5}, species:['hak_weevil','hak_sparkrat'] },
+    ],
+  },
+  town1: {
+    name: 'Verdant Town',
+    w: 30, h: 25,
+    tiles: [], collision: [],
+    exits: { down:{map:'route_1_south', x:20, y:1} },
+    npcs: [
+      { id:'shopkeeper', x:10, y:10, dir:2, script:'shop' },
+      { id:'vet', x:25, y:10, dir:2, script:'vet' },
+      { id:'arena_guard', x:15, y:18, dir:2, script:'arena_prompt' },
+    ],
+    items: [],
+    trainers: [],
+    encounters: [],
+    fastTravel: true,
+  },
+};
+
+// generate tiles & collision with simple patterns
+function generateTiles(mapId) {
+  const m = maps[mapId];
+  m.tiles = Array(m.h).fill().map(()=>Array(m.w).fill(0));
+  m.collision = Array(m.h).fill().map(()=>Array(m.w).fill(0));
+  for (let y=0; y<m.h; y++) {
+    for (let x=0; x<m.w; x++) {
+      m.collision[y][x] = (x===0 || y===0 || x===m.w-1 || y===m.h-1) ? 1 : 0;
+    }
+  }
+  // add buildings, water etc. based on map
+  if (mapId==='starter_village') {
+    // houses
+    for (let dy=0; dy<4; dy++) for (let dx=0; dx<4; dx++) { m.collision[5+dy][4+dx]=1; m.collision[5+dy][18+dx]=1; }
+    // lab
+    for (let dy=0; dy<3; dy++) for (let dx=0; dx<5; dx++) m.collision[3+dy][20+dx]=1;
+    // vet & shop
+    for (let dy=0; dy<3; dy++) for (let dx=0; dx<4; dx++) { m.collision[15+dy][2+dx]=1; m.collision[15+dy][22+dx]=1; }
+    // paths
+    for (let x=0; x<30; x++) m.collision[12][x] = 0; // clear path
+  }
+  if (mapId==='route_1_south') {
+    // tall grass patches
+    for (let x=5; x<15; x++) for (let y=3; y<8; y++) m.collision[y][x] = 0; // grass area (no collision)
+    for (let x=25; x<35; x++) for (let y=3; y<8; y++) m.collision[y][x] = 0;
+  }
+  if (mapId==='town1') {
+    // arena building
+    for (let dy=0; dy<4; dy++) for (let dx=0; dx<6; dx++) m.collision[15+dy][10+dx]=1;
+    // shop & vet
+    for (let dy=0; dy<3; dy++) for (let dx=0; dx<4; dx++) { m.collision[8+dy][4+dx]=1; m.collision[8+dy][22+dx]=1; }
+  }
+}
+for (let m in maps) generateTiles(m);
+
+// ─── HAKKO DATA ─────────────────────────────────────────────────
+const HAKKOS = {
+  // starters
+  hak_pyroak: { id:'hak_pyroak', codex:1, name:'Pyroak', elements:['Fire','Nature'], rarity:'Uncommon', habitats:['forest'], baseStats:{hp:60,atk:55,def:45,spa:50,spd:45,spd:55}, evolution:{into:'hak_emberoak',level:16}, movesByLevel:[{level:1,move:'ember'},{level:6,move:'vine_whip'}], worldAbilities:['burn'], catchRate:0.45, normalPalette:'#e05030', shinyPalette:'#5070c0' },
+  hak_aquabird: { id:'hak_aquabird', codex:2, name:'Aquabird', elements:['Water','Air'], rarity:'Uncommon', habitats:['lake','beach'], baseStats:{hp:55,atk:40,def:50,spa:65,spd:50,spd:60}, evolution:{into:'hak_stormwing',level:18}, movesByLevel:[{level:1,move:'water_gun'},{level:6,move:'gust'}], worldAbilities:['swim'], catchRate:0.45, normalPalette:'#4080d0', shinyPalette:'#c08040' },
+  hak_shockrat: { id:'hak_shockrat', codex:3, name:'Shockrat', elements:['Electric'], rarity:'Uncommon', habitats:['grassland'], baseStats:{hp:50,atk:60,def:40,spa:55,spd:45,spd:70}, evolution:{into:'hak_voltiger',level:20}, movesByLevel:[{level:1,move:'spark'},{level:8,move:'quick_attack'}], worldAbilities:['power'], catchRate:0.45, normalPalette:'#f0d050', shinyPalette:'#a0a0ff' },
+  // evolutions
+  hak_emberoak: { id:'hak_emberoak', codex:4, name:'Emberoak', elements:['Fire','Nature'], rarity:'Rare', habitats:[], baseStats:{hp:80,atk:75,def:65,spa:70,spd:60,spd:70}, evolution:{into:'hak_infernoak',level:36}, movesByLevel:[], worldAbilities:['burn'], catchRate:0.1 },
+  hak_infernoak: { id:'hak_infernoak', codex:5, name:'Infernoak', elements:['Fire','Nature'], rarity:'Exceptional', habitats:[], baseStats:{hp:100,atk:95,def:80,spa:90,spd:75,spd:90}, evolution:null, movesByLevel:[], worldAbilities:['burn','melt_ice'], catchRate:0.01 },
+  hak_stormwing: { id:'hak_stormwing', codex:6, name:'Stormwing', elements:['Water','Air'], rarity:'Rare', habitats:[], baseStats:{hp:75,atk:55,def:70,spa:90,spd:75,spd:85}, evolution:null, movesByLevel:[], worldAbilities:['swim','fly'], catchRate:0.1 },
+  hak_voltiger: { id:'hak_voltiger', codex:7, name:'Voltiger', elements:['Electric'], rarity:'Rare', habitats:[], baseStats:{hp:70,atk:85,def:60,spa:80,spd:65,spd:100}, evolution:null, movesByLevel:[], worldAbilities:['power'], catchRate:0.1 },
+  // wilds
+  hak_weevil: { id:'hak_weevil', codex:8, name:'Weevil', elements:['Bug'], rarity:'Common', habitats:['forest'], baseStats:{hp:40,atk:45,def:35,spa:30,spd:35,spd:40}, evolution:{into:'hak_beetil',level:12}, movesByLevel:[{level:1,move:'tackle'},{level:5,move:'bug_bite'}], worldAbilities:[], catchRate:0.7 },
+  hak_beetil: { id:'hak_beetil', codex:9, name:'Beetil', elements:['Bug'], rarity:'Uncommon', habitats:[], baseStats:{hp:55,atk:65,def:50,spa:40,spd:50,spd:55}, evolution:null, movesByLevel:[], worldAbilities:[], catchRate:0.3 },
+  hak_caterpod: { id:'hak_caterpod', codex:10, name:'Caterpod', elements:['Nature'], rarity:'Common', habitats:['forest'], baseStats:{hp:45,atk:35,def:40,spa:45,spd:45,spd:35}, evolution:{into:'hak_mothbloom',level:10}, movesByLevel:[{level:1,move:'absorb'},{level:5,move:'stun_spore'}], worldAbilities:[], catchRate:0.7 },
+  hak_mothbloom: { id:'hak_mothbloom', codex:11, name:'Mothbloom', elements:['Nature','Air'], rarity:'Uncommon', habitats:[], baseStats:{hp:60,atk:45,def:55,spa:70,spd:65,spd:60}, evolution:null, movesByLevel:[], worldAbilities:['cut'], catchRate:0.25 },
+  hak_sparkrat: { id:'hak_sparkrat', codex:12, name:'Sparkrat', elements:['Electric'], rarity:'Common', habitats:['grassland'], baseStats:{hp:45,atk:55,def:40,spa:40,spd:40,spd:60}, evolution:{into:'hak_shockrat',level:15}, movesByLevel:[{level:1,move:'spark'}], worldAbilities:[], catchRate:0.65 },
+  hak_mudpup: { id:'hak_mudpup', codex:13, name:'Mudpup', elements:['Earth'], rarity:'Common', habitats:['cave','mine'], baseStats:{hp:55,atk:60,def:55,spa:30,spd:40,spd:40}, evolution:{into:'hak_terrapup',level:20}, movesByLevel:[{level:1,move:'tackle'},{level:8,move:'mud_slap'}], worldAbilities:['dig'], catchRate:0.6 },
+  hak_terrapup: { id:'hak_terrapup', codex:14, name:'Terrapup', elements:['Earth','Metal'], rarity:'Uncommon', habitats:[], baseStats:{hp:75,atk:80,def:75,spa:45,spd:60,spd:55}, evolution:null, movesByLevel:[], worldAbilities:['dig','break_rock'], catchRate:0.2 },
+  hak_frostkit: { id:'hak_frostkit', codex:15, name:'Frostkit', elements:['Ice'], rarity:'Uncommon', habitats:['snow'], baseStats:{hp:50,atk:40,def:45,spa:65,spd:55,spd:55}, evolution:{into:'hak_glacifox',level:22}, movesByLevel:[{level:1,move:'powder_snow'},{level:6,move:'chill'}], worldAbilities:['melt_ice'], catchRate:0.5 },
+  hak_glacifox: { id:'hak_glacifox', codex:16, name:'Glacifox', elements:['Ice','Psychic'], rarity:'Rare', habitats:[], baseStats:{hp:70,atk:55,def:65,spa:90,spd:80,spd:85}, evolution:null, movesByLevel:[], worldAbilities:['melt_ice','clear_fog'], catchRate:0.1 },
+};
+// add evolve moves
+function inheritMoves(childId, parentId) {
+  if (!HAKKOS[childId] || !HAKKOS[parentId]) return;
+  if (!HAKKOS[childId].movesByLevel.length) HAKKOS[childId].movesByLevel = HAKKOS[parentId].movesByLevel?.slice() || [];
+}
+inheritMoves('hak_emberoak','hak_pyroak');
+inheritMoves('hak_infernoak','hak_emberoak');
+inheritMoves('hak_stormwing','hak_aquabird');
+inheritMoves('hak_voltiger','hak_shockrat');
+inheritMoves('hak_beetil','hak_weevil');
+inheritMoves('hak_mothbloom','hak_caterpod');
+inheritMoves('hak_shockrat','hak_sparkrat');
+inheritMoves('hak_terrapup','hak_mudpup');
+inheritMoves('hak_glacifox','hak_frostkit');
+
+const MOVES = {
+  tackle: {id:'tackle',name:'Tackle',element:'Normal',category:'Physical',power:40,acc:100,cooldown:0},
+  ember: {id:'ember',name:'Ember',element:'Fire',category:'Special',power:40,acc:100,cooldown:0,status:{effect:'burn',chance:10}},
+  vine_whip: {id:'vine_whip',name:'Vine Whip',element:'Nature',category:'Physical',power:45,acc:95,cooldown:0},
+  water_gun: {id:'water_gun',name:'Water Gun',element:'Water',category:'Special',power:40,acc:100,cooldown:0},
+  gust: {id:'gust',name:'Gust',element:'Air',category:'Special',power:40,acc:100,cooldown:0},
+  spark: {id:'spark',name:'Spark',element:'Electric',category:'Physical',power:40,acc:100,cooldown:0,status:{effect:'paralyze',chance:10}},
+  quick_attack: {id:'quick_attack',name:'Quick Attack',element:'Normal',category:'Physical',power:40,acc:100,cooldown:0,priority:1},
+  absorb: {id:'absorb',name:'Absorb',element:'Nature',category:'Special',power:20,acc:100,cooldown:0,heal:0.5},
+  bug_bite: {id:'bug_bite',name:'Bug Bite',element:'Bug',category:'Physical',power:50,acc:100,cooldown:0},
+  stun_spore: {id:'stun_spore',name:'Stun Spore',element:'Nature',category:'Status',power:0,acc:75,cooldown:2,status:{effect:'paralyze',chance:100}},
+  mud_slap: {id:'mud_slap',name:'Mud-Slap',element:'Earth',category:'Special',power:20,acc:100,cooldown:0,status:{effect:'blind',chance:30}},
+  powder_snow: {id:'powder_snow',name:'Powder Snow',element:'Ice',category:'Special',power:40,acc:100,cooldown:0,status:{effect:'freeze',chance:10}},
+  chill: {id:'chill',name:'Chill',element:'Ice',category:'Status',power:0,acc:90,cooldown:3,status:{effect:'freeze',chance:100}},
+};
+for (let k in MOVES) MOVES[k].id = k;
+
+// ─── game state helpers ─────────────────────────────────────────
+function getCurrentMap() { return maps[globalState.mapId]; }
+function isCollision(x,y) { const m = getCurrentMap(); return m.collision[y]?.[x] ?? 1; }
+function getTile(x,y) { const m = getCurrentMap(); return m.tiles[y]?.[x] ?? 0; }
+
+// ─── overworld entities ─────────────────────────────────────────
+let wildEntities = []; // {x,y, speciesId, state, timer}
+function spawnWilds() {
+  wildEntities = [];
+  const m = getCurrentMap();
+  if (!m.encounters) return;
+  m.encounters.forEach(zone => {
+    const speciesPool = zone.species;
+    // spawn one per 20 tiles in zone, up to 3
+    const count = Math.min(3, Math.floor((zone.area.w*zone.area.h)/15));
+    for (let i=0; i<count; i++) {
+      const sx = zone.area.x + Math.floor(Math.random()*zone.area.w);
+      const sy = zone.area.y + Math.floor(Math.random()*zone.area.h);
+      if (isCollision(sx,sy)) continue;
+      const species = speciesPool[Math.floor(Math.random()*speciesPool.length)];
+      wildEntities.push({ x:sx, y:sy, speciesId:species, state:'idle', timer:0 });
+    }
+  });
+}
+
+// ─── battle manager ─────────────────────────────────────────────
+let battle = null;
+let battleCallback = null; // called when battle ends
+function startBattle(enemyTeam, isWild, onEnd) {
+  battleCallback = onEnd || (()=>{});
+  battle = {
+    isWild,
+    playerTeam: globalState.activeDeck.map(h=> ({...h, currentHp:h.stats.hp, status:null, cooldowns:{}})),
+    enemyTeam: enemyTeam.map(e=> {
+      const species = HAKKOS[e.id];
+      const level = e.level || 5;
+      const stats = calcStats(species, level);
+      return { id:e.id, level, name:species.name, stats, currentHp:stats.hp, maxHp:stats.hp, status:null, cooldowns:{}, moves:getMovesAtLevel(species, level), isWild:isWild };
+    }),
+    playerActiveIndex: 0,
+    enemyActiveIndex: 0,
+    turn: 'player', // 'player' or 'enemy'
+    log: [],
+    state: 'active',
+  };
+  showBattleUI();
+}
+function getMovesAtLevel(species, level) {
+  const moves = [];
+  if (!species.movesByLevel) return [];
+  species.movesByLevel.filter(m=>m.level<=level).forEach(m=> moves.push(MOVES[m.move]));
+  return moves.slice(0,4); // max 4 moves in battle
+}
+function calcStats(species, level) {
+  const b = species.baseStats;
+  return {
+    hp: Math.floor(((b.hp*2)+31)*level/100)+level+10,
+    atk: Math.floor(((b.atk*2)+31)*level/100)+5,
+    def: Math.floor(((b.def*2)+31)*level/100)+5,
+    spa: Math.floor(((b.spa*2)+31)*level/100)+5,
+    spd: Math.floor(((b.spd*2)+31)*level/100)+5,
+    spd: Math.floor(((b.spd*2)+31)*level/100)+5,
+  };
+}
+
+function getPlayerActive() { return battle?.playerTeam[battle.playerActiveIndex]; }
+function getEnemyActive() { return battle?.enemyTeam[battle.enemyActiveIndex]; }
+
+function applyDamage(attacker, defender, move) {
+  const atkStat = move.category==='Physical' ? attacker.stats.atk : attacker.stats.spa;
+  const defStat = move.category==='Physical' ? defender.stats.def : defender.stats.spd;
+  const baseDmg = Math.floor((((2*attacker.level/5+2)*move.power*atkStat/defStat)/50)+2);
+  let dmg = Math.max(1, baseDmg);
+  if (Math.random()<0.0625) dmg = Math.floor(dmg*1.5); // crit
+  defender.currentHp = Math.max(0, defender.currentHp - dmg);
+  return dmg;
+}
+
+function playerAction(actionType, data) {
+  if (!battle || battle.state!=='active' || battle.turn!=='player') return;
+  const active = getPlayerActive();
+  const enemy = getEnemyActive();
+  if (!active || active.currentHp<=0) { switchToNextPlayer(); return; }
+  if (actionType==='move') {
+    const move = data;
+    if (active.cooldowns[move.id] && active.cooldowns[move.id]>0) return;
+    // accuracy check
+    if (move.acc && Math.random()*100 > move.acc) { battle.log.push(`${active.name}'s ${move.name} missed!`); }
+    else {
+      const dmg = applyDamage(active, enemy, move);
+      battle.log.push(`${active.name} used ${move.name} and dealt ${dmg} damage!`);
+      if (move.status && Math.random()*100 < move.status.chance) {
+        applyStatus(enemy, move.status.effect);
+      }
+    }
+    // cooldown
+    if (move.cooldown>0) active.cooldowns[move.id] = move.cooldown;
+    decrementCooldowns(active);
+    checkFaintEnemy();
+    if (battle.state==='active') endTurn();
+  } else if (actionType==='switch') {
+    switchPlayerActive(data);
+    endTurn();
+  } else if (actionType==='item') {
+    useItem(data);
+    endTurn();
+  } else if (actionType==='flee') {
+    if (battle.isWild) {
+      battle.log.push('Got away safely!');
+      endBattle(false);
+    }
+  } else if (actionType==='capture') {
+    if (!battle.isWild) return;
+    const tesseractItem = globalState.inventory.find(i=>i.itemId===data);
+    if (!tesseractItem || tesseractItem.qty<=0) return;
+    tesseractItem.qty--;
+    const chance = captureChance(enemy, data);
+    const success = Math.random()*100 < chance;
+    battle.log.push(`Throw ${ITEMS[data].name}... Capture chance ${Math.floor(chance)}%`);
+    if (success) {
+      battle.log.push(`Captured ${enemy.name}!`);
+      catchHakko(enemy);
+      endBattle(true);
+    } else {
+      battle.log.push('It broke free!');
+      endTurn();
+    }
+  }
+  renderBattle();
+}
+
+function enemyTurn() {
+  const enemy = getEnemyActive();
+  if (!enemy || enemy.currentHp<=0) { switchToNextEnemy(); return; }
+  // simple AI: pick random damaging move
+  const moves = enemy.moves.filter(m=>m.power>0);
+  if (moves.length===0) { battle.log.push(`${enemy.name} does nothing.`); }
+  else {
+    const move = moves[Math.floor(Math.random()*moves.length)];
+    const active = getPlayerActive();
+    if (active && active.currentHp>0) {
+      applyDamage(enemy, active, move);
+      battle.log.push(`${enemy.name} used ${move.name}!`);
+    }
+  }
+  decrementCooldowns(enemy);
+  checkFaintPlayer();
+  if (battle.state==='active') battle.turn='player';
+}
+
+function endTurn() {
+  battle.turn='enemy';
+  renderBattle();
+  setTimeout(()=>{ if (battle && battle.state==='active' && battle.turn==='enemy') enemyTurn(); }, 500);
+}
+function switchPlayerActive(index) {
+  if (index<0 || index>=battle.playerTeam.length) return;
+  battle.playerActiveIndex = index;
+  battle.log.push(`Go, ${getPlayerActive().name}!`);
+}
+function switchToNextPlayer() {
+  const next = battle.playerTeam.findIndex((h,i)=>i!==battle.playerActiveIndex && h.currentHp>0);
+  if (next>=0) switchPlayerActive(next);
+  else { battle.log.push('All your Hakkos have fainted!'); endBattle(false); }
+}
+function switchToNextEnemy() {
+  const next = battle.enemyTeam.findIndex((h,i)=>i!==battle.enemyActiveIndex && h.currentHp>0);
+  if (next>=0) { battle.enemyActiveIndex=next; battle.log.push(`${getEnemyActive().name} enters!`); }
+  else { battle.log.push('Enemy defeated!'); endBattle(true); }
+}
+function checkFaintEnemy() {
+  if (getEnemyActive().currentHp<=0) { battle.log.push(`${getEnemyActive().name} fainted!`); switchToNextEnemy(); }
+}
+function checkFaintPlayer() {
+  if (getPlayerActive().currentHp<=0) { battle.log.push(`${getPlayerActive().name} fainted!`); switchToNextPlayer(); }
+}
+function applyStatus(hakko, effect) {
+  if (hakko.status) return;
+  hakko.status = effect;
+}
+function decrementCooldowns(hakko) {
+  for (let k in hakko.cooldowns) if (hakko.cooldowns[k]>0) hakko.cooldowns[k]--;
+}
+function captureChance(enemy, tesseractId) {
+  const species = HAKKOS[enemy.id];
+  const hpPercent = enemy.currentHp / enemy.maxHp;
+  const statusBonus = enemy.status ? 1.2 : 1.0;
+  const tierMod = ITEMS[tesseractId]?.catchMod || 1.0;
+  const baseRate = species.catchRate || 0.5;
+  const chance = baseRate * (1.5 - hpPercent) * statusBonus * tierMod * 100;
+  return Math.min(95, Math.max(5, chance));
+}
+function catchHakko(enemy) {
+  const hakko = {
+    id: enemy.id, name: enemy.name, level: enemy.level, stats: {...enemy.stats},
+    currentHp: enemy.maxHp, maxHp: enemy.maxHp, moves: enemy.moves.map(m=>m.id),
+    status: null, cooldowns: {}, shiny: false,
+  };
+  // update codex
+  if (!globalState.codex[enemy.id]) globalState.codex[enemy.id] = {seen:true, caught:true};
+  else globalState.codex[enemy.id].caught = true;
+  // add to deck or storage
+  if (globalState.activeDeck.length < 5) {
+    globalState.activeDeck.push(hakko);
+    battle.log.push(`${hakko.name} added to deck!`);
+  } else {
+    globalState.storage.push(hakko);
+    battle.log.push(`${hakko.name} sent to storage.`);
+  }
+}
+function endBattle(playerWon) {
+  if (!battle) return;
+  const wasTrainer = !battle.isWild && battle.enemyTeam[0]?.isWild===false;
+  if (playerWon) {
+    // award experience to active deck
+    const expBase = battle.enemyTeam.reduce((s,e)=>s+e.level*30, 0);
+    const team = globalState.activeDeck;
+    team.forEach(h => {
+      if (h.currentHp>0) {
+        h.exp = (h.exp||0) + Math.floor(expBase/team.length);
+        checkLevelUp(h);
+      }
+    });
+    if (wasTrainer) globalState.money += 100 * battle.enemyTeam.length;
+  }
+  battle = null;
+  hideBattleUI();
+  if (battleCallback) battleCallback(playerWon);
+  spawnWilds(); // reset wilds after battle
+}
+function checkLevelUp(h) {
+  const species = HAKKOS[h.id];
+  while (h.level < 100) {
+    const nextLevelExp = h.level * h.level * 10;
+    if (h.exp >= nextLevelExp) {
+      h.exp -= nextLevelExp;
+      h.level++;
+      // recalc stats
+      const newStats = calcStats(species, h.level);
+      h.stats = newStats;
+      h.maxHp = newStats.hp;
+      h.currentHp = newStats.hp;
+      // learn moves
+      if (species.movesByLevel) {
+        species.movesByLevel.filter(m=>m.level===h.level).forEach(m=> {
+          if (!h.moves.includes(m.move) && h.moves.length<4) h.moves.push(m.move);
+        });
+      }
+      // evolution check
+      if (species.evolution && species.evolution.level && h.level >= species.evolution.level) {
+        if (h.id === species.id) { // still base form
+          evolveHakko(h);
+        }
+      }
+    } else break;
+  }
+}
+function evolveHakko(h) {
+  const species = HAKKOS[h.id];
+  if (!species.evolution?.into) return;
+  const evoId = species.evolution.into;
+  const evoSpecies = HAKKOS[evoId];
+  if (!evoSpecies) return;
+  // set new data
+  h.id = evoId;
+  h.name = evoSpecies.name;
+  // keep moves but learn new if any
+  // stats recalc already done on level up
+  globalState.codex[evoId] = {seen:true, caught:true};
+}
+function useItem(itemId) {
+  const item = ITEMS[itemId];
+  const active = getPlayerActive();
+  if (!active) return;
+  const inv = globalState.inventory.find(i=>i.itemId===itemId);
+  if (!inv || inv.qty<=0) return;
+  if (item.revive && active.currentHp<=0) {
+    active.currentHp = Math.floor(active.maxHp*0.5);
+    inv.qty--;
+    battle.log.push(`Used ${item.name} on ${active.name}!`);
+  } else if (item.healFlat) {
+    const heal = Math.min(active.maxHp - active.currentHp, item.healFlat);
+    active.currentHp += heal;
+    inv.qty--;
+    battle.log.push(`Used ${item.name}, healed ${heal} HP.`);
+  }
+}
+
+// ─── renderer ───────────────────────────────────────────────────
+function drawWorld() {
+  ctx.clearRect(0,0,CANVAS_W,CANVAS_H);
+  const map = getCurrentMap();
+  const camX = Math.max(0, Math.min(globalState.playerX - Math.floor(VIEW_W/2), map.w-VIEW_W));
+  const camY = Math.max(0, Math.min(globalState.playerY - Math.floor(VIEW_H/2), map.h-VIEW_H));
+  // draw tiles
+  for (let y=0; y<VIEW_H; y++) {
+    for (let x=0; x<VIEW_W; x++) {
+      const tileX = camX + x, tileY = camY + y;
+      const tile = getTile(tileX, tileY);
+      const col = isCollision(tileX, tileY) ? '#444' : '#3a3';
+      ctx.fillStyle = col;
+      ctx.fillRect(x*TILE_SIZE, y*TILE_SIZE, TILE_SIZE, TILE_SIZE);
+    }
+  }
+  // draw wilds
+  wildEntities.forEach(e => {
+    const sx = (e.x - camX)*TILE_SIZE, sy = (e.y - camY)*TILE_SIZE;
+    ctx.fillStyle = HAKKOS[e.speciesId]?.normalPalette || '#f0f';
+    ctx.fillRect(sx+4, sy+4, TILE_SIZE-8, TILE_SIZE-8);
+  });
+  // draw player
+  const px = (globalState.playerX - camX)*TILE_SIZE, py = (globalState.playerY - camY)*TILE_SIZE;
+  ctx.fillStyle = '#f80';
+  ctx.fillRect(px+2, py+2, TILE_SIZE-4, TILE_SIZE-4);
+  // HUD
+  ctx.fillStyle = '#fff';
+  ctx.font = '12px monospace';
+  ctx.fillText(`${map.name}`, 10, 20);
+  ctx.fillText(`Gold: ${globalState.money}  Badges: ${globalState.badges.length}`, 10, 36);
+}
+function renderBattle() {
+  if (!battle) return;
+  // HTML overlay battle UI
+  const el = document.getElementById('battle-ui');
+  if (!el) return;
+  const player = getPlayerActive(), enemy = getEnemyActive();
+  document.getElementById('battle-player-name').innerText = player?.name||'???';
+  document.getElementById('battle-player-hp').innerText = `${player?.currentHp||0}/${player?.maxHp||0}`;
+  document.getElementById('battle-enemy-name').innerText = enemy?.name||'???';
+  document.getElementById('battle-enemy-hp').innerText = `${enemy?.currentHp||0}/${enemy?.maxHp||0}`;
+  document.getElementById('battle-log').innerText = battle.log.slice(-3).join('\n');
+  const movesDiv = document.getElementById('battle-moves');
+  movesDiv.innerHTML = '';
+  if (player && player.moves) {
+    player.moves.forEach(mid => {
+      const move = MOVES[mid];
+      const btn = document.createElement('button');
+      btn.innerText = move.name;
+      if (player.cooldowns?.[move.id]>0) btn.disabled = true;
+      btn.onclick = ()=> playerAction('move', move);
+      movesDiv.appendChild(btn);
+    });
+  }
+}
+function showBattleUI() {
+  document.getElementById('battle-overlay').style.display = 'flex';
+  renderBattle();
+}
+function hideBattleUI() {
+  document.getElementById('battle-overlay').style.display = 'none';
+}
+
+// ─── UI overlay setup ───────────────────────────────────────────
+function buildUI() {
+  overlay.innerHTML = `
+    <div id="title-screen" class="menu-panel">
+      <h2>Hakko</h2><p>Project Tesseract</p>
+      <button onclick="newGame()">New Game</button>
+      <button onclick="showLoadScreen()">Load Game</button>
+    </div>
+    <div id="load-screen" class="menu-panel hidden">
+      <h2>Select Save</h2>
+      <div id="save-slots"></div>
+    </div>
+    <div id="battle-overlay" class="menu-panel hidden" style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:400px;">
+      <div style="display:flex; justify-content:space-between;">
+        <div><b id="battle-enemy-name"></b><br><span id="battle-enemy-hp"></span></div>
+        <div><b id="battle-player-name"></b><br><span id="battle-player-hp"></span></div>
+      </div>
+      <div id="battle-log" style="background:#111; color:#0f0; min-height:50px; margin:10px 0; padding:5px;"></div>
+      <div id="battle-moves" class="flex"></div>
+      <div class="flex" style="justify-content:center;">
+        <button onclick="playerAction('switch', prompt('Switch to index (0-4):')|0)">Switch</button>
+        <button onclick="playerAction('item','heal_food')">Use Heal Food</button>
+        ${battle?.isWild? `<button onclick="playerAction('flee')">Flee</button><button onclick="playerAction('capture','basic_tesseract')">Capture</button>`:''}
+      </div>
+    </div>
+    <div id="dialogue-ui" class="menu-panel hidden" style="position:absolute; bottom:20px; width:90%;">
+      <p id="dialogue-text"></p>
+      <button id="dialogue-next">Next</button>
+    </div>
+  `;
+}
+buildUI();
+
+// ─── dialogue system ────────────────────────────────────────────
+function showDialogue(lines, callback) {
+  const box = dialogueBox;
+  box.style.display = 'block';
+  let idx = 0;
+  function next() {
+    if (idx < lines.length) {
+      box.innerHTML = `<p>${lines[idx]}</p><button id="dial-next">Next</button>`;
+      document.getElementById('dial-next').onclick = ()=> { idx++; next(); };
+    } else {
+      box.style.display = 'none';
+      if (callback) callback();
+    }
+  }
+  next();
+}
+
+// ─── NPC interactions ───────────────────────────────────────────
+function interactNPC() {
+  const map = getCurrentMap();
+  const px = globalState.playerX, py = globalState.playerY;
+  const npc = map.npcs?.find(n => Math.abs(n.x-px)<=1 && Math.abs(n.y-py)<=1);
+  if (!npc) return;
+  if (npc.script === 'mom_greet') {
+    showDialogue([
+      "Mom: Good morning, Coal! Today you're old enough to become a Hakko Handler!",
+      "Go see Professor Sage in the lab to the east."
+    ]);
+  } else if (npc.script === 'researcher_intro') {
+    if (!globalState.flags.starterChosen) {
+      showDialogue([
+        "Prof. Sage: Welcome, Coal! It's time to choose your first Hakko.",
+        "I have three here: Pyroak (Fire/Nature), Aquabird (Water/Air), and Shockrat (Electric)."
+      ], ()=>{
+        document.getElementById('starter-select').classList.remove('hidden');
+      });
+    } else {
+      showDialogue(["Prof. Sage: Good luck on your journey!"]);
+    }
+  } else if (npc.script === 'shop') {
+    showShop();
+  } else if (npc.script === 'vet') {
+    healTeam();
+    showDialogue(["Nurse Joy: Your Hakkos are fully healed!"]);
+  } else if (npc.script === 'arena_prompt') {
+    showDialogue(["Arena Guard: Do you want to challenge the Verdant Arena?", "Boss: Flora (Nature specialist)"], ()=>{
+      if (confirm("Challenge Flora? (3 Hakkos)")) {
+        const bossTeam = [
+          { id:'hak_caterpod', level:8 },
+          { id:'hak_mothbloom', level:10 },
+          { id:'hak_weevil', level:9 },
+        ];
+        startBattle(bossTeam, false, (won)=>{
+          if (won) {
+            globalState.badges.push('verdant');
+            globalState.flags.arena1Done = true;
+            showDialogue(["You won the Verdant Badge!"]);
+          }
+        });
+      }
+    });
+  }
+}
+
+function showShop() {
+  let html = '<h2>Shop</h2><p>Your money: '+globalState.money+'</p>';
+  const items = [
+    {id:'basic_tesseract', price:50},
+    {id:'heal_food', price:30},
+    {id:'status_cure', price:40},
+  ];
+  items.forEach(it=>{
+    html += `<button onclick="buyItem('${it.id}',${it.price})">Buy ${ITEMS[it.id].name} (${it.price}g)</button><br>`;
+  });
+  overlay.innerHTML = `<div class="menu-panel">${html}<button onclick="closeOverlay()">Close</button></div>`;
+  overlay.style.display = 'flex';
+}
+function buyItem(id, price) {
+  if (globalState.money >= price) {
+    globalState.money -= price;
+    const inv = globalState.inventory.find(i=>i.itemId===id);
+    if (inv) inv.qty++;
+    else globalState.inventory.push({itemId:id, qty:1});
+    showShop(); // refresh
+  } else alert('Not enough money.');
+}
+
+// ─── heal team ──────────────────────────────────────────────────
+function healTeam() {
+  globalState.activeDeck.forEach(h=> { h.currentHp = h.maxHp; h.status = null; });
+  globalState.storage.forEach(h=> { h.currentHp = h.maxHp; h.status = null; });
+}
+
+// ─── starter selection ──────────────────────────────────────────
+function chooseStarter(id) {
+  const species = HAKKOS[id];
+  const starter = {
+    id, name:species.name, level:5,
+    stats: calcStats(species, 5),
+    currentHp: 0, maxHp: 0,
+    moves: species.movesByLevel.filter(m=>m.level<=5).map(m=>m.move),
+    exp: 0, status:null, cooldowns:{}, shiny:false,
+  };
+  starter.maxHp = starter.stats.hp;
+  starter.currentHp = starter.maxHp;
+  globalState.activeDeck = [starter];
+  globalState.flags.starterChosen = true;
+  globalState.codex[id] = {seen:true, caught:true};
+  document.getElementById('starter-select').classList.add('hidden');
+  closeOverlay();
+  showDialogue([`You chose ${starter.name}! Good luck!`]);
+}
+// add starter UI
+document.body.insertAdjacentHTML('beforeend', `
+  <div id="starter-select" class="menu-panel hidden" style="position:absolute; top:20%; left:50%; transform:translateX(-50%);">
+    <h3>Choose your starter</h3>
+    <button onclick="chooseStarter('hak_pyroak')">Pyroak (Fire/Nature)</button>
+    <button onclick="chooseStarter('hak_aquabird')">Aquabird (Water/Air)</button>
+    <button onclick="chooseStarter('hak_shockrat')">Shockrat (Electric)</button>
+  </div>
+`);
+
+// ─── input ──────────────────────────────────────────────────────
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (e.key === 'Escape') togglePause();
+  if (e.key === 'Enter' || e.key === ' ') {
+    if (dialogueBox.style.display === 'block') {
+      const btn = document.getElementById('dial-next');
+      if (btn) btn.click();
+    }
+    e.preventDefault();
+  }
+});
+window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+function togglePause() {
+  // simple pause not implemented
+}
+
+// ─── game loop ──────────────────────────────────────────────────
+let lastTime = 0;
+function gameLoop(timestamp) {
+  requestAnimationFrame(gameLoop);
+  if (!lastTime) lastTime = timestamp;
+  const dt = (timestamp - lastTime)/1000;
+  lastTime = timestamp;
+
+  if (battle) return; // no movement during battle
+
+  // day/night
+  globalState.currentTime += dt;
+  const cycleLength = globalState.isNight ? globalState.nightLength : globalState.dayLength;
+  while (globalState.currentTime >= cycleLength) {
+    globalState.currentTime -= cycleLength;
+    globalState.isNight = !globalState.isNight;
+  }
+
+  // player movement
+  let dx = 0, dy = 0;
+  if (keys['ArrowUp'] || keys['w']) dy = -1;
+  if (keys['ArrowDown'] || keys['s']) dy = 1;
+  if (keys['ArrowLeft'] || keys['a']) dx = -1;
+  if (keys['ArrowRight'] || keys['d']) dx = 1;
+  if (dx !== 0 || dy !== 0) {
+    const newX = globalState.playerX + dx;
+    const newY = globalState.playerY + dy;
+    if (!isCollision(newX, newY)) {
+      globalState.playerX = newX;
+      globalState.playerY = newY;
+      // check for wild encounter
+      const wild = wildEntities.find(e => e.x===newX && e.y===newY);
+      if (wild) {
+        const species = HAKKOS[wild.speciesId];
+        const level = Math.floor(Math.random()*3)+2;
+        startBattle([{id:wild.speciesId, level}], true, (won)=>{
+          if (won) wildEntities = wildEntities.filter(e=>e!==wild);
+        });
+      }
+      // check map exit
+      const map = getCurrentMap();
+      const exit = map.exits?.[dx===1?'right':dx===-1?'left':dy===1?'down':'up'];
+      if (exit) changeMap(exit.map, exit.x, exit.y);
+    }
+  }
+  // interact
+  if (keys['e'] || keys['Enter']) {
+    interactNPC();
+  }
+  drawWorld();
+}
+function changeMap(newMapId, x, y) {
+  globalState.mapId = newMapId;
+  globalState.playerX = x;
+  globalState.playerY = y;
+  spawnWilds();
+}
+
+// ─── save/load in memory ────────────────────────────────────────
+const saveSlots = [null, null, null];
+function showLoadScreen() {
+  overlay.innerHTML = `<div class="menu-panel"><h2>Load Game</h2>`+
+    saveSlots.map((s,i)=> `<button onclick="loadSlot(${i})">Slot ${i+1} ${s?': '+s.playerName:'Empty'}</button>`).join('<br>')+
+    `<button onclick="showTitle()">Back</button></div>`;
+  overlay.style.display = 'flex';
+}
+function newGame() {
+  globalState = JSON.parse(JSON.stringify({
+    mapId:'starter_village', playerX:10, playerY:10, playerDir:2,
+    activeDeck:[], storage:[], inventory:[...defaultInv()], money:200, badges:[], codex:{},
+    scholarRank:0, scholarScore:0, quests:{}, dayTimer:600, nightLength:300,
+    currentTime:0, isNight:false, flags:{}, playerName:'Coal'
+  }));
+  spawnWilds();
+  overlay.style.display = 'none';
+  dialogueBox.style.display = 'none';
+  startGameLoop();
+}
+function defaultInv() { return [{itemId:'basic_tesseract',qty:10},{itemId:'heal_food',qty:5},{itemId:'status_cure',qty:2}]; }
+function saveSlot(index) {
+  saveSlots[index] = JSON.parse(JSON.stringify(globalState));
+  showLoadScreen();
+}
+function loadSlot(index) {
+  if (!saveSlots[index]) return;
+  globalState = JSON.parse(JSON.stringify(saveSlots[index]));
+  spawnWilds();
+  overlay.style.display = 'none';
+  dialogueBox.style.display = 'none';
+  startGameLoop();
+}
+function showTitle() {
+  overlay.innerHTML = `<div class="menu-panel"><h2>Hakko</h2><button onclick="newGame()">New Game</button><button onclick="showLoadScreen()">Load Game</button></div>`;
+  overlay.style.display = 'flex';
+}
+function closeOverlay() { overlay.style.display = 'none'; }
+
+// initial setup
+showTitle();
+spawnWilds();
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
