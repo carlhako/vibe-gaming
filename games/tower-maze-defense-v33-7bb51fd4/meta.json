@@ -1,0 +1,11 @@
+{
+  "game_id": "7bb51fd44209436dbb9e235a6e49cf15",
+  "parent_game_id": "b05ed649ebcc4858b3147f629c609cd3",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v33)",
+  "description": "A tower-defense maze game with procedurally generated branching paths. Place attack, buff, and economy towers to defend against waves of enemies. Now with 1\u00d7-speed money-note animation that streams bills upward one at a time.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-21T06:46:40.753604Z",
+  "version": 1,
+  "prompt": "update the money animation at the end of the wave so if the speed is set to 2x or 5x it is not sped up. this animation always happens at 1x. Change the animation as well so the notes fly up in the air 1 at a time at a fast rate instead of them all exploding out at the same time. It may take a few seconds to complete if its millions of dollars."
+}
