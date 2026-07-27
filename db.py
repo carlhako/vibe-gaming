@@ -268,6 +268,7 @@ _ADDED_COLUMNS = {
         ("input_tokens", "INTEGER"), ("output_tokens", "INTEGER"),
         ("ip_address", "TEXT"), ("cached_tokens", "INTEGER"),
         ("answer", "TEXT"),
+        ("git_push_status", "TEXT"), ("git_push_error", "TEXT"),
     ],
     "generation_attempts": [
         ("duration_seconds", "REAL"), ("raw_response", "TEXT"),
@@ -544,6 +545,7 @@ def get_generation_history(limit=20, offset=0, kind=None, conn=None):
                gr.error, gr.model, gr.effort, gr.attempts,
                gr.input_tokens, gr.output_tokens, gr.tokens_used, gr.cached_tokens,
                gr.duration_seconds, gr.answer,
+               gr.git_push_status, gr.git_push_error,
                gr.source_game_id,
                wg.title AS result_title, wg.slug AS result_slug,
                u.username AS creator_username,
@@ -827,12 +829,15 @@ def update_generation_request(job_id, status=None, result_game_id=None, attempts
                                model=None, effort=None, duration_seconds=None,
                                input_tokens=None, output_tokens=None,
                                tokens_used=None, cached_tokens=None, error=None,
-                               answer=None, conn=None):
+                               answer=None, git_push_status=None, git_push_error=None,
+                               conn=None):
     """Sparse update: only columns explicitly passed (non-None) are touched,
     except `error` which can be intentionally cleared by passing an empty
     string — pass None to leave it alone. `answer` is only ever set by
     kind='ask' jobs (the sanitized HTML reply); every other kind leaves it
-    NULL forever."""
+    NULL forever. `git_push_status`/`git_push_error` are only ever set by
+    job_runner's best-effort git_sync call, and stay NULL for jobs where
+    git_sync wasn't enabled."""
     c = _c(conn)
     fields = {"updated_at": _now()}
     if status is not None:
@@ -859,6 +864,10 @@ def update_generation_request(job_id, status=None, result_game_id=None, attempts
         fields["error"] = error
     if answer is not None:
         fields["answer"] = answer
+    if git_push_status is not None:
+        fields["git_push_status"] = git_push_status
+    if git_push_error is not None:
+        fields["git_push_error"] = git_push_error
     set_clause = ", ".join(f"{k}=?" for k in fields)
     c.execute(
         f"UPDATE generation_requests SET {set_clause} WHERE job_id=?",

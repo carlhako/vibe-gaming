@@ -17,6 +17,8 @@ subprocess argv element — never written into .git/config, so
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import os
 import subprocess
 from pathlib import Path
@@ -27,6 +29,29 @@ REPO_ROOT = Path(__file__).resolve().parent
 
 class GitSyncError(Exception):
     """Raised when a git operation needed to sync a game to GitHub fails."""
+
+
+@contextlib.contextmanager
+def _push_lock():
+    """Hold an exclusive, cross-process lock around a push_game() call so
+    two jobs finishing at the same time (two gunicorn worker processes, or
+    two poll threads) never interleave their git add/commit/push. flock
+    (not threading.Lock) is what actually serializes them: it's held by
+    the OS per open file descriptor and blocks across process boundaries,
+    not just threads within one process. The path is computed here (not
+    cached at import time) so it always tracks REPO_ROOT, including tests
+    that monkeypatch it to an isolated tmp dir."""
+    lock_path = REPO_ROOT / ".git" / "vibegames-push.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def is_enabled(config: dict) -> bool:
@@ -105,10 +130,19 @@ def push_current_branch(token: str | None = None) -> None:
 def push_game(game_dir: Path, commit_message: str, config: dict) -> None:
     """git add + commit + push `game_dir` (relative to the repo root) with
     `commit_message`. No-op (not an error) if there is nothing to commit.
-    Raises GitSyncError on any git failure."""
+    Raises GitSyncError on any git failure.
+
+    Holds a cross-process lock for the whole add+commit+push sequence -
+    without it, two jobs finishing around the same time (two gunicorn
+    worker processes, or two poll threads) can race: a concurrent `git
+    commit` collides on `.git/index.lock`, or two pushes land back to
+    back and the second is rejected as non-fast-forward. Either failure
+    was previously swallowed by job_runner's best-effort except-and-log,
+    so the push silently never happened."""
     if not is_enabled(config):
         return
 
     token = require_token()
-    if stage_and_commit(game_dir, commit_message):
-        push_current_branch(token)
+    with _push_lock():
+        if stage_and_commit(game_dir, commit_message):
+            push_current_branch(token)

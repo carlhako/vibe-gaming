@@ -1,3 +1,6 @@
+import subprocess
+import threading
+import time
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -158,3 +161,77 @@ def test_push_game_skips_push_when_nothing_to_commit(monkeypatch, repo_root):
     # only "git add" ran - no commit, no push
     called_prefixes = [c.args[0][:2] for c in run.call_args_list]
     assert called_prefixes == [["git", "add"]]
+
+
+def test_push_game_serializes_concurrent_calls(monkeypatch, tmp_path):
+    """Two jobs finishing at the same time (two gunicorn worker processes,
+    or two poll threads in one) must never interleave their git add/commit
+    /push - that's exactly the race that used to make a push silently fail
+    (a `.git/index.lock` collision, or a non-fast-forward push rejection)
+    with only a swallowed exception and a print() to show for it. Runs
+    against a real local git repo (no network) so stage_and_commit's git
+    calls are real; push_current_branch is stubbed out since it would
+    otherwise need a real GitHub remote."""
+    repo = tmp_path
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    (repo / "games").mkdir()
+    (repo / "games" / "seed").mkdir()
+    (repo / "games" / "seed" / "index.html").write_text("seed")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True)
+
+    monkeypatch.setattr(git_sync, "REPO_ROOT", repo)
+    monkeypatch.setenv("GITHUB_PUSH_TOKEN", "secret123")
+    monkeypatch.setattr(git_sync, "push_current_branch", lambda token=None: None)
+
+    real_stage_and_commit = git_sync.stage_and_commit
+    concurrency_lock = threading.Lock()
+    concurrent = 0
+    max_concurrent = 0
+
+    def tracked_stage_and_commit(game_dir, commit_message):
+        nonlocal concurrent, max_concurrent
+        with concurrency_lock:
+            concurrent += 1
+            max_concurrent = max(max_concurrent, concurrent)
+        time.sleep(0.05)  # widen the window a real race would need
+        try:
+            return real_stage_and_commit(game_dir, commit_message)
+        finally:
+            with concurrency_lock:
+                concurrent -= 1
+
+    monkeypatch.setattr(git_sync, "stage_and_commit", tracked_stage_and_commit)
+
+    for i in (1, 2):
+        d = repo / "games" / f"game{i}"
+        d.mkdir()
+        (d / "index.html").write_text(f"game {i}")
+
+    errors = []
+
+    def run(i):
+        try:
+            git_sync.push_game(
+                repo / "games" / f"game{i}", f"add game {i}",
+                {"git_sync": {"enabled": True}},
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run, args=(i,)) for i in (1, 2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors
+    assert max_concurrent == 1  # the flock serialized the two push_game calls
+
+    log = subprocess.run(
+        ["git", "log", "--oneline"], cwd=repo, capture_output=True, text=True, check=True,
+    )
+    assert "add game 1" in log.stdout
+    assert "add game 2" in log.stdout

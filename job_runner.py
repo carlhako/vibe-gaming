@@ -130,12 +130,20 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
         # Best-effort: push the finished game directory to GitHub. Never
         # lets a git failure (bad token, network blip, GitHub outage) turn
         # a successful generation/enhancement into a failed job — the game
-        # already generated and smoke-tested fine.
+        # already generated and smoke-tested fine. Recorded on the job row
+        # (not just printed) because a print()-only failure is easy to miss
+        # in production — see git_sync.py's push_game() docstring for the
+        # concurrent-push race this used to silently eat.
         if job["kind"] in ("create", "enhance", "explode") and git_sync.is_enabled(config):
             try:
                 git_sync.push_game(games_dir / result["slug"], job["prompt"], config)
             except Exception as exc:  # noqa: BLE001 - best-effort push must never take the worker thread down
                 print(f"job_runner: git push failed for job {job_id}: {exc}\n{traceback.format_exc()}")
+                db.update_generation_request(
+                    job_id, git_push_status="failed", git_push_error=str(exc), conn=conn,
+                )
+            else:
+                db.update_generation_request(job_id, git_push_status="pushed", conn=conn)
     else:
         db.update_generation_request(
             job_id, status="failed", attempts=result["attempts"], model=result["model"],
