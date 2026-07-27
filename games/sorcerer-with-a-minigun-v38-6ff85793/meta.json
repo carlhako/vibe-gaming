@@ -1,0 +1,12 @@
+{
+  "game_id": "6ff857930cb8455aba0c35e9bca0cf49",
+  "parent_game_id": "b56558085bb8414983404d4bc62f3d70",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v38)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "admin",
+  "created_at": "2026-07-26T10:34:55.761972Z",
+  "version": 1,
+  "prompt": "explode: split single-file game into multi-file modules (behavior-preserving)",
+  "format": "multi-file"
+}
