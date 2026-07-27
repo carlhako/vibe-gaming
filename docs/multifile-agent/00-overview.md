@@ -114,19 +114,26 @@ be forced to read all of it either.** Two mechanisms enforce this:
 5. **[Sprint 5](05-migration-and-pilot.md) — Explode + pilot on Sorcerer With A Minigun.**
    The AI-assisted single-file → multi-file split, dual-format enhance, and a
    measured token-delta comparison on the real problem game.
-6. **[Sprint 6](06-streaming-and-polish.md) — Job controls + module-size
-   hygiene (optional).** Cancel-job and live per-job cost; the module-size
-   soft lint is done. Token-level streaming and targeted diff edits were
-   split out to Sprint 8.
-7. **[Sprint 7](07-context-vs-cache.md) — Context pruning vs. prompt
-   caching.** Sprint 6's pruning mutates already-sent messages, which breaks
-   DeepSeek's prefix cache; a real read-heavy enhance lost 42% of its input
-   tokens to that. Measure which side is winning before tuning either, and
-   price cached tokens at the cached rate.
-8. **[Sprint 8](08-targeted-diff-edits.md) — Streaming + targeted diff
-   edits (optional).** Token-level SSE streaming for a true live feel, and
-   (only once whole-module rewrites are proven, and once Sprint 7 says the
-   output side is worth optimizing) a `replace_in_file` tool.
+6. **[Sprint 6](06-streaming-and-polish.md) — Streaming + job controls +
+   module-size hygiene (optional).** Token-level SSE streaming, cancel-job
+   and live per-job cost; the module-size soft lint is done.
+7. **[Sprint 6a](06a-cache-snapshot-and-edits.md) — Cache discipline,
+   source snapshot, targeted edits.** Runs next, ahead of the rest of
+   Sprint 6. Sprint 6's context pruning mutates already-sent messages,
+   which collapses DeepSeek's prefix cache — and a cache hit costs
+   **1/120th** of a miss, so cache-miss input turned out to be 68-85% of
+   what an enhance actually costs while cached input was under 2%.
+   Measured across three production enhances 2026-07-27. Make the
+   conversation append-only, hand the model the whole source up front in an
+   immutable block instead of making it read the same 80KB module four
+   times, add an exact-match `edit_file` so a small change stops costing a
+   32K-token whole-module rewrite, and price cached tokens at the cached
+   rate so any of it can be verified.
+
+   *(This absorbed the former Sprint 7 — "context pruning vs. prompt
+   caching", whose measurement it carried out — and the former Sprint 8's
+   `replace_in_file` item. Both files are deleted; Sprint 8's token-level
+   streaming item went back to Sprint 6, where it started.)*
 
 ## What this initiative does NOT change
 

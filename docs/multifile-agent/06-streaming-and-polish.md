@@ -11,23 +11,43 @@ miscalibration — see
 [05-migration-and-pilot.md's "Sprint 6 step 1" section](05-migration-and-pilot.md#sprint-6-step-1-token-pruning-fixes--a-new-open-reliability-bug-2026-07-26)
 for the full writeup, including the subsequent stub-write root-cause and
 fix (step 2) and the explode reliability work that followed it. That work
-is done; this sprint is now scoped down to items B and D below. Token-level
-streaming (formerly item A) and targeted diff edits (formerly item C) are
-both deferred to [08-targeted-diff-edits.md](08-targeted-diff-edits.md)
-(renumbered from 07 on 2026-07-27, when
-[07-context-vs-cache.md](07-context-vs-cache.md) took that slot)
-until B and D are fully working — streaming in particular has real
-gunicorn worker-occupancy tradeoffs worth deciding on its own, separate
-from these smaller, additive items.
+is done; this sprint is now scoped down to items A, B and D below.
 
-**Progress: D done, B not started (2026-07-26).** D's soft module-size
-lint landed and is covered below. **Next up: item B (job controls —
-cancel + live per-job cost).** Neither cancellation nor a `cancelled`
-job status exist yet; `agent_chat.js` still has no renderer for the
-`usage` event role (it silently skips it), even though the event itself
-already carries running token totals per call.
+**Item C (targeted diff edits) has left this sprint for good.** It was
+briefly split out to a Sprint 8 alongside item A, then absorbed into
+[06a-cache-snapshot-and-edits.md](06a-cache-snapshot-and-edits.md) as
+`edit_file` — its cost case was settled by 6a's measurement, which found
+output tokens cost 240x a cache-hit input token. Item A came back here
+when that Sprint 8 was deleted; this file's name was always about
+streaming, and streaming's real gunicorn worker-occupancy tradeoff is
+worth deciding on its own, separate from these smaller additive items.
+
+**Progress: D done; A and B not started (2026-07-27).** D's soft
+module-size lint landed and is covered below. **Next up: Sprint 6a, then
+item B (job controls — cancel + live per-job cost).** Neither
+cancellation nor a `cancelled` job status exist yet; `agent_chat.js`
+still has no renderer for the `usage` event role (it silently skips it),
+even though the event itself already carries running token totals per
+call. Note that 6a's step 0 (pricing cached tokens at the cached rate)
+is a prerequisite for B's live cost readout being correct — without it
+the pane would display the same ~4x overstatement the admin History tab
+does today.
 
 ## Candidate items
+
+### A. Token-level streaming (true live feel)
+
+- v1 shows steps as they *complete* (per-turn granularity via polling). To
+  get the token-by-token Claude-chat feel, switch the agent's model calls to
+  DeepSeek's streaming API (`stream=True`) and forward partial tokens.
+- Transport: this is where **SSE** (Server-Sent Events) earns its keep —
+  a `GET /api/jobs/<job_id>/stream` that pushes deltas. Weigh against
+  gunicorn worker occupancy (long-lived connections tie up a sync worker);
+  may want a dedicated async worker or a cap on concurrent streams. Keep the
+  polling endpoint as the durable fallback and for replay-on-reload.
+- Acceptance: tokens appear progressively in the conversation pane; polling
+  fallback and reload-replay still work; no worker-starvation regression
+  under `gunicorn --workers N`.
 
 ### B. Job controls
 
@@ -73,6 +93,8 @@ transcript.
 
 ## Acceptance criteria (per item, if taken)
 
+- Streaming: tokens render progressively, polling replay still works, and no
+  worker starvation under `gunicorn --workers N`.
 - Cancel: an in-flight job stops within one step and leaves no partial game
   directory.
 - Per-job cost: running token/cost totals visible in the chat pane, updating

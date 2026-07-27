@@ -24,6 +24,12 @@
   const adminToken = dialog.dataset.adminToken || "";
   const inputCostPerMillion = parseFloat(dialog.dataset.inputCostPerMillion) || 0;
   const outputCostPerMillion = parseFloat(dialog.dataset.outputCostPerMillion) || 0;
+  // Unset (or unparseable) falls back to the fresh input rate, matching
+  // app.py's _attach_token_costs, so this readout and the History row agree.
+  const parsedCachedCost = parseFloat(dialog.dataset.cachedInputCostPerMillion);
+  const cachedInputCostPerMillion = Number.isFinite(parsedCachedCost)
+    ? parsedCachedCost
+    : inputCostPerMillion;
 
   const TOOL_ICON = {
     read_map: "📖",
@@ -51,8 +57,15 @@
     if (pinned) log.scrollTop = log.scrollHeight;
   }
 
-  function cost(inputTokens, outputTokens) {
-    return (inputTokens || 0) / 1e6 * inputCostPerMillion +
+  // Input bills at two rates. cachedTokens is a SLICE of inputTokens, not an
+  // addition to it — DeepSeek's prefix cache charges a byte-identical resent
+  // prefix at 1/120th of a fresh token on v4-pro — so billing the whole input
+  // at the fresh rate overstated a cache-heavy run ~4x (Sprint 6a).
+  function cost(inputTokens, outputTokens, cachedTokens) {
+    const cached = Math.min(cachedTokens || 0, inputTokens || 0);
+    const fresh = (inputTokens || 0) - cached;
+    return fresh / 1e6 * inputCostPerMillion +
+           cached / 1e6 * cachedInputCostPerMillion +
            (outputTokens || 0) / 1e6 * outputCostPerMillion;
   }
 
@@ -77,7 +90,7 @@
       `${(data.output_tokens || 0).toLocaleString()} out`,
       `${total.toLocaleString()} total`,
     ];
-    const usd = cost(data.input_tokens, data.output_tokens);
+    const usd = cost(data.input_tokens, data.output_tokens, data.cached_tokens);
     if (usd > 0) parts.push(`$${usd.toFixed(4)}`);
     usageEl.textContent = parts.join(" · ");
   }

@@ -240,10 +240,15 @@
           {{ pager(history_pager) }}
           {% if history_rows %}
           <p class="form-hint">
-            Estimated cost assumes ${{ '%.2f'|format(input_cost_per_million) }} / 1M input
-            tokens and ${{ '%.2f'|format(output_cost_per_million) }} / 1M output tokens
-            (<code>DEEPSEEK_INPUT_COST_PER_MILLION</code> / <code>DEEPSEEK_OUTPUT_COST_PER_MILLION</code>
-            in <code>.env</code>).
+            Estimated cost assumes ${{ '%.2f'|format(input_cost_per_million) }} / 1M fresh
+            input tokens, ${{ '%.4f'|format(cached_input_cost_per_million) }} / 1M cached
+            input tokens and ${{ '%.2f'|format(output_cost_per_million) }} / 1M output tokens
+            (<code>DEEPSEEK_INPUT_COST_PER_MILLION</code> /
+            <code>DEEPSEEK_CACHED_INPUT_COST_PER_MILLION</code> /
+            <code>DEEPSEEK_OUTPUT_COST_PER_MILLION</code> in <code>.env</code>).
+            Cached input is the slice of a request DeepSeek served from its prefix
+            cache — for v4-pro that bills at 1/120th of a fresh token, so a long
+            agent run costs far less than its raw input count suggests.
           </p>
           <div class="table-scroll">
           <table class="stats-table">
@@ -259,8 +264,9 @@
                 <td>{{ r.attempts or '—' }}</td>
                 <td>{{ r.model or '—' }}{% if r.effort %} <span class="form-hint">({{ r.effort }})</span>{% endif %}</td>
                 <td>{{ '%.1fs'|format(r.duration_seconds) if r.duration_seconds is not none else '—' }}</td>
-                <td class="token-cell">{{ tokencell(r.input_tokens, r.input_cost) }}</td>
-                <td class="token-cell">{{ r.cached_tokens if r.cached_tokens is not none else '—' }}</td>
+                <td class="token-cell"
+                    {% if r.fresh_input_tokens is not none %}title="{{ r.fresh_input_tokens }} fresh + {{ r.input_tokens - r.fresh_input_tokens }} cached"{% endif %}>{{ tokencell(r.input_tokens, r.input_cost) }}</td>
+                <td class="token-cell">{{ tokencell(r.cached_tokens, r.cached_input_cost) }}</td>
                 <td class="token-cell">{{ tokencell(r.output_tokens, r.output_cost) }}</td>
                 <td class="token-cell">{{ tokencell(r.tokens_used, r.total_cost) }}</td>
                 <td>
@@ -399,6 +405,7 @@
   <dialog id="explode-dialog" class="rename-dialog explode-dialog"
           data-admin-token="{{ admin_token }}"
           data-input-cost-per-million="{{ input_cost_per_million }}"
+          data-cached-input-cost-per-million="{{ cached_input_cost_per_million }}"
           data-output-cost-per-million="{{ output_cost_per_million }}">
     <h3 id="explode-heading">Explode game</h3>
     <p class="form-hint" id="explode-intro"></p>

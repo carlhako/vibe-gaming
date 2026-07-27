@@ -161,13 +161,43 @@ def _token_cost(tokens, cost_per_million):
     return tokens / 1_000_000 * cost_per_million
 
 
-def _attach_token_costs(rows, input_cost_per_million, output_cost_per_million):
-    """Mutates each history row in place, adding input_cost/output_cost/
-    total_cost (USD, or None when the corresponding token count is None)
-    for the admin history page's per-row cost display."""
+def _attach_token_costs(rows, input_cost_per_million, output_cost_per_million,
+                        cached_input_cost_per_million=None):
+    """Mutates each history row in place, adding fresh_input_tokens plus
+    input_cost/cached_input_cost/output_cost/total_cost (USD, or None when
+    the corresponding token count is None) for the admin history page's
+    per-row cost display.
+
+    Input bills at TWO rates (Sprint 6a,
+    docs/multifile-agent/06a-cache-snapshot-and-edits.md). DeepSeek's prefix
+    cache charges a byte-identical resent prefix at a small fraction of a
+    fresh token — 1/120th for v4-pro as of 2026-07 ($0.003625 vs $0.435 per
+    1M, re-verified 2026-07-27). Charging every input token at the miss rate,
+    as this did until Sprint 6a, overstates a cache-heavy agent enhance by
+    ~4x and an 89%-cached explode by nearly 10x, which made the one number
+    needed to judge that work useless.
+
+    `cached_tokens` is DeepSeek's prompt_cache_hit_tokens: a SLICE of
+    input_tokens, not an addition to it, so the fresh half is the difference
+    (clamped, so a nonsensical row can't bill more cached tokens than it had
+    input). `cached_input_cost_per_million=None` bills cached tokens at the
+    full input rate — i.e. exactly this function's pre-Sprint-6a arithmetic,
+    which is what an unset DEEPSEEK_CACHED_INPUT_COST_PER_MILLION gets."""
+    if cached_input_cost_per_million is None:
+        cached_input_cost_per_million = input_cost_per_million
     for row in rows:
-        input_cost = _token_cost(row.get("input_tokens"), input_cost_per_million)
+        input_tokens = row.get("input_tokens")
+        if input_tokens is None:
+            fresh = cached = None
+            cached_cost = input_cost = None
+        else:
+            cached = min(row.get("cached_tokens") or 0, input_tokens)
+            fresh = input_tokens - cached
+            cached_cost = _token_cost(cached, cached_input_cost_per_million)
+            input_cost = _token_cost(fresh, input_cost_per_million) + cached_cost
         output_cost = _token_cost(row.get("output_tokens"), output_cost_per_million)
+        row["fresh_input_tokens"] = fresh
+        row["cached_input_cost"] = cached_cost
         row["input_cost"] = input_cost
         row["output_cost"] = output_cost
         row["total_cost"] = (
@@ -1215,7 +1245,16 @@ def create_app(games_dir=None) -> Flask:
             output_cost_per_million = float(os.environ.get("DEEPSEEK_OUTPUT_COST_PER_MILLION", 0))
         except ValueError:
             output_cost_per_million = 0.0
-        _attach_token_costs(history_rows, input_cost_per_million, output_cost_per_million)
+        # Unset falls back to the full input rate, i.e. exactly the arithmetic
+        # this page used before Sprint 6a — nothing displayed moves until the
+        # var is actually set. See _attach_token_costs for why it matters.
+        try:
+            cached_input_cost_per_million = float(
+                os.environ["DEEPSEEK_CACHED_INPUT_COST_PER_MILLION"])
+        except (KeyError, ValueError):
+            cached_input_cost_per_million = input_cost_per_million
+        _attach_token_costs(history_rows, input_cost_per_million, output_cost_per_million,
+                            cached_input_cost_per_million)
 
         plays_total = db.count_plays(conn=conn)
         plays_pages = max(1, math.ceil(plays_total / plays_per))
@@ -1228,7 +1267,10 @@ def create_app(games_dir=None) -> Flask:
         ai_qa_page = min(ai_qa_page, ai_qa_pages)
         ai_qa_rows = db.get_generation_history(
             limit=ai_qa_per, offset=(ai_qa_page - 1) * ai_qa_per, kind="ask", conn=conn)
-        _attach_token_costs(ai_qa_rows, input_cost_per_million, output_cost_per_million)
+        # Ask-AI rows have no cached_tokens column at all, so the split is a
+        # no-op for them and their figures are unchanged either way.
+        _attach_token_costs(ai_qa_rows, input_cost_per_million, output_cost_per_million,
+                            cached_input_cost_per_million)
 
         def _stats_url(**overrides):
             params = dict(token=admin_token,
@@ -1276,6 +1318,7 @@ def create_app(games_dir=None) -> Flask:
             history_rows=history_rows, history_pager=history_pager,
             input_cost_per_million=input_cost_per_million,
             output_cost_per_million=output_cost_per_million,
+            cached_input_cost_per_million=cached_input_cost_per_million,
             plays_rows=plays_rows, plays_pager=plays_pager,
             ai_qa_rows=ai_qa_rows, ai_qa_pager=ai_qa_pager,
             page_sizes=_ADMIN_PAGE_SIZES,
