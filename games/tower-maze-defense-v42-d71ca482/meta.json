@@ -1,0 +1,12 @@
+{
+  "game_id": "d71ca4821021420f8226a8dc4aa18512",
+  "parent_game_id": "942259eb98c64334962da360b742ea4c",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v42)",
+  "description": "Enhanced tower defense with projectile pass-through, upgrade-all buttons, and rich maze generation.",
+  "requested_by": "admin",
+  "created_at": "2026-07-26T13:24:29.478639Z",
+  "version": 2,
+  "prompt": "explode: split single-file game into multi-file modules (behavior-preserving)",
+  "format": "multi-file"
+}
