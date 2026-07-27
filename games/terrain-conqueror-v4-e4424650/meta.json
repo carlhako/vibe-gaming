@@ -1,0 +1,11 @@
+{
+  "game_id": "e4424650a4a3409ba4845370c0dcdf2a",
+  "parent_game_id": "a3070220034e4cadab9cb94310cd8a82",
+  "root_game_id": "2999a94b72a54ca3800aab39f8fc3b4e",
+  "title": "Terrain Conqueror (v4)",
+  "description": "A physics-based off-road driving game where you conquer increasingly rugged terrain, collect coins, and upgrade your vehicle between levels.",
+  "requested_by": "web:007d10387b5b",
+  "created_at": "2026-07-20T05:52:27.513787Z",
+  "version": 1,
+  "prompt": "You have created a decent start at a terrain game, where you track across it in a car, the issue is, the gravity appears to be too strong, and the car bounces far too high / aggressively, we need to tone down these functions so the vehicle has less gravity, and the bounce less aggressive. The vehicle flipping over should not be a fail either, only if the part of the vehicle that is NOT the wheels touches the ground or ceiling."
+}
