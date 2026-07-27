@@ -1,0 +1,12 @@
+{
+  "game_id": "ff59bc05554c43ce859b911248792cd2",
+  "parent_game_id": "626a8a5db6954caf960a2519c5157c18",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v52)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-27T10:54:00.930760Z",
+  "version": 12,
+  "prompt": "enhance the sandbox mode. sandbox mode is entered when you click the little square at the bottom right corner of the loading screen. this gives 10000 tokens. when you click this button before entering wave one, bring the shop up so the user can purchase upgrades for testing. add a wave drop down in the shop so the user can skip straight to a later wave for testing.",
+  "format": "multi-file"
+}
