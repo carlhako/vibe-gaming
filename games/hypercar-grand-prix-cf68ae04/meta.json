@@ -1,0 +1,11 @@
+{
+  "game_id": "cf68ae04b835466bb5db69c89400e75f",
+  "parent_game_id": null,
+  "root_game_id": "cf68ae04b835466bb5db69c89400e75f",
+  "title": "Hypercar Grand Prix",
+  "description": "Race hypercars like the Bugatti Tourbillon on a large track with full dashboard gauges, tire puncture mechanics, and engine temperature management.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-07-19T05:32:38.875230Z",
+  "version": 1,
+  "prompt": "mario kart clone, but with hypercars on massive maps where you can go full speed. example cars: bugatti tourbillon, bugatti chiron, etc. show all the gauges such as speed, rpm, oil press/temp, radiator temp, tyre pressures (have a button to re-inflate - make a few of the items you pick up and drop puncture types etc. have a button to spray engine with water if it gets too hot etc"
+}

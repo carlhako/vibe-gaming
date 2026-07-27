@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hypercar Grand Prix</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+        body { background: #0a0a0a; display: flex; justify-content: center; align-items: center; min-height: 100vh; font-family: 'Courier New', monospace; }
+        #gameContainer { position: relative; width: 1000px; height: 700px; background: #1a1a2e; border: 3px solid #e94560; border-radius: 12px; overflow: hidden; box-shadow: 0 0 40px rgba(233, 69, 96, 0.3); }
+        canvas { display: block; width: 100%; height: 100%; }
+        #ui-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        #ui-overlay button { pointer-events: auto; }
+        #hud { position: absolute; bottom: 10px; left: 10px; right: 10px; display: flex; justify-content: space-between; align-items: flex-end; color: #0ff; text-shadow: 0 0 8px rgba(0,255,255,0.5); font-size: 14px; }
+        .gauge-panel { background: rgba(0,0,0,0.75); border: 1px solid #e94560; border-radius: 8px; padding: 6px 10px; min-width: 120px; backdrop-filter: blur(4px); }
+        .gauge-row { display: flex; gap: 8px; flex-wrap: wrap; }
+        .gauge-item { display: flex; flex-direction: column; align-items: center; }
+        .gauge-label { font-size: 9px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+        .gauge-value { font-size: 16px; font-weight: bold; color: #0ff; }
+        .gauge-value.warn { color: #ff0; }
+        .gauge-value.critical { color: #f00; animation: blink 0.5s infinite; }
+        @keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0.2; } }
+        #left-gauges { display: flex; flex-direction: column; gap: 4px; }
+        #right-controls { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+        .btn { background: #222; border: 1px solid #e94560; color: #0ff; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-family: 'Courier New', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; transition: all 0.2s; }
+        .btn:hover { background: #e94560; color: #fff; }
+        .btn:active { transform: scale(0.95); }
+        .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+        #speedometer { font-size: 28px; font-weight: bold; color: #0ff; text-shadow: 0 0 20px rgba(0,255,255,0.4); }
+        #lap-info { position: absolute; top: 10px; right: 10px; color: #fff; font-size: 16px; background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 6px; border: 1px solid #e94560; }
+        #pickup-msg { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #fff; font-size: 24px; font-weight: bold; text-shadow: 0 0 20px rgba(255,255,0,0.8); pointer-events: none; opacity: 0; transition: opacity 0.3s; text-align: center; }
+        #game-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,0.85); color: #fff; pointer-events: auto; z-index: 10; }
+        #game-overlay h1 { font-size: 48px; color: #e94560; text-shadow: 0 0 30px rgba(233,69,96,0.5); margin-bottom: 10px; }
+        #game-overlay h2 { font-size: 24px; color: #0ff; margin-bottom: 20px; }
+        #game-overlay .btn { font-size: 18px; padding: 12px 40px; margin-top: 20px; }
+        #game-overlay .stats { font-size: 16px; color: #aaa; margin: 4px 0; }
+        .hidden { display: none; }
+        #minimap { position: absolute; top: 10px; left: 10px; border: 1px solid #e94560; border-radius: 4px; background: rgba(0,0,0,0.5); pointer-events: none; }
+    </style>
+</head>
+<body>
+<div id="gameContainer">
+    <canvas id="gameCanvas" width="1000" height="700"></canvas>
+    <canvas id="minimap" width="180" height="140"></canvas>
+    <div id="ui-overlay">
+        <div id="lap-info">LAP 1/5</div>
+        <div id="pickup-msg"></div>
+        <div id="hud">
+            <div id="left-gauges">
+                <div class="gauge-panel" style="display:flex;align-items:center;gap:10px;">
+                    <div id="speedometer">0</div>
+                    <div style="font-size:11px;color:#888;">km/h</div>
+                    <div style="margin-left:auto;display:flex;gap:10px;">
+                        <div class="gauge-item">
+                            <span class="gauge-label">RPM</span>
+                            <span class="gauge-value" id="rpm-val">0</span>
+                        </div>
+                        <div class="gauge-item">
+                            <span class="gauge-label">GEAR</span>
+                            <span class="gauge-value" id="gear-val">N</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="gauge-panel gauge-row">
+                    <div class="gauge-item">
+                        <span class="gauge-label">OIL PRESS</span>
+                        <span class="gauge-value" id="oil-press">5.2</span>
+                    </div>
+                    <div class="gauge-item">
+                        <span class="gauge-label">OIL TEMP</span>
+                        <span class="gauge-value" id="oil-temp">90</span>
+                    </div>
+                    <div class="gauge-item">
+                        <span class="gauge-label">RADIATOR</span>
+                        <span class="gauge-value" id="rad-temp">85</span>
+                    </div>
+                    <div class="gauge-item">
+                        <span class="gauge-label">FUEL</span>
+                        <span class="gauge-value" id="fuel-val">100</span>
+                    </div>
+                </div>
+                <div class="gauge-panel gauge-row">
+                    <div class="gauge-item">
+                        <span class="gauge-label">FL</span>
+                        <span class="gauge-value" id="tire-fl">2.4</span>
+                    </div>
+                    <div class="gauge-item">
+                        <span class="gauge-label">FR</span>
+                        <span class="gauge-value" id="tire-fr">2.4</span>
+                    </div>
+                    <div class="gauge-item">
+                        <span class="gauge-label">RL</span>
+                        <span class="gauge-value" id="tire-rl">2.4</span>
+                    </div>
+                    <div class="gauge-item">
+                        <span class="gauge-label">RR</span>
+                        <span class="gauge-value" id="tire-rr">2.4</span>
+                    </div>
+                </div>
+            </div>
+            <div id="right-controls">
+                <button class="btn" id="btn-reinflate">🔵 Reinflate Tires</button>
+                <button class="btn" id="btn-water">💧 Spray Engine</button>
+                <div style="margin-top:4px;font-size:10px;color:#888;text-align:right;">
+                    WASD / Arrow keys | Pick up items on track
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="game-overlay">
+        <h1 id="result-title">HYPERCAR GP</h1>
+        <h2 id="result-sub">Select Your Hypercar</h2>
+        <div style="display:flex;gap:20px;margin:20px 0;">
+            <button class="btn" data-car="0" style="font-size:14px;padding:10px 20px;">🏎 Bugatti Tourbillon</button>
+            <button class="btn" data-car="1" style="font-size:14px;padding:10px 20px;">🏎 Bugatti Chiron</button>
+            <button class="btn" data-car="2" style="font-size:14px;padding:10px 20px;">🏎 Rimac Nevera</button>
+        </div>
+        <div class="stats" id="final-stats"></div>
+        <button class="btn hidden" id="btn-restart" style="font-size:18px;padding:12px 40px;">🔄 RESTART</button>
+    </div>
+</div>
+<script>
+    (function(){
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const minimap = document.getElementById('minimap');
+        const mctx = minimap.getContext('2d');
+        const W = 1000, H = 700;
+        canvas.width = W; canvas.height = H;
+
+        // ---- CAR DEFINITIONS ----
+        const CARS = [
+            { name: 'Bugatti Tourbillon', topSpeed: 480, accel: 0.18, braking: 0.25, handling: 0.045, color: '#1a1a4e', stripe: '#c0a030' },
+            { name: 'Bugatti Chiron', topSpeed: 440, accel: 0.16, braking: 0.22, handling: 0.042, color: '#2d1b00', stripe: '#b8860b' },
+            { name: 'Rimac Nevera', topSpeed: 412, accel: 0.20, braking: 0.24, handling: 0.050, color: '#1a1a2e', stripe: '#00ff88' }
+        ];
+
+        // ---- TRACK ----
+        // Define track as a set of waypoints (a closed loop)
+        const trackPoints = [];
+        function buildTrack() {
+            const cx = 500, cy = 350;
+            const r1 = 280, r2 = 180;
+            for (let i = 0; i < 40; i++) {
+                const angle = (i / 40) * Math.PI * 2;
+                const rx = r1 + Math.sin(angle * 3) * 60;
+                const ry = r2 + Math.cos(angle * 2) * 50;
+                const x = cx + Math.cos(angle) * rx;
+                const y = cy + Math.sin(angle) * ry;
+                trackPoints.push({ x, y });
+            }
+        }
+        buildTrack();
+
+        // Precompute track normals and widths
+        function getTrackSegment(i) {
+            const p1 = trackPoints[i % trackPoints.length];
+            const p2 = trackPoints[(i+1) % trackPoints.length];
+            const dx = p2.x - p1.x, dy = p2.y - p1.y;
+            const len = Math.hypot(dx, dy);
+            const nx = -dy / len, ny = dx / len;
+            const width = 80 + Math.sin(i * 1.7) * 20;
+            return { p1, p2, nx, ny, len, width };
+        }
+
+        // ---- GAME STATE ----
+        let gameState = 'menu'; // menu, playing, gameover
+        let selectedCar = 0;
+        let car = null;
+        let laps = 0;
+        let maxLaps = 5;
+        let bestLapTime = Infinity;
+        let lapTimes = [];
+        let lapStartTime = 0;
+        let totalTime = 0;
+        let pickups = [];
+        let particles = [];
+        let lastTime = 0;
+
+        // Car object
+        function createCar() {
+            const start = trackPoints[0];
+            const angle = Math.atan2(trackPoints[1].y - start.y, trackPoints[1].x - start.x);
+            const c = CARS[selectedCar];
+            return {
+                x: start.x, y: start.y,
+                angle: angle,
+                speed: 0,
+                acceleration: 0,
+                steering: 0,
+                width: 18,
+                height: 36,
+                // gauges
+                rpm: 0,
+                gear: 0,
+                oilPress: 5.2,
+                oilTemp: 90,
+                radTemp: 85,
+                fuel: 100,
+                tires: [2.4, 2.4, 2.4, 2.4], // FL, FR, RL, RR
+                tirePunctured: [false, false, false, false],
+                engineOverheat: false,
+                waterSprayCooldown: 0,
+                reinflateCooldown: 0,
+                punctureTimer: 0,
+                // car stats
+                topSpeed: c.topSpeed,
+                accel: c.accel,
+                braking: c.braking,
+                handling: c.handling,
+                color: c.color,
+                stripe: c.stripe,
+                name: c.name,
+                // lap tracking
+                lapProgress: 0, // 0-1
+                lastLapPoint: 0,
+                lapDone: false
+            };
+        }
+
+        // ---- PICKUPS ----
+        function spawnPickups() {
+            pickups = [];
+            for (let i = 0; i < 12; i++) {
+                const idx = Math.floor(Math.random() * trackPoints.length);
+                const seg = getTrackSegment(idx);
+                const t = Math.random();
+                const px = seg.p1.x + (seg.p2.x - seg.p1.x) * t + seg.nx * (Math.random() - 0.5) * seg.width * 0.6;
+                const py = seg.p1.y + (seg.p2.y - seg.p1.y) * t + seg.ny * (Math.random() - 0.5) * seg.width * 0.6;
+                const type = Math.random();
+                let ptype;
+                if (type < 0.25) ptype = 'puncture';
+                else if (type < 0.45) ptype = 'nitro';
+                else if (type < 0.65) ptype = 'water';
+                else if (type < 0.85) ptype = 'repair';
+                else ptype = 'fuel';
+                pickups.push({ x: px, y: py, type: ptype, active: true, radius: 12 });
+            }
+        }
+
+        // ---- PARTICLES ----
+        function addParticles(x, y, color, count, spread, life) {
+            for (let i = 0; i < count; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * spread;
+                particles.push({
+                    x, y,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed,
+                    life: life || 30,
+                    maxLife: life || 30,
+                    color: color,
+                    size: 2 + Math.random() * 4
+                });
+            }
+        }
+
+        // ---- INPUT ----
+        const keys = {};
+        document.addEventListener('keydown', e => { keys[e.key] = true; if(['w','a','s','d','ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault(); });
+        document.addEventListener('keyup', e => { keys[e.key] = false; });
+
+        // ---- UI ELEMENTS ----
+        const speedEl = document.getElementById('speedometer');
+        const rpmEl = document.getElementById('rpm-val');
+        const gearEl = document.getElementById('gear-val');
+        const oilPressEl = document.getElementById('oil-press');
+        const oilTempEl = document.getElementById('oil-temp');
+        const radTempEl = document.getElementById('rad-temp');
+        const fuelEl = document.getElementById('fuel-val');
+        const tiresEl = [
+            document.getElementById('tire-fl'),
+            document.getElementById('tire-fr'),
+            document.getElementById('tire-rl'),
+            document.getElementById('tire-rr')
+        ];
+        const lapInfoEl = document.getElementById('lap-info');
+        const pickupMsgEl = document.getElementById('pickup-msg');
+        const overlay = document.getElementById('game-overlay');
+        const resultTitle = document.getElementById('result-title');
+        const resultSub = document.getElementById('result-sub');
+        const finalStats = document.getElementById('final-stats');
+        const restartBtn = document.getElementById('btn-restart');
+
+        // ---- BUTTONS ----
+        document.getElementById('btn-reinflate').addEventListener('click', () => {
+            if (!car || gameState !== 'playing') return;
+            if (car.reinflateCooldown > 0) return;
+            car.reinflateCooldown = 120; // frames
+            let fixed = false;
+            for (let i = 0; i < 4; i++) {
+                if (car.tirePunctured[i]) {
+                    car.tirePunctured[i] = false;
+                    car.tires[i] = 2.4;
+                    fixed = true;
+                }
+            }
+            if (fixed) {
+                showPickupMsg('✅ Tires Reinflated!');
+                addParticles(car.x, car.y, '#0ff', 10, 30, 20);
+            } else {
+                // Reinflate even if not punctured (maintains pressure)
+                for (let i = 0; i < 4; i++) {
+                    car.tires[i] = Math.min(2.4, car.tires[i] + 0.3);
+                }
+                showPickupMsg('🔵 Tires Pressurized');
+            }
+        });
+
+        document.getElementById('btn-water').addEventListener('click', () => {
+            if (!car || gameState !== 'playing') return;
+            if (car.waterSprayCooldown > 0) return;
+            car.waterSprayCooldown = 180;
+            if (car.engineOverheat || car.radTemp > 95) {
+                car.radTemp = Math.max(80, car.radTemp - 25);
+                car.engineOverheat = (car.radTemp > 105);
+                showPickupMsg('💧 Engine Sprayed!');
+                addParticles(car.x, car.y, '#aaddff', 15, 40, 25);
+            } else {
+                car.radTemp = Math.max(75, car.radTemp - 8);
+                showPickupMsg('💧 Coolant Boost');
+            }
+        });
+
+        // ---- CAR SELECT ----
+        document.querySelectorAll('[data-car]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                selectedCar = parseInt(btn.dataset.car);
+                startGame();
+            });
+        });
+
+        restartBtn.addEventListener('click', () => {
+            overlay.classList.add('hidden');
+            document.querySelectorAll('[data-car]').forEach(b => b.parentNode.style.display = '');
+            restartBtn.classList.add('hidden');
+            resultTitle.textContent = 'HYPERCAR GP';
+            resultSub.textContent = 'Select Your Hypercar';
+            finalStats.textContent = '';
+            gameState = 'menu';
+            car = null;
+            laps = 0;
+            lapTimes = [];
+            bestLapTime = Infinity;
+            totalTime = 0;
+            particles = [];
+        });
+
+        function showPickupMsg(msg) {
+            pickupMsgEl.textContent = msg;
+            pickupMsgEl.style.opacity = 1;
+            setTimeout(() => { pickupMsgEl.style.opacity = 0; }, 1200);
+        }
+
+        // ---- GAME INIT ----
+        function startGame() {
+            car = createCar();
+            laps = 0;
+            lapTimes = [];
+            bestLapTime = Infinity;
+            totalTime = 0;
+            lapStartTime = performance.now();
+            gameState = 'playing';
+            spawnPickups();
+            particles = [];
+            overlay.classList.add('hidden');
+            document.querySelectorAll('[data-car]').forEach(b => b.parentNode.style.display = 'none');
+            restartBtn.classList.add('hidden');
+            lastTime = performance.now();
+            updateGUI();
+        }
+
+        function finishGame(won) {
+            gameState = 'gameover';
+            overlay.classList.remove('hidden');
+            document.querySelectorAll('[data-car]').forEach(b => b.parentNode.style.display = 'none');
+            restartBtn.classList.remove('hidden');
+            if (won) {
+                resultTitle.textContent = '🏆 CHAMPION!';
+                resultSub.textContent = 'You won the Hypercar Grand Prix!';
+            } else {
+                resultTitle.textContent = '💥 GAME OVER';
+                resultSub.textContent = 'Your engine gave out...';
+            }
+            let stats = `Laps: ${laps}/${maxLaps} | Best Lap: ${bestLapTime < Infinity ? (bestLapTime/1000).toFixed(1) : '--'}s`;
+            if (lapTimes.length > 0) {
+                stats += ` | Avg: ${(lapTimes.reduce((a,b)=>a+b,0)/lapTimes.length/1000).toFixed(1)}s`;
+            }
+            finalStats.textContent = stats;
+        }
+
+        // ---- UPDATE ----
+        function update(dt) {
+            if (gameState !== 'playing' || !car) return;
+
+            const c = car;
+            // Cooldowns
+            if (c.waterSprayCooldown > 0) c.waterSprayCooldown--;
+            if (c.reinflateCooldown > 0) c.reinflateCooldown--;
+
+            // Input
+            let accelInput = 0, brakeInput = 0, steerInput = 0;
+            if (keys['w'] || keys['ArrowUp']) accelInput = 1;
+            if (keys['s'] || keys['ArrowDown']) brakeInput = 1;
+            if (keys['a'] || keys['ArrowLeft']) steerInput = -1;
+            if (keys['d'] || keys['ArrowRight']) steerInput = 1;
+
+            // Physics
+            const topSpeed = c.topSpeed / 3.6; // convert to m/s
+            if (accelInput) {
+                c.speed += c.accel * dt * 60 * (1 - c.speed / topSpeed * 0.5);
+            }
+            if (brakeInput) {
+                c.speed -= c.braking * dt * 60;
+            }
+            // Drag
+            c.speed *= (1 - 0.003 * dt * 60);
+            if (c.speed < 0) c.speed = 0;
+            // Tire puncture affects speed
+            const punctCount = c.tirePunctured.filter(p=>p).length;
+            if (punctCount > 0) {
+                c.speed *= (1 - punctCount * 0.15);
+                // Random wobble
+                c.angle += (Math.random() - 0.5) * 0.05 * punctCount;
+            }
+
+            // Steering
+            if (c.speed > 1) {
+                const steerFactor = c.handling * (1 - c.speed / topSpeed * 0.3);
+                c.angle += steerInput * steerFactor * dt * 60;
+            }
+
+            // Move
+            c.x += Math.cos(c.angle) * c.speed * dt * 60;
+            c.y += Math.sin(c.angle) * c.speed * dt * 60;
+
+            // Gear/RPM
+            c.rpm = Math.min(10000, (c.speed / topSpeed) * 8000 + 800);
+            c.gear = c.speed < 0.5 ? 0 : Math.min(7, Math.floor(c.speed / topSpeed * 7) + 1);
+
+            // Engine gauges simulation
+            const load = c.speed / topSpeed;
+            c.oilPress = 4.0 + load * 2.0 + (Math.random() - 0.5) * 0.3;
+            c.oilTemp = 85 + load * 20 + (punctCount > 0 ? 5 : 0);
+            if (c.oilTemp > 115) c.oilTemp = 115 + (Math.random() - 0.5) * 2;
+            c.radTemp = 80 + load * 25 + (punctCount > 0 ? 8 : 0) - (c.waterSprayCooldown > 150 ? 15 : 0);
+            if (c.radTemp > 110) {
+                c.engineOverheat = true;
+            } else {
+                c.engineOverheat = false;
+            }
+            // Fuel consumption
+            c.fuel -= load * 0.004 * dt * 60;
+            if (c.fuel < 0) c.fuel = 0;
+
+            // Tire pressure leak from punctures
+            for (let i = 0; i < 4; i++) {
+                if (c.tirePunctured[i]) {
+                    c.tires[i] = Math.max(0.2, c.tires[i] - 0.005 * dt * 60);
+                }
+            }
+
+            // Engine overheat -> damage / game over
+            if (c.engineOverheat && c.radTemp > 115 && c.waterSprayCooldown <= 0) {
+                // Engine damage
+                if (Math.random() < 0.002 * dt * 60) {
+                    finishGame(false);
+                    return;
+                }
+            }
+
+            // ---- LAP TRACKING ----
+            // Find nearest track point index
+            let minDist = Infinity;
+            let nearestIdx = 0;
+            for (let i = 0; i < trackPoints.length; i++) {
+                const d = Math.hypot(c.x - trackPoints[i].x, c.y - trackPoints[i].y);
+                if (d < minDist) { minDist = d; nearestIdx = i; }
+            }
+            // Track progress along loop
+            const progress = nearestIdx / trackPoints.length;
+            const delta = progress - c.lapProgress;
+            if (delta > 0.5) {
+                // wrapping forward
+                c.lapDone = true;
+            } else if (delta < -0.5) {
+                // wrapping backward
+                if (c.lapDone) {
+                    // Complete lap
+                    const lapTime = performance.now() - lapStartTime;
+                    lapTimes.push(lapTime);
+                    if (lapTime < bestLapTime) bestLapTime = lapTime;
+                    laps++;
+                    if (laps >= maxLaps) {
+                        finishGame(true);
+                        return;
+                    }
+                    lapStartTime = performance.now();
+                    c.lapDone = false;
+                    showPickupMsg(`🏁 Lap ${laps}/${maxLaps} completed!`);
+                    // Increase difficulty: more punctures as laps increase
+                    if (laps % 2 === 0) {
+                        // Spawn more puncture items
+                    }
+                }
+            }
+            c.lapProgress = progress;
+
+            // ---- PICKUP COLLISION ----
+            for (let i = 0; i < pickups.length; i++) {
+                const p = pickups[i];
+                if (!p.active) continue;
+                const dist = Math.hypot(c.x - p.x, c.y - p.y);
+                if (dist < 24) {
+                    p.active = false;
+                    applyPickup(c, p.type);
+                }
+            }
+
+            // Respawn pickups occasionally
+            if (Math.random() < 0.002 * dt * 60) {
+                const idx = Math.floor(Math.random() * trackPoints.length);
+                const seg = getTrackSegment(idx);
+                const t = Math.random();
+                const px = seg.p1.x + (seg.p2.x - seg.p1.x) * t + seg.nx * (Math.random() - 0.5) * seg.width * 0.5;
+                const py = seg.p1.y + (seg.p2.y - seg.p1.y) * t + seg.ny * (Math.random() - 0.5) * seg.width * 0.5;
+                const types = ['puncture','nitro','water','repair','fuel'];
+                pickups.push({ x: px, y: py, type: types[Math.floor(Math.random()*types.length)], active: true, radius: 12 });
+            }
+
+            // Particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.x += p.vx * dt * 60;
+                p.y += p.vy * dt * 60;
+                p.vx *= 0.96;
+                p.vy *= 0.96;
+                p.life--;
+                if (p.life <= 0) particles.splice(i, 1);
+            }
+
+            // Exhaust particles
+            if (c.speed > 5) {
+                const ex = c.x - Math.cos(c.angle) * 20;
+                const ey = c.y - Math.sin(c.angle) * 20;
+                addParticles(ex, ey, '#888', 1, 5, 15);
+                if (c.speed > 30) addParticles(ex, ey, '#ff6600', 1, 8, 10);
+            }
+
+            // Update GUI
+            updateGUI();
+        }
+
+        function applyPickup(c, type) {
+            switch(type) {
+                case 'puncture':
+                    const idx = Math.floor(Math.random() * 4);
+                    c.tirePunctured[idx] = true;
+                    c.tires[idx] = 0.5;
+                    showPickupMsg('⚠️ Tire Punctured!');
+                    addParticles(c.x, c.y, '#f00', 20, 50, 30);
+                    break;
+                case 'nitro':
+                    c.speed = Math.min(c.topSpeed/3.6 * 1.3, c.speed + 40);
+                    showPickupMsg('🔥 NITRO BOOST!');
+                    addParticles(c.x, c.y, '#ff0', 25, 60, 20);
+                    break;
+                case 'water':
+                    c.waterSprayCooldown = 0;
+                    c.radTemp = Math.max(75, c.radTemp - 20);
+                    showPickupMsg('💧 Water Pickup');
+                    addParticles(c.x, c.y, '#aaddff', 8, 20, 15);
+                    break;
+                case 'repair':
+                    for (let i = 0; i < 4; i++) {
+                        if (c.tirePunctured[i]) {
+                            c.tirePunctured[i] = false;
+                            c.tires[i] = 2.4;
+                        }
+                    }
+                    c.engineOverheat = false;
+                    c.radTemp = Math.min(90, c.radTemp + 5);
+                    c.oilTemp = Math.min(95, c.oilTemp + 3);
+                    showPickupMsg('🔧 Repairs Done!');
+                    addParticles(c.x, c.y, '#0f0', 15, 30, 20);
+                    break;
+                case 'fuel':
+                    c.fuel = Math.min(100, c.fuel + 25);
+                    showPickupMsg('⛽ Fuel +25');
+                    addParticles(c.x, c.y, '#ffaa00', 10, 25, 18);
+                    break;
+            }
+        }
+
+        function updateGUI() {
+            if (!car) return;
+            const c = car;
+            const speedKmh = (c.speed * 3.6).toFixed(0);
+            speedEl.textContent = speedKmh;
+            rpmEl.textContent = c.rpm.toFixed(0);
+            gearEl.textContent = c.gear === 0 ? 'N' : c.gear.toString();
+            oilPressEl.textContent = c.oilPress.toFixed(1);
+            oilTempEl.textContent = c.oilTemp.toFixed(0);
+            radTempEl.textContent = c.radTemp.toFixed(0);
+            fuelEl.textContent = c.fuel.toFixed(0);
+            for (let i = 0; i < 4; i++) {
+                tiresEl[i].textContent = c.tires[i].toFixed(1);
+                tiresEl[i].className = 'gauge-value';
+                if (c.tirePunctured[i]) {
+                    tiresEl[i].className = 'gauge-value critical';
+                } else if (c.tires[i] < 1.5) {
+                    tiresEl[i].className = 'gauge-value warn';
+                }
+            }
+            // Color gauges
+            oilTempEl.className = 'gauge-value' + (c.oilTemp > 110 ? ' critical' : c.oilTemp > 100 ? ' warn' : '');
+            radTempEl.className = 'gauge-value' + (c.radTemp > 105 ? ' critical' : c.radTemp > 95 ? ' warn' : '');
+            fuelEl.className = 'gauge-value' + (c.fuel < 20 ? ' warn' : '');
+            lapInfoEl.textContent = `LAP ${Math.min(laps+1, maxLaps)}/${maxLaps}`;
+            // Buttons
+            const reinflateBtn = document.getElementById('btn-reinflate');
+            const waterBtn = document.getElementById('btn-water');
+            reinflateBtn.disabled = c.reinflateCooldown > 0;
+            waterBtn.disabled = c.waterSprayCooldown > 0;
+        }
+
+        // ---- RENDER ----
+        function render() {
+            ctx.clearRect(0, 0, W, H);
+            if (!car && gameState !== 'menu') return;
+
+            // Draw track
+            for (let i = 0; i < trackPoints.length; i++) {
+                const seg = getTrackSegment(i);
+                const p1 = seg.p1, p2 = seg.p2;
+                const w = seg.width;
+                // Road surface
+                ctx.beginPath();
+                ctx.moveTo(p1.x + seg.nx * w, p1.y + seg.ny * w);
+                ctx.lineTo(p2.x + seg.nx * w, p2.y + seg.ny * w);
+                ctx.lineTo(p2.x - seg.nx * w, p2.y - seg.ny * w);
+                ctx.lineTo(p1.x - seg.nx * w, p1.y - seg.ny * w);
+                ctx.closePath();
+                ctx.fillStyle = '#333';
+                ctx.fill();
+                ctx.strokeStyle = '#555';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            }
+            // Track center line
+            ctx.beginPath();
+            for (let i = 0; i < trackPoints.length; i++) {
+                const p = trackPoints[i];
+                if (i === 0) ctx.moveTo(p.x, p.y);
+                else ctx.lineTo(p.x, p.y);
+            }
+            ctx.closePath();
+            ctx.setLineDash([8, 12]);
+            ctx.strokeStyle = '#ffcc00';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Start/finish line
+            const sf = trackPoints[0];
+            const seg0 = getTrackSegment(0);
+            ctx.beginPath();
+            ctx.moveTo(sf.x + seg0.nx * seg0.width, sf.y + seg0.ny * seg0.width);
+            ctx.lineTo(sf.x - seg0.nx * seg0.width, sf.y - seg0.ny * seg0.width);
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 4;
+            ctx.setLineDash([8, 8]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Pickups
+            for (const p of pickups) {
+                if (!p.active) continue;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.radius, 0, Math.PI*2);
+                let color = '#0f0';
+                switch(p.type) {
+                    case 'puncture': color = '#f00'; break;
+                    case 'nitro': color = '#ff0'; break;
+                    case 'water': color = '#0af'; break;
+                    case 'repair': color = '#0f0'; break;
+                    case 'fuel': color = '#f80'; break;
+                }
+                ctx.fillStyle = color;
+                ctx.globalAlpha = 0.7;
+                ctx.fill();
+                ctx.globalAlpha = 1;
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+                // Icon
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 11px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                let icon = '?';
+                switch(p.type) {
+                    case 'puncture': icon = '⚠'; break;
+                    case 'nitro': icon = '🔥'; break;
+                    case 'water': icon = '💧'; break;
+                    case 'repair': icon = '🔧'; break;
+                    case 'fuel': icon = '⛽'; break;
+                }
+                ctx.fillText(icon, p.x, p.y);
+            }
+
+            // Draw car
+            if (car) {
+                const c = car;
+                ctx.save();
+                ctx.translate(c.x, c.y);
+                ctx.rotate(c.angle);
+                // Shadow
+                ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                ctx.shadowBlur = 20;
+                // Body
+                ctx.fillStyle = c.color;
+                ctx.beginPath();
+                ctx.roundRect(-c.width/2, -c.height/2, c.width, c.height, 4);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+                // Stripe
+                ctx.fillStyle = c.stripe;
+                ctx.fillRect(-2, -c.height/2 + 4, 4, c.height - 8);
+                // Windshield
+                ctx.fillStyle = 'rgba(100,180,255,0.4)';
+                ctx.fillRect(-c.width/2 + 3, -c.height/2 + 6, c.width - 6, 8);
+                // Headlights
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(-c.width/2 + 2, -c.height/2 - 2, 5, 5);
+                ctx.fillRect(c.width/2 - 7, -c.height/2 - 2, 5, 5);
+                // Taillights
+                ctx.fillStyle = '#f00';
+                ctx.fillRect(-c.width/2 + 2, c.height/2 - 3, 5, 5);
+                ctx.fillRect(c.width/2 - 7, c.height/2 - 3, 5, 5);
+                ctx.restore();
+
+                // Particles
+                for (const p of particles) {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.size * (p.life / p.maxLife), 0, Math.PI*2);
+                    ctx.fillStyle = p.color;
+                    ctx.globalAlpha = p.life / p.maxLife;
+                    ctx.fill();
+                    ctx.globalAlpha = 1;
+                }
+
+                // Minimap
+                mctx.clearRect(0, 0, 180, 140);
+                mctx.save();
+                mctx.scale(180/1000, 140/700);
+                // Track
+                mctx.strokeStyle = '#555';
+                mctx.lineWidth = 3;
+                mctx.beginPath();
+                for (let i = 0; i < trackPoints.length; i++) {
+                    const p = trackPoints[i];
+                    if (i===0) mctx.moveTo(p.x, p.y);
+                    else mctx.lineTo(p.x, p.y);
+                }
+                mctx.closePath();
+                mctx.stroke();
+                // Car position
+                mctx.fillStyle = '#e94560';
+                mctx.beginPath();
+                mctx.arc(car.x, car.y, 6, 0, Math.PI*2);
+                mctx.fill();
+                // Pickups
+                for (const p of pickups) {
+                    if (!p.active) continue;
+                    mctx.fillStyle = '#0f0';
+                    mctx.beginPath();
+                    mctx.arc(p.x, p.y, 3, 0, Math.PI*2);
+                    mctx.fill();
+                }
+                mctx.restore();
+            }
+
+            if (gameState === 'menu') {
+                ctx.fillStyle = 'rgba(0,0,0,0.6)';
+                ctx.fillRect(0, 0, W, H);
+                ctx.fillStyle = '#e94560';
+                ctx.font = 'bold 48px "Courier New"';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('HYPERCAR GP', W/2, H/2 - 80);
+                ctx.fillStyle = '#0ff';
+                ctx.font = '20px "Courier New"';
+                ctx.fillText('Select a car from the panel to start', W/2, H/2 - 20);
+            }
+        }
+
+        // ---- GAME LOOP ----
+        function gameLoop(timestamp) {
+            const dt = lastTime ? Math.min((timestamp - lastTime) / 1000, 0.05) : 0.016;
+            lastTime = timestamp;
+            update(dt);
+            render();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // ---- POLYFILL roundRect ----
+        if (!CanvasRenderingContext2D.prototype.roundRect) {
+            CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+                if (r > w/2) r = w/2;
+                if (r > h/2) r = h/2;
+                this.moveTo(x + r, y);
+                this.lineTo(x + w - r, y);
+                this.quadraticCurveTo(x + w, y, x + w, y + r);
+                this.lineTo(x + w, y + h - r);
+                this.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+                this.lineTo(x + r, y + h);
+                this.quadraticCurveTo(x, y + h, x, y + h - r);
+                this.lineTo(x, y + r);
+                this.quadraticCurveTo(x, y, x + r, y);
+            };
+        }
+
+        // ---- START ----
+        gameLoop(0);
+    })();
+</script>
+</body>
+</html>
