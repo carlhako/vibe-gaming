@@ -1,0 +1,11 @@
+{
+  "game_id": "6de1d5ca05a4430283ed0330a6803ebe",
+  "parent_game_id": "d71f605c7eac4b9c9baea8f873a780e4",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Darkhold Arena (v18)",
+  "description": "Wave-based arena RPG with destructible walls, skeleton minions, witch summoners, and deep upgrade trees.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-24T04:22:02.476163Z",
+  "version": 1,
+  "prompt": "fix the layout on the shop screen. each upgrade has this bold text behind it that seems unrelated. for example on the sorcerer shop there is a big word \"sword\" behind the upgrade \"Fireball SMG\" it covers some of the text and makes it hard to read. Some of the other big words on other upgrades are clock, aarrow, star, boom. clock"
+}
