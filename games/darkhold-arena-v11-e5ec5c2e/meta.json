@@ -1,0 +1,11 @@
+{
+  "game_id": "e5ec5c2eb0de4d439fa76e3570fa7c5d",
+  "parent_game_id": "06618753ed734d3d811d4c0feb26ae70",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Darkhold Arena (v11)",
+  "description": "Wave-based arena RPG where you battle skeletons, wraiths, demons, and brutes. Choose from Sorcerer, Wizard, or Knight \u2014 each with unique abilities. Now the Sorcerer can unlock the devastating Fireball Minigun!",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-24T01:01:50.742168Z",
+  "version": 1,
+  "prompt": "Add another item for the sorcerer called \"Fireball Minigun\" it requires lvl 2 homing flames, they will cost 50 to purchase, once purchased the sorcerer will be holding a big mini gun instead of a staff, this will shoot rapid fireballs."
+}
