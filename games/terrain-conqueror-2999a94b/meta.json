@@ -1,0 +1,11 @@
+{
+  "game_id": "2999a94b72a54ca3800aab39f8fc3b4e",
+  "parent_game_id": null,
+  "root_game_id": "2999a94b72a54ca3800aab39f8fc3b4e",
+  "title": "Terrain Conqueror",
+  "description": "A gravity-physics side-scroller where you drive an upgradable vehicle across increasingly difficult random terrain. Earn coins, buy upgrades, and survive 5 failures per level or lose everything.",
+  "requested_by": "web:007d10387b5b",
+  "created_at": "2026-07-20T05:21:13.428720Z",
+  "version": 1,
+  "prompt": "Build me a gravity based physics game, where you have a vehicle, and go through randomly generated side scroller courses with obstacles, jumps, etc, with the objective of making it from point A to point B. You should be rewarded with points that you can spend to add bigger wheels, more wheels, change body shape, faster engine, whatever upgrades you can think of. Each level should get harder and harder until you fail a map more than 5 times, and progress is reset."
+}
