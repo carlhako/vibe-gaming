@@ -1,0 +1,11 @@
+{
+  "game_id": "09afe4d03bcb44838582659340cfb6b8",
+  "parent_game_id": "76aa83b88607436c8dbbe9780cf20e01",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v8)",
+  "description": "Build towers, defend the maze, and survive waves of increasingly difficult enemies.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-19T09:31:02.576267Z",
+  "version": 1,
+  "prompt": "fix a bug where when you have a tower selected and you dont have enough money to upgrade and then you do have enough money the button stays greyed out, you have to click off it and then back onto the tower to do the upgrade."
+}
