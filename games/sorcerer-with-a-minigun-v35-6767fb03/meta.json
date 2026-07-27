@@ -1,0 +1,11 @@
+{
+  "game_id": "6767fb03b75a4564a4a07c6c9519cbef",
+  "parent_game_id": "78eb204636df497e85d2c90c8fdf771a",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v35)",
+  "description": "Hurl fireballs, summon skeletal minions, and wield a minigun or railgun in this wave-based arena RPG. Destructible walls, upgrade shop, and multiple enemy types.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-25T06:27:55.205726Z",
+  "version": 1,
+  "prompt": "make the following changes: \r\n1.Remove the cooldown on the rail gun so you can start charging again straight away after discharging. \r\n\r\n2. add a bar across the bottom of the screen that is not part of the gameplay screen. move the buttons to select between mini gun and rail gun to this bar as well as game stats and cooldowns.\r\n\r\n3. fix the buttons to purchase the upgrades in the shop screen, some are red when you have enough money. all buttons should be red unless you dont have enough tokens or you dont have the requirements."
+}
