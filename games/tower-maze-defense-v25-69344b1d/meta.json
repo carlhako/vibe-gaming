@@ -1,0 +1,11 @@
+{
+  "game_id": "69344b1d832e4f10bae8663db09fed09",
+  "parent_game_id": "c951f4e95c3d43f8bc2ad722f8019759",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v25)",
+  "description": "Tower defense with procedurally generated looping/splitting mazes, now with smooth outlined path rendering, directional arrows, and clear corner visuals.",
+  "requested_by": "web:007d10387b5b",
+  "created_at": "2026-07-21T03:35:48.319681Z",
+  "version": 1,
+  "prompt": "In our TD game, The path is rendered as a series of grey tiles on a grid. I have a visual clarity problem I need you to fix.\r\n\r\nThe problem:\r\n\r\nThe path is hard to read visually. Specifically:\r\n\r\nDirection is ambiguous. Looking at the path, a player cannot tell which direction enemies travel or which way the route flows. It just looks like a collection of grey squares.\r\n\r\nParallel segments merge visually. In sections where the path folds back on itself (U-turns, S-bends, or where one segment runs alongside another), the adjacent tiles blend together into a single grey blob. There's no visual gap or separation, so you can't tell where one leg of the path ends and the next begins, or which tile connects to which.\r\n\r\nTurns and corners look like stacked squares rather than a continuous flowing line.\r\n\r\n\r\nWhat I need you to implement:\r\n\r\nPath outlining. Give the path a distinct border/outline (a slightly lighter or darker edge) so that when two segments run parallel, there's a clear visible boundary between them instead of a merged blob.\r\n\r\nProper corner rendering. Render turns as smooth/rounded connectors that visually flow around bends, rather than as hard stacked squares, so the path reads as one continuous line."
+}
