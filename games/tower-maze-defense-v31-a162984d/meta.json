@@ -1,0 +1,11 @@
+{
+  "game_id": "a162984d42504cf2b890c5da37506c2b",
+  "parent_game_id": "59f17c8b320a4490bd99632712e5728d",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v31)",
+  "description": "A tower-defense maze game where you place towers on a procedurally generated path to stop waves of enemies. Features attack, buff, and economy towers with upgrade paths.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-21T05:55:40.076791Z",
+  "version": 1,
+  "prompt": "change the layout to use the space below the game play area. currently there is too many icons and things on the right and its too cluttered as well as you have to scroll down. \r\n\r\nMove all the unit selections to under the game play area. reduce the sie of the wave, new map and pause buttons, make wave just a little play arrow no words, the same as new map it can be a little map icon and pause can be a play/pause icon."
+}
