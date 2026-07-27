@@ -1,0 +1,11 @@
+{
+  "game_id": "d22ca4ad3c354438916f44512361b4b0",
+  "parent_game_id": null,
+  "root_game_id": "d22ca4ad3c354438916f44512361b4b0",
+  "title": "Alien Maze Assault",
+  "description": "First-person shooter in a randomly generated 3D maze. Eliminate all aliens using WASD movement, mouse-look, and left-click to fire. Collect ammo drops to survive.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-20T13:02:29.963241Z",
+  "version": 1,
+  "prompt": "The game is a first-person shooter titled 'Alien Maze Assault'. The player spawns inside a randomly generated maze and must eliminate all aliens to win. The game uses Three.js for 3D rendering and is delivered as a single self-contained HTML file with all code inline. The player has first-person controls: WASD movement, mouse-look via Pointer Lock API, left-click to fire, and optionally spacebar to jump. The player starts with 100 health and limited ammo. Health and ammo are displayed on screen. The maze is randomly generated each game, with walls, corridors, and dead ends, ensuring all areas are reachable. Maze size is configurable. Enemies are alien models made from primitive geometry. They patrol when the player is not visible, detect the player within a radius, chase when detected, and stop to shoot when in range. Enemy projectiles damage the player. Enemies have health and die when it reaches zero. Each enemy drops ammo when killed, which is automatically collected on contact. The player wins when all aliens are eliminated, showing a victory screen. The player loses when health reaches zero, showing a game over screen. Both screens allow restarting without refreshing. The UI includes health, ammo, remaining enemies count, crosshair, start screen, victory screen, and game over screen. Visuals are sci-fi style with basic lighting, shadows if performance allows, distinct enemy colors, different visual effects for bullets/projectiles, and a flash effect when taking damage. Optional enhancements include footstep sounds, shooting sound, enemy sound effects, a simple minimap, and difficulty scaling based on enemy count."
+}
