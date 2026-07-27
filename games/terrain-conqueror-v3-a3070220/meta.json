@@ -1,0 +1,11 @@
+{
+  "game_id": "a3070220034e4cadab9cb94310cd8a82",
+  "parent_game_id": "edfa74cd78b34fc788cb512c25d4eebd",
+  "root_game_id": "2999a94b72a54ca3800aab39f8fc3b4e",
+  "title": "Terrain Conqueror (v3)",
+  "description": "A physics-based off-road driving game where you conquer increasingly difficult terrain. Collect coins, upgrade your vehicle between levels, and reach the finish flag without flipping!",
+  "requested_by": "web:007d10387b5b",
+  "created_at": "2026-07-20T05:38:29.332167Z",
+  "version": 1,
+  "prompt": "Still seems to be a boung issue, the car starts by going upwards as if it bounced off the ground, and then when it lands (If it lands) it goes out of control, there should be a little bit of give (Suspension) in the wheels, a little less gravity, the car should fall somewhat gracefully, about half the speed it does now, starting point the car should start on its wheels, or slightly off the ground and land softly."
+}
