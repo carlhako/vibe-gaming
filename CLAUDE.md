@@ -321,8 +321,7 @@ forks exactly like `game_enhancer.enhance_game()` (new `games/<slug>/`,
 the half-written fork) — it's the multi-file-source counterpart
 `job_runner.py` dispatches to instead of `game_enhancer.enhance_game()`.
 Config lives under `multifile_agent:` in `config.yaml` (model/effort/
-max_steps/max_verification_retries/max_module_bytes/
-context_prune_after_steps).
+max_steps/max_verification_retries/max_module_bytes).
 
 Because `ai_client.ask_with_tools()` is stateless, `_run_react_loop`
 resends its whole `messages` list on every turn — so anything left in
@@ -337,10 +336,32 @@ conversation outright — the tool call *and* its paired tool-result message
 — leaving only a short plain-text note on the assistant message carrying
 the observation verbatim (success or rejection alike). The model already
 generated that content and the note still reports the outcome; `read_file`
-is there if it needs the current bytes again. A second, milder fix prunes a
-`read_file` result once it's gone stale (outstanding more than
-`context_prune_after_steps` turns without being rewritten), on top of the
-pre-existing same-path-rewrite pruning.
+is there if it needs the current bytes again.
+
+**The conversation is append-only: no message that has already been included
+in a request to the model is ever mutated or removed.** Sprint 6 also pruned
+`read_file` results — replacing one with a placeholder once its path was
+rewritten or it had simply gone stale — on the premise that anything retained
+is rebilled every turn. Measuring three production enhances on 2026-07-27
+inverted that premise: DeepSeek's prefix cache is byte-exact and prefix-only,
+and bills a resent cached token at **1/120th** of a fresh one on `v4-pro`
+($0.003625 vs $0.435 per 1M; flash is 1/50). Cache-*miss* input was 68-85% of
+what an enhance actually cost while cache-*hit* input was under 2%. So
+retention is nearly free and **mutation is the expense**: rewriting a message
+at position *k* invalidates the cache from *k* onward, on that turn and every
+turn after it. Each prune was observed collapsing the cached prefix from
+~44,000 tokens back to ~4,500, twice in one run, each time right after a
+`write_file` — the deepest possible cut. Both prune sites are gone (Sprint 6a,
+`docs/multifile-agent/06a-cache-snapshot-and-edits.md`), and
+`config.yaml`'s `context_prune_after_steps` is ignored with a warning rather
+than honoured, because that file is gitignored and production's copy still
+sets it. `_compact_write_calls` stays, and is cache-safe by construction: it
+only ever touches the assistant message and tool results created in the
+*current* turn, which have not been sent yet — it shortens the suffix, never
+the prefix. `tests/agent_harness.py`'s `scripted_asks` asserts the invariant on
+every agent test rather than in one dedicated case, because a run that mutates
+its prefix still writes the right files, passes verification and ships; only
+the bill changes, so nothing else would catch a regression.
 
 **Never leave synthesized arguments in a tool call the model can see.** The
 first version of the above kept each write_file call and merely replaced
@@ -725,7 +746,8 @@ games/block-dodge/      bundled game (game_id committed in meta.json)
 games/connect-4-4/      bundled game (game_id committed in meta.json)
 tests/                  pytest suite: db.py, startup disk-sync, fork linkage, reports,
                         builder, agent (ReAct loop), explode/dual-format, job UI,
-                        admin explode control
+                        admin explode control; agent_harness.py's scripted_asks
+                        asserts the append-only invariant on every agent test
 config.yaml.example     copy to config.yaml
 .env.example            copy to .env: DEEPSEEK_API_KEY, ADMIN_TOKEN
 ```

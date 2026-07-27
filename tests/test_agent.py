@@ -13,6 +13,7 @@ from unittest import mock
 import agent
 import ai_client as ai
 import db
+from tests.agent_harness import scripted_asks
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "multifile-game"
 SOURCE_GAME_ID = "6a604c1fd9a1cf932aa72764be2f14e4"
@@ -69,14 +70,9 @@ def _turn(calls, tokens=(5, 5)):
 def _run(games_dir, responses, config=None, **kwargs):
     """Run enhance_multifile_game against a scripted sequence of
     ToolAskResults, capturing a snapshot of the conversation passed to each
-    ask_with_tools call."""
-    seen_messages = []
-
-    def scripted(messages, **_kwargs):
-        seen_messages.append(copy.deepcopy(messages))
-        return responses[len(seen_messages) - 1]
-
-    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted):
+    ask_with_tools call. scripted_asks also asserts the append-only
+    invariant on the way out — see tests/agent_harness.py."""
+    with scripted_asks(responses) as seen_messages:
         result = agent.enhance_multifile_game(
             SOURCE_GAME_ID, "make the button say Punch instead of Click me",
             "web:t", config or CONFIG, games_dir=games_dir, **kwargs,
@@ -461,7 +457,8 @@ def test_write_of_a_pruning_placeholder_is_rejected_not_written_to_disk(isolated
     stub was written, read back, and re-copied) that burned 1-2.6M input
     tokens and shipped nothing."""
     _setup_source_game(games_dir)
-    stub = f"{agent._PRUNE_SENTINEL} core.js was read 3 steps ago — re-read it."
+    stub = (f"{agent._PRUNE_SENTINEL} The write_file call(s) below COMPLETED "
+            "SUCCESSFULLY and the files are on disk.")
     responses = [
         _turn([("write_file", {"path": "core.js", "contents": stub})]),
         _turn([
@@ -482,32 +479,84 @@ def test_write_of_a_pruning_placeholder_is_rejected_not_written_to_disk(isolated
     assert (games_dir / result["slug"] / "src" / "core.js").read_text() == NEW_CORE_JS
 
 
-def test_stale_read_file_result_is_pruned_after_configured_step_age(isolated_db, games_dir):
+def test_read_results_survive_verbatim_however_stale_and_however_rewritten(
+        isolated_db, games_dir):
+    """The Sprint 6a inversion. Sprint 6 replaced a read_file result with a
+    placeholder once it went stale, or once the same path was rewritten;
+    both mutated a message the model had already been sent, which invalidates
+    DeepSeek's byte-exact prefix cache from that message onward for the rest
+    of the run (measured: ~44,000 cached tokens back to ~4,500, twice in one
+    run). A cached token costs 1/120th of a fresh one on v4-pro, so the
+    retention those prunes bought was never worth the mutation they cost.
+
+    This exercises both former prune triggers at once — style.css is read and
+    then left to age five turns, core.js is read and then rewritten — and
+    asserts the original observations are still present, byte for byte, in
+    the final request. scripted_asks' append-only assertion covers the
+    general case; this pins the specific behaviour that changed."""
     _setup_source_game(games_dir)
     style_css = (games_dir / "click-counter-src" / "src" / "style.css").read_text()
-    small_cfg = {
-        "game_web": CONFIG["game_web"],
-        "multifile_agent": dict(CONFIG["multifile_agent"], context_prune_after_steps=2),
-    }
+    core_js = (games_dir / "click-counter-src" / "src" / "core.js").read_text()
     responses = [
-        _turn([("read_file", {"path": "style.css"})]),   # step 1: read, never rewritten
-        _turn([("read_map", {})]),                        # step 2: filler, not yet stale (2-1=1 < 2)
-        _turn([("read_map", {})]),                        # step 3: now stale (3-1=2 >= 2) -> pruned
-        _turn([("finish", {"summary": "no changes needed"})]),
+        _turn([("read_file", {"path": "style.css"})]),
+        _turn([("read_file", {"path": "core.js"})]),
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})]),
+        _turn([("read_map", {})]),
+        _turn([("list_files", {})]),
+        _turn([("search", {"pattern": "count"})]),
+        _turn([("finish", {"summary": "renamed the button label"})]),
     ]
 
     with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
-        result, seen = _run(games_dir, responses, config=small_cfg)
+        result, seen = _run(games_dir, responses)
 
     assert result["success"], result["error"]
 
+    final = seen[-1]
+    tool_results = [m["content"] for m in final if m.get("role") == "tool"]
+
+    # style.css: read six turns earlier, never rewritten — the old staleness
+    # sweep would have replaced this by now.
+    assert any(style_css in c for c in tool_results)
+    # core.js: read and then rewritten by a later write_file — the old
+    # same-path prune fired on exactly this.
+    assert any(core_js in c for c in tool_results)
+    # No tool result anywhere carries a placeholder; only _compact_write_calls'
+    # note (on an assistant message, in the turn that created it) still does.
+    assert not any(agent._PRUNE_SENTINEL in c for c in tool_results)
+
+
+def test_an_obsolete_context_prune_after_steps_key_is_ignored_with_a_warning(
+        isolated_db, games_dir, caplog):
+    """config.yaml is gitignored, so production's copy still sets this key
+    and will keep setting it until someone edits that machine. It must be
+    inert rather than quietly restoring the regression — and it must say so,
+    because a silently ignored config key is how a stale setting survives."""
+    _setup_source_game(games_dir)
+    stale_cfg = {
+        "game_web": CONFIG["game_web"],
+        "multifile_agent": dict(CONFIG["multifile_agent"], context_prune_after_steps=2),
+    }
+    style_css = (games_dir / "click-counter-src" / "src" / "style.css").read_text()
+    responses = [
+        _turn([("read_file", {"path": "style.css"})]),
+        _turn([("read_map", {})]),
+        _turn([("read_map", {})]),
+        _turn([("finish", {"summary": "no changes needed"})]),
+    ]
+
+    with caplog.at_level("WARNING", logger="agent"), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses, config=stale_cfg)
+
+    assert result["success"], result["error"]
+    assert any("context_prune_after_steps" in r.message for r in caplog.records)
+    # Inert, not merely deprecated: the read is still there in full.
     tool_result = next(
         m for m in seen[-1]
         if m.get("role") == "tool" and m.get("tool_call_id") == "call_0_read_file"
     )
-    assert style_css not in tool_result["content"]
-    assert "pruned" in tool_result["content"]
-    assert "steps ago" in tool_result["content"]
+    assert style_css in tool_result["content"]
 
 
 # ---------------------------------------------------------------------------

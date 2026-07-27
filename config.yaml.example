@@ -90,16 +90,16 @@ multifile_agent:
                                # (see docs/multifile-agent/05-migration-and-pilot.md).
                                # What actually drives granularity is the prompt's target
                                # module count, source_bytes / 25000.
-  context_prune_after_steps: 6 # steps a read_file result rides along before being pruned.
-                               # Was 3, raised because a wide change (a feature spanning
-                               # ~7 modules) cycles back to a file many steps later, so a
-                               # 3-step horizon pruned it just before reuse and forced a
-                               # whole-file re-read -- the agent path's dominant token cost
-                               # (job d6ca3a88 re-read config.js 10x, render.js 6x for one
-                               # feature). Pruning also churns the prompt-cache prefix, so a
-                               # re-read costs a full-price new turn AND a step where a
-                               # resent-but-un-pruned read is mostly cached. Starting point;
-                               # a size-aware horizon is a possible later refinement.
+  # context_prune_after_steps  # REMOVED in Sprint 6a (2026-07). Read results are no
+                               # longer pruned at all, and this key is ignored -- delete it
+                               # from your config.yaml if it is still there (_run_react_loop
+                               # logs a warning if it is). Rewriting an already-sent message
+                               # invalidates DeepSeek's byte-exact prefix cache from that
+                               # message onward, for the rest of the run; measured, each
+                               # prune dropped the cached prefix from ~44,000 tokens back to
+                               # ~4,500, and a cached token costs 1/120th of a fresh one on
+                               # v4-pro. Retention is nearly free; mutation is the expense.
+                               # See docs/multifile-agent/06a-cache-snapshot-and-edits.md.
   # module_warn_bytes: 225000   # soft lint threshold (transcript note only, never blocks
                                # the write). Optional: defaults to half of whichever
                                # max_module_bytes ceiling applies to the current pass

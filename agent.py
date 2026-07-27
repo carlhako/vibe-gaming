@@ -1601,21 +1601,20 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     DB-writing emitter keyed on job_id (a no-op if job_id is None). Every
     call is wrapped in _safe_emit so a raising emitter can't fail the run.
 
-    Context pruning (Sprint 6, following up on the Sprint 5 pilot's token
-    measurements — see docs/multifile-agent/05-migration-and-pilot.md):
-    `ask_with_tools()` is stateless, so every turn resends the whole
-    `messages` list built up so far. Two things stop riding along once
-    they're no longer needed, so the resent-every-turn cost stops growing
-    without bound:
-      - every executed write_file call is removed from the conversation
-        outright — the tool call and its result both — leaving only a short
-        plain-text note carrying the observation (see _compact_write_calls,
-        and note carefully why this removes rather than rewrites them);
-      - a read_file result is replaced with a _PRUNE_SENTINEL placeholder
-        once either the same path is later rewritten (unchanged from
-        Sprint 2) or it's simply gone stale — outstanding for more than
-        `cfg["context_prune_after_steps"]` steps (default 6) without being
-        rewritten. See that default below for why 3 was too eager.
+    Cache discipline (Sprint 6a — see
+    docs/multifile-agent/06a-cache-snapshot-and-edits.md). The conversation
+    is APPEND-ONLY: no message that has already been included in a request
+    to the model is ever mutated or removed. DeepSeek's prefix cache is
+    byte-exact and prefix-only, and it bills a resent cached token at
+    1/120th of a fresh one (v4-pro), so retention is nearly free while
+    MUTATION is what costs — editing a message at position k re-bills
+    everything from k onward at full price, on that turn and every turn
+    after it. Sprint 6 pruned stale read_file results for exactly the
+    reason this inverts, and measurement showed each prune collapsing the
+    cached prefix from ~44,000 tokens back to ~4,500. That pruning is gone.
+    _compact_write_calls survives because it only ever touches the
+    assistant message and tool results created in the CURRENT turn, which
+    have not been sent yet — it shortens the suffix, never the prefix.
 
     `extra_verify(game_dir, built_html) -> str | None` is an optional gate
     run only after build->scan->smoke has already passed; returning a string
@@ -1639,19 +1638,17 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     module_warn_bytes = cfg.get(
         "module_warn_bytes", int(max_module_bytes * DEFAULT_MODULE_WARN_RATIO)
     )
-    # 6, not the 3 this started at. A wide change spanning ~7 modules cycles
-    # back to a given file many steps later, not within 3 — job d6ca3a88
-    # (2026-07-27) re-read config.js 10x, map.js/input.js 8x, combat.js/update.js
-    # 7x, render.js (73KB) 6x for one feature, and whole-file re-reads are the
-    # agent path's dominant token cost. Pruning is also self-defeating against
-    # the prompt cache: every prune mutates the messages prefix and invalidates
-    # the cached tokens downstream of it (that run cached only ~48%). A resent
-    # but un-pruned read is mostly cached; a re-read is a full-price new turn
-    # AND a consumed step, so letting a read survive a normal read->...->write
-    # cycle is cheaper on both axes. Kept modest — a huge module still shouldn't
-    # ride along forever; a size-aware horizon (prune render.js sooner than a
-    # 4KB config.js) is a possible future refinement, not done here.
-    max_read_age_steps = cfg.get("context_prune_after_steps", 6)
+    # Sprint 6a removed read-result pruning outright; a config still carrying
+    # the key is stale, and saying so beats silently ignoring it. Warn rather
+    # than fail: an out-of-date config.yaml must not stop a production run.
+    if "context_prune_after_steps" in cfg:
+        _logger.warning(
+            "multifile_agent.context_prune_after_steps is obsolete and ignored — "
+            "read results are no longer pruned, because mutating an already-sent "
+            "message invalidates DeepSeek's prefix cache from that point on "
+            "(see docs/multifile-agent/06a-cache-snapshot-and-edits.md). "
+            "Remove the key from config.yaml."
+        )
     # `or` rather than a get() default, so an explicitly blank model in a
     # config still lands on the agent's own default instead of falling
     # through to ai_client's app-wide one (see DEFAULT_AGENT_MODEL).
@@ -1678,8 +1675,6 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     last_effort = effort
     verification_attempts = 0
     tokens_at_last_attempt = (0, 0)
-    last_read_message: dict[str, dict] = {}
-    last_read_step: dict[str, int] = {}
     consecutive_no_progress = 0
     wrote_anything = False
     written_paths: set[str] = set()
@@ -1818,8 +1813,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                 tc, game_dir, max_module_bytes, module_warn_bytes, written_paths)
             obs_content, obs_data = _summarize_observation(tc.name, touched_path, content)
             _safe_emit(emit, "tool_result", obs_content, obs_data)
-            msg = {"role": "tool", "tool_call_id": tc.id, "content": content}
-            messages.append(msg)
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": content})
             if not content.startswith("ERROR:"):
                 # A failed call is never progress, and its key is not
                 # recorded either — retrying the same bad path stays a
@@ -1828,10 +1822,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                 if key is not None and key not in seen_observations:
                     seen_observations.add(key)
                     made_progress = True
-            if tc.name == "read_file" and touched_path and not content.startswith("ERROR:"):
-                last_read_message[touched_path] = msg
-                last_read_step[touched_path] = step_num
-            elif tc.name == "write_file":
+            if tc.name == "write_file":
                 write_records.append((tc.id, content))
                 if touched_path and content.startswith("OK:"):
                     made_progress = True
@@ -1844,25 +1835,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                     # then wrote six more files and was killed outright at
                     # the next pause with everything unverified.
                     nudged_to_finish = False
-                    stale = last_read_message.pop(touched_path, None)
-                    last_read_step.pop(touched_path, None)
-                    if stale is not None:
-                        stale["content"] = (
-                            f"{_PRUNE_SENTINEL} {touched_path} was rewritten by a later "
-                            "write_file — re-read it if you need the current contents."
-                        )
         _compact_write_calls(messages, assistant_msg, write_records)
-
-        stale_paths = [
-            path for path, read_at in last_read_step.items()
-            if step_num - read_at >= max_read_age_steps
-        ]
-        for path in stale_paths:
-            read_at = last_read_step.pop(path)
-            last_read_message.pop(path)["content"] = (
-                f"{_PRUNE_SENTINEL} {path} was read {step_num - read_at} steps ago — "
-                "re-read it if you need the current contents."
-            )
 
         for extra in finish_calls[1:]:
             messages.append({

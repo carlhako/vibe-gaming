@@ -15,6 +15,7 @@ import ai_client as ai
 import builder
 import db
 import game_enhancer as ge
+from tests.agent_harness import scripted_asks
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "multifile-game"
 
@@ -141,7 +142,7 @@ EXPLODE_RESPONSES = [
 def test_explode_produces_multifile_fork_with_lineage_to_source(isolated_db, games_dir):
     _setup_single_file_source(games_dir)
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=EXPLODE_RESPONSES), \
+    with scripted_asks(EXPLODE_RESPONSES), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.explode_game(SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir)
 
@@ -186,7 +187,7 @@ def test_explode_fails_cleanly_and_rolls_back_on_persistent_failure(isolated_db,
         _turn([("write_file", {"path": "index.html", "contents": SPLIT_INDEX_HTML})]),
         _turn([("finish", {"summary": "done"})]),
     ]
-    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+    with scripted_asks(responses), \
          mock.patch("smoke_test.run_smoke_test", return_value=(False, "console error: boom")):
         result = agent.explode_game(SOURCE_GAME_ID, "web:t", bad_cfg, games_dir=games_dir)
 
@@ -203,7 +204,7 @@ def test_explode_announce_completion_false_emits_note_not_final(isolated_db, gam
         source_game_id=SOURCE_GAME_ID,
     )
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=EXPLODE_RESPONSES), \
+    with scripted_asks(EXPLODE_RESPONSES), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.explode_game(
             SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir, job_id=job_id,
@@ -253,7 +254,7 @@ def test_explode_enforces_its_own_tighter_module_ceiling(isolated_db, games_dir)
         seen.append(copy.deepcopy(messages))
         return responses[len(seen) - 1]
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted), \
+    with scripted_asks(scripted), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.explode_game(SOURCE_GAME_ID, "web:t", cfg, games_dir=games_dir)
 
@@ -302,7 +303,7 @@ def test_auto_format_routes_multifile_source_directly(isolated_db, games_dir):
     _setup_multi_file_source(games_dir)
     responses = [_turn([("finish", {"summary": "no changes"})])]
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+    with scripted_asks(responses), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.enhance_game_auto_format(
             MULTIFILE_SOURCE_GAME_ID, "make it better", "web:t", CONFIG,
@@ -328,7 +329,7 @@ def test_auto_format_falls_back_to_legacy_for_small_singlefile_source(isolated_d
                       "usage": {"prompt_tokens": 5, "completion_tokens": 5}},
     )
 
-    with mock.patch.object(ai, "ask_with_tools", return_value=submit_response), \
+    with scripted_asks(return_value=submit_response), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.enhance_game_auto_format(
             SOURCE_GAME_ID, "polish it", "web:t", CONFIG, games_dir=games_dir,
@@ -355,7 +356,7 @@ def test_auto_format_explodes_then_enhances_large_singlefile_source(isolated_db,
     ]
     responses = EXPLODE_RESPONSES + enhance_responses
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+    with scripted_asks(responses), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.enhance_game_auto_format(
             SOURCE_GAME_ID, "double the increment", "web:t", CONFIG, games_dir=games_dir,
@@ -417,7 +418,7 @@ def test_auto_format_falls_back_to_legacy_when_explode_fails(isolated_db, games_
             return explode_fail_responses[len(call_log) - 1]
         return submit_response
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted), \
+    with scripted_asks(scripted), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.enhance_game_auto_format(
             SOURCE_GAME_ID, "polish it", "web:t", bad_cfg, games_dir=games_dir,
@@ -476,7 +477,7 @@ def test_explode_rejects_a_split_that_drops_a_declaration(isolated_db, games_dir
 
     bad_cfg = copy.deepcopy(CONFIG)
     bad_cfg["multifile_agent"]["max_verification_retries"] = 1
-    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+    with scripted_asks(responses), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.explode_game(
             SOURCE_GAME_ID, "web:t", bad_cfg, games_dir=games_dir)
@@ -545,7 +546,7 @@ def test_explode_succeeds_end_to_end_when_the_model_renames_a_collision(
         _turn([("finish", {"summary": "split, renaming the window collisions"})]),
     ]
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+    with scripted_asks(responses), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.explode_game(
             SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir)
@@ -779,7 +780,7 @@ def test_explode_succeeds_end_to_end_when_the_split_rebinds_a_local(
         _turn([("finish", {"summary": "split into enemies + combat"})]),
     ]
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+    with scripted_asks(responses), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.explode_game(
             SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir)
@@ -812,7 +813,7 @@ def test_a_review_pass_before_finish_gets_nudged_not_killed(isolated_db, games_d
         + [_turn([("finish", {"summary": "split into modules"})])]
     )
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+    with scripted_asks(responses), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.explode_game(SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir)
 
@@ -830,7 +831,7 @@ def test_the_finish_nudge_is_spent_once_and_a_real_stall_still_aborts(
         + _reads(agent._MAX_NO_PROGRESS_STEPS * 2 + 4)
     )
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+    with scripted_asks(responses), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.explode_game(SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir)
 
@@ -852,7 +853,7 @@ def test_a_run_that_never_wrote_anything_is_not_told_to_finish(isolated_db, game
         seen.append(copy.deepcopy(messages))
         return responses[len(seen) - 1]
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=record), \
+    with scripted_asks(record), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.explode_game(SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir)
 
@@ -894,7 +895,7 @@ def test_a_run_running_out_of_steps_without_verifying_is_told_to_finish(
             return _turn([("write_file", {"path": "core.js", "contents": SPLIT_CORE_JS})])
         return _turn([("read_file", {"path": "core.js"})])
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted), \
+    with scripted_asks(scripted), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         agent.explode_game(SOURCE_GAME_ID, "web:t", cfg, games_dir=games_dir)
 
@@ -923,7 +924,7 @@ def test_a_run_that_has_explored_its_whole_budget_is_told_to_write(
         # A different search every turn: always new information, never a write.
         return _turn([("search", {"pattern": f"pattern{len(sent)}"})])
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted), \
+    with scripted_asks(scripted), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.explode_game(SOURCE_GAME_ID, "web:t", cfg, games_dir=games_dir)
 
@@ -960,7 +961,7 @@ def test_the_budget_warning_is_not_sent_once_verification_has_run(
             return _turn([("finish", {"summary": "done"})])   # fails: no game.md yet
         return _turn([("read_file", {"path": "core.js"})])
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted), \
+    with scripted_asks(scripted), \
          mock.patch("smoke_test.run_smoke_test", return_value=(False, "boom")):
         agent.explode_game(SOURCE_GAME_ID, "web:t", cfg, games_dir=games_dir)
 
@@ -988,7 +989,7 @@ def test_a_stalled_explode_still_ships_when_its_split_is_actually_complete(
         + _reads(agent._MAX_NO_PROGRESS_STEPS * 2 + 2)
     )
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+    with scripted_asks(responses), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.explode_game(SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir)
 
@@ -1010,7 +1011,7 @@ def test_a_stalled_explode_with_a_dropped_declaration_is_still_rejected(
         + _reads(agent._MAX_NO_PROGRESS_STEPS * 2 + 2)
     )
 
-    with mock.patch.object(ai, "ask_with_tools", side_effect=responses), \
+    with scripted_asks(responses), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result = agent.explode_game(SOURCE_GAME_ID, "web:t", CONFIG, games_dir=games_dir)
 
@@ -1039,7 +1040,7 @@ def _model_used_for_explode(games_dir, multifile_cfg):
         cfg.pop("multifile_agent")
     else:
         cfg["multifile_agent"] = multifile_cfg
-    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted), \
+    with scripted_asks(scripted), \
          mock.patch("smoke_test.run_smoke_test", return_value=(False, "stop here")):
         agent.explode_game(SOURCE_GAME_ID, "web:t", cfg, games_dir=games_dir)
     return seen[0]
