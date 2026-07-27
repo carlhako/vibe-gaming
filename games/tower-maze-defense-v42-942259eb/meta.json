@@ -1,0 +1,11 @@
+{
+  "game_id": "942259eb98c64334962da360b742ea4c",
+  "parent_game_id": "5b259e9a9aa24eddaf115e9aa3c708be",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v42)",
+  "description": "Enhanced tower defense with projectile pass-through, upgrade-all buttons, and rich maze generation.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-07-24T21:21:46.558708Z",
+  "version": 1,
+  "prompt": "Earlier I introduced a regression - made bullets/weapons not pass through enemies (i thought this was a visual bug). Turns out, it is important for game play, so restore the weapons passing through enemies (and able to damage other enemies in line). add a button somewhere to upgrade all (pick a strategy - maybe most expensive upgrades first? maybe 2 buttons? (upgrade all - lease expensive first). dont make it take up much space."
+}
