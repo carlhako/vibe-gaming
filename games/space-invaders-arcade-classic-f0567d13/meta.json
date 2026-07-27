@@ -1,0 +1,11 @@
+{
+  "game_id": "f0567d13bd85429d93e2af163f5466e7",
+  "parent_game_id": null,
+  "root_game_id": "f0567d13bd85429d93e2af163f5466e7",
+  "title": "Space Invaders - Arcade Classic",
+  "description": "A faithful recreation of the 1978 arcade classic with pixel-art aliens, destructible shields, mystery UFO, and authentic retro gameplay.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-22T03:19:02.131734Z",
+  "version": 1,
+  "prompt": "make a space invaders clone as close to the original as possible. arcade style graphics straight cut lines as close to the original game."
+}
