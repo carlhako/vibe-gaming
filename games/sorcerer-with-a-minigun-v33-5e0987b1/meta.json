@@ -1,0 +1,11 @@
+{
+  "game_id": "5e0987b188f9411d9cf4c6684f95e75d",
+  "parent_game_id": "74422d5e4647448fab75a2bdda452ebd",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v33)",
+  "description": "Hurl fireballs, summon skeletal minions, and swap between a minigun and railgun in this wave-based arena RPG.",
+  "requested_by": "web:7fbda6b03e03",
+  "created_at": "2026-07-25T01:33:16.814835Z",
+  "version": 1,
+  "prompt": "make it so the key Q does not change your weapon."
+}
