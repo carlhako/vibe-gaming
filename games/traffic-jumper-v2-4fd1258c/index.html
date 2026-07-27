@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Traffic Jumper</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #222;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        canvas {
+            display: block;
+            border: 2px solid #555;
+            background: #000;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="game" width="500" height="480"></canvas>
+
+    <script>
+        (function() {
+            const canvas = document.getElementById('game');
+            const ctx = canvas.getContext('2d');
+
+            // Grid
+            const COLS = 10;
+            const ROWS = 8; // 0: start, 1-6: traffic, 7: goal
+            const CELL_W = canvas.width / COLS;  // 50
+            const CELL_H = canvas.height / ROWS; // 60
+            const PLAYER_RADIUS = CELL_W * 0.35;
+            const PLAYER_W = CELL_W * 0.8;
+            const PLAYER_H = CELL_H * 0.8;
+            const CAR_W = CELL_W * 0.8;
+            const CAR_H = CELL_H * 0.7;
+
+            // Lanes: row 0 (start), rows 1-6 traffic, row 7 goal
+            const LANE_BASE_SPEEDS = [80, 95, 110, 125, 140, 155]; // px/sec per lane
+            const SPAWN_BASE_INTERVAL = 2.0; // seconds per lane at stage 1
+
+            // Game state variables
+            let stage = 1;
+            let speedMultiplier = 1.0;
+            let densityMultiplier = 1.0;
+            let gameState = 'playing'; // 'playing', 'stageComplete', 'gameover'
+            let playerCol = Math.floor(COLS / 2);
+            let playerRow = 0;
+            let moveCooldown = false;
+            let cars = [];
+            let laneTimers = new Array(6).fill(0); // for rows 1-6
+            let gameTime = 0; // total elapsed time in ms
+            let lastTimestamp = 0;
+            let deathTimestamp = 0;
+            let stageCompleteTimestamp = 0;
+            let splatters = []; // blood splatter data for game over
+            let hasRestartFlag = false;
+
+            // Initialize spawn timers with random offsets
+            function initSpawnTimers() {
+                for (let i = 0; i < 6; i++) {
+                    laneTimers[i] = performance.now() + Math.random() * 1500;
+                }
+            }
+
+            // Get pixel center for a grid cell
+            function cellCenter(col, row) {
+                return {
+                    x: col * CELL_W + CELL_W / 2,
+                    y: row * CELL_H + CELL_H / 2
+                };
+            }
+
+            // Player collision box
+            function playerRect() {
+                const center = cellCenter(playerCol, playerRow);
+                return {
+                    left: center.x - PLAYER_W / 2,
+                    top: center.y - PLAYER_H / 2,
+                    right: center.x + PLAYER_W / 2,
+                    bottom: center.y + PLAYER_H / 2
+                };
+            }
+
+            // Collision check AABB
+            function rectsCollide(a, b) {
+                return a.left < b.right && a.right > b.left &&
+                       a.top < b.bottom && a.bottom > b.top;
+            }
+
+            // Reset game to initial stage 1
+            function resetGame() {
+                stage = 1;
+                speedMultiplier = 1.0;
+                densityMultiplier = 1.0;
+                playerCol = Math.floor(COLS / 2);
+                playerRow = 0;
+                cars = [];
+                gameState = 'playing';
+                moveCooldown = false;
+                gameTime = 0;
+                lastTimestamp = 0;
+                deathTimestamp = 0;
+                stageCompleteTimestamp = 0;
+                splatters = [];
+                hasRestartFlag = false;
+                initSpawnTimers();
+            }
+
+            // Spawn a new car in a specific lane (row index from 0..5 representing lanes 1-6)
+            function spawnCar(laneIdx) {
+                const row = laneIdx + 1; // actual row 1-6
+                const laneSpeed = LANE_BASE_SPEEDS[laneIdx] + (Math.random() - 0.5) * 20; // small variation
+                const speed = laneSpeed * speedMultiplier;
+                const carHeight = CAR_H;
+                const carWidth = CAR_W;
+                const y = row * CELL_H + (CELL_H - carHeight) / 2;
+                const hue = (laneIdx * 40 + Math.random() * 30) % 360;
+                const color = `hsl(${hue}, 70%, 50%)`;
+                cars.push({
+                    x: -carWidth,
+                    y: y,
+                    w: carWidth,
+                    h: carHeight,
+                    speed: speed,
+                    color: color,
+                    lane: row
+                });
+            }
+
+            // Handle death
+            function die() {
+                if (gameState !== 'playing') return;
+                gameState = 'gameover';
+                deathTimestamp = performance.now();
+                // Generate splatter data (deterministic relative to timestamp)
+                const seed = deathTimestamp;
+                const gen = mulberry32(seed);
+                splatters = [];
+                const count = 18;
+                for (let i = 0; i < count; i++) {
+                    splatters.push({
+                        x: gen() * canvas.width,
+                        y: gen() * canvas.height,
+                        radius: 15 + gen() * 30,
+                        hue: 0, // red
+                        saturation: 80 + gen() * 20,
+                        lightness: 20 + gen() * 30
+                    });
+                }
+            }
+
+            // Simple pseudo-random generator for splatter positions
+            function mulberry32(a) {
+                return function() {
+                    a |= 0; a = a + 0x6D2B79F5 | 0;
+                    var t = Math.imul(a ^ a >>> 15, 1 | a);
+                    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+                    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+                };
+            }
+
+            // Handle stage completion
+            function completeStage() {
+                if (gameState !== 'playing') return;
+                gameState = 'stageComplete';
+                stageCompleteTimestamp = performance.now();
+                stage++;
+                speedMultiplier = 1 + (stage - 1) * 0.25;
+                densityMultiplier = 1 + (stage - 1) * 0.2;
+                // Cars will be cleared when we reset after display
+            }
+
+            // Reset after stage completion display
+            function afterStageComplete() {
+                cars = [];
+                // Re-init timers with fresh offsets
+                for (let i = 0; i < 6; i++) {
+                    laneTimers[i] = performance.now() + Math.random() * 1500;
+                }
+                playerCol = Math.floor(COLS / 2);
+                playerRow = 0;
+                gameState = 'playing';
+                stageCompleteTimestamp = 0;
+                moveCooldown = false;
+            }
+
+            // Update game logic
+            function update(now) {
+                if (gameState === 'gameover') {
+                    return; // no updates, just animation
+                }
+                if (gameState === 'stageComplete') {
+                    // Wait for display duration
+                    if (now - stageCompleteTimestamp > 1500) {
+                        afterStageComplete();
+                    }
+                    return;
+                }
+
+                // gameState === 'playing'
+                const dt = Math.min(0.05, (now - lastTimestamp) / 1000); // seconds, max 50ms
+                if (dt <= 0) return;
+                lastTimestamp = now;
+                gameTime += dt * 1000;
+
+                // Update spawn timers
+                for (let laneIdx = 0; laneIdx < 6; laneIdx++) {
+                    if (now >= laneTimers[laneIdx]) {
+                        spawnCar(laneIdx);
+                        // Calculate next spawn interval based on density
+                        const interval = (SPAWN_BASE_INTERVAL / densityMultiplier) * (0.8 + Math.random() * 0.4); // slight randomness
+                        laneTimers[laneIdx] = now + interval * 1000;
+                    }
+                }
+
+                // Update car positions
+                for (let i = cars.length - 1; i >= 0; i--) {
+                    const car = cars[i];
+                    // FIXED: removed spurious *60 factor; speed is in px/sec, dt in seconds
+                    car.x += car.speed * dt;
+                    // Remove if off-screen
+                    if (car.x > canvas.width + 20) {
+                        cars.splice(i, 1);
+                    }
+                }
+
+                // Check collisions
+                if (playerRow >= 1 && playerRow <= 6) { // only in traffic lanes
+                    const pRect = playerRect();
+                    for (const car of cars) {
+                        const carRect = {
+                            left: car.x,
+                            top: car.y,
+                            right: car.x + car.w,
+                            bottom: car.y + car.h
+                        };
+                        if (rectsCollide(pRect, carRect)) {
+                            die();
+                            break;
+                        }
+                    }
+                }
+
+                // Check if player reached goal (row 7)
+                if (playerRow === ROWS - 1 && gameState === 'playing') {
+                    completeStage();
+                }
+            }
+
+            // Handle player movement
+            function movePlayer(dx, dy) {
+                if (gameState !== 'playing') return false;
+                if (moveCooldown) return false;
+
+                const newCol = playerCol + dx;
+                const newRow = playerRow + dy;
+                if (newCol < 0 || newCol >= COLS || newRow < 0 || newRow >= ROWS) {
+                    return false;
+                }
+
+                // Move allowed
+                playerCol = newCol;
+                playerRow = newRow;
+                moveCooldown = true;
+                setTimeout(() => { moveCooldown = false; }, 150);
+                return true;
+            }
+
+            // Drawing functions
+            function drawBackground() {
+                // Green areas
+                ctx.fillStyle = '#2ecc71';
+                ctx.fillRect(0, 0, canvas.width, CELL_H); // start row
+                ctx.fillRect(0, (ROWS-1) * CELL_H, canvas.width, CELL_H); // goal row
+
+                // Road lanes (rows 1-6)
+                ctx.fillStyle = '#4a4a4a';
+                for (let r = 1; r <= 6; r++) {
+                    ctx.fillRect(0, r * CELL_H, canvas.width, CELL_H);
+                }
+
+                // Lane dividers (dashed white lines)
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([15, 15]);
+                for (let r = 1; r <= 7; r++) { // between each row, including top of goal row
+                    const y = r * CELL_H;
+                    ctx.beginPath();
+                    ctx.moveTo(0, y);
+                    ctx.lineTo(canvas.width, y);
+                    ctx.stroke();
+                }
+                ctx.setLineDash([]); // reset
+            }
+
+            function drawCars() {
+                if (gameState === 'stageComplete') {
+                    // Still draw cars at frozen positions
+                }
+                for (const car of cars) {
+                    ctx.fillStyle = car.color;
+                    ctx.fillRect(car.x, car.y, car.w, car.h);
+                    // Windows / roof
+                    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+                    const roofX = car.x + car.w * 0.2;
+                    const roofY = car.y + car.h * 0.1;
+                    const roofW = car.w * 0.5;
+                    const roofH = car.h * 0.5;
+                    ctx.fillRect(roofX, roofY, roofW, roofH);
+                    // Headlights (small white oval)
+                    ctx.fillStyle = '#fff';
+                    ctx.beginPath();
+                    ctx.ellipse(car.x + car.w * 0.1, car.y + car.h * 0.7, car.w*0.06, car.h*0.12, 0, 0, Math.PI*2);
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.ellipse(car.x + car.w * 0.9, car.y + car.h * 0.7, car.w*0.06, car.h*0.12, 0, 0, Math.PI*2);
+                    ctx.fill();
+                }
+            }
+
+            function drawPlayer() {
+                if (gameState === 'gameover') return; // no player when dead
+                const center = cellCenter(playerCol, playerRow);
+                ctx.save();
+                ctx.translate(center.x, center.y);
+
+                // Body circle
+                ctx.fillStyle = '#00d2ff';
+                ctx.beginPath();
+                ctx.arc(0, 0, PLAYER_RADIUS, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Eyes
+                ctx.fillStyle = '#fff';
+                ctx.beginPath();
+                ctx.arc(-PLAYER_RADIUS*0.35, -PLAYER_RADIUS*0.25, PLAYER_RADIUS*0.25, 0, Math.PI*2);
+                ctx.arc(PLAYER_RADIUS*0.35, -PLAYER_RADIUS*0.25, PLAYER_RADIUS*0.25, 0, Math.PI*2);
+                ctx.fill();
+                // Pupils
+                ctx.fillStyle = '#000';
+                ctx.beginPath();
+                ctx.arc(-PLAYER_RADIUS*0.35, -PLAYER_RADIUS*0.25, PLAYER_RADIUS*0.12, 0, Math.PI*2);
+                ctx.arc(PLAYER_RADIUS*0.35, -PLAYER_RADIUS*0.25, PLAYER_RADIUS*0.12, 0, Math.PI*2);
+                ctx.fill();
+                // Smile
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(0, PLAYER_RADIUS*0.1, PLAYER_RADIUS*0.3, 0.1, Math.PI - 0.1);
+                ctx.stroke();
+
+                ctx.restore();
+            }
+
+            function drawStageComplete() {
+                if (gameState === 'stageComplete') {
+                    const textY = canvas.height / 2 - 20;
+                    ctx.save();
+                    ctx.font = 'bold 32px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillStyle = '#fff';
+                    ctx.shadowColor = '#000';
+                    ctx.shadowBlur = 8;
+                    ctx.fillText(`Stage ${stage - 1} Complete!`, canvas.width/2, textY);
+                    ctx.font = '18px sans-serif';
+                    ctx.fillText('Next stage starting...', canvas.width/2, textY + 40);
+                    ctx.restore();
+                }
+            }
+
+            function drawGameOver() {
+                if (gameState !== 'gameover') return;
+                const elapsed = performance.now() - deathTimestamp;
+                const splatDuration = 1000; // 1 second
+                const progress = Math.min(1, elapsed / splatDuration);
+
+                // Draw static background and cars (simulate freeze)
+                ctx.save();
+                // Overlay dark red background
+                ctx.globalAlpha = progress * 0.75;
+                ctx.fillStyle = '#600000';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                // Draw splatters
+                for (const s of splatters) {
+                    ctx.globalAlpha = progress * 1;
+                    ctx.fillStyle = `hsl(${s.hue}, ${s.saturation}%, ${s.lightness}%)`;
+                    ctx.beginPath();
+                    ctx.arc(s.x, s.y, s.radius * progress, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                // Additional large central splat for emphasis
+                ctx.globalAlpha = progress * 0.9;
+                ctx.fillStyle = '#8b0000';
+                ctx.beginPath();
+                const cx = canvas.width / 2;
+                const cy = canvas.height / 2;
+                ctx.arc(cx, cy, 70 * progress, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#a52a2a';
+                ctx.beginPath();
+                ctx.arc(cx - 30 * progress, cy - 20 * progress, 40 * progress, 0, Math.PI*2);
+                ctx.fill();
+                ctx.arc(cx + 25 * progress, cy + 15 * progress, 35 * progress, 0, Math.PI*2);
+                ctx.fill();
+                ctx.restore();
+
+                // Game over text after splat completes
+                if (progress >= 1) {
+                    const textY = canvas.height / 2;
+                    ctx.save();
+                    ctx.font = 'bold 48px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillStyle = '#fff';
+                    ctx.shadowColor = '#000';
+                    ctx.shadowBlur = 10;
+                    ctx.fillText('GAME OVER', canvas.width/2, textY - 20);
+                    ctx.font = '20px sans-serif';
+                    ctx.fillText(`Stage reached: ${stage}`, canvas.width/2, textY + 30);
+                    ctx.fillText('Press SPACE to restart', canvas.width/2, textY + 60);
+                    ctx.restore();
+                    hasRestartFlag = true;
+                }
+            }
+
+            function drawHUD() {
+                if (gameState === 'gameover') return;
+                ctx.save();
+                ctx.font = '18px sans-serif';
+                ctx.fillStyle = '#fff';
+                ctx.textAlign = 'left';
+                ctx.fillText(`Stage: ${stage}`, 10, 25);
+                ctx.textAlign = 'right';
+                ctx.fillText(`Speed: x${speedMultiplier.toFixed(2)}`, canvas.width - 10, 25);
+                ctx.restore();
+            }
+
+            function render() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                drawBackground();
+                drawCars();
+                drawPlayer();
+                drawHUD();
+                drawStageComplete();
+                drawGameOver();
+            }
+
+            // Game loop
+            function loop(timestamp) {
+                if (!lastTimestamp) {
+                    lastTimestamp = timestamp;
+                    initSpawnTimers();
+                }
+                update(timestamp);
+                render();
+                requestAnimationFrame(loop);
+            }
+
+            // Input handling
+            function handleKeydown(e) {
+                if (gameState === 'gameover') {
+                    if (e.code === 'Space' && hasRestartFlag) {
+                        resetGame();
+                        lastTimestamp = 0; // reset delta tracking
+                        return;
+                    }
+                    return;
+                }
+                if (gameState === 'stageComplete') return; // can't move
+
+                const key = e.code;
+                e.preventDefault();
+                switch (key) {
+                    case 'ArrowUp':
+                    case 'KeyW':
+                        movePlayer(0, -1);
+                        break;
+                    case 'ArrowDown':
+                    case 'KeyS':
+                        movePlayer(0, 1);
+                        break;
+                    case 'ArrowLeft':
+                    case 'KeyA':
+                        movePlayer(-1, 0);
+                        break;
+                    case 'ArrowRight':
+                    case 'KeyD':
+                        movePlayer(1, 0);
+                        break;
+                    default:
+                        return;
+                }
+            }
+
+            // Prevent arrow key scrolling
+            window.addEventListener('keydown', function(e) {
+                if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) {
+                    e.preventDefault();
+                }
+            });
+
+            window.addEventListener('keydown', handleKeydown);
+
+            // Restart on click if game over (optional convenience)
+            canvas.addEventListener('click', () => {
+                if (gameState === 'gameover' && hasRestartFlag) {
+                    resetGame();
+                    lastTimestamp = 0;
+                }
+            });
+
+            // Start
+            resetGame();
+            requestAnimationFrame(loop);
+        })();
+    </script>
+</body>
+</html>
