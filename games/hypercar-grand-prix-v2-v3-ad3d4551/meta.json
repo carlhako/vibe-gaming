@@ -1,0 +1,11 @@
+{
+  "game_id": "ad3d45519a904ad28f130deeb8a14603",
+  "parent_game_id": "a9713b87ac80412bae36934b71d3c43f",
+  "root_game_id": "cf68ae04b835466bb5db69c89400e75f",
+  "title": "Hypercar Grand Prix (v3)",
+  "description": "A first-person 3D racing game with detailed car physics, track pickups, and a behind-the-camera perspective inspired by Mario Kart 64.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-07-19T06:02:59.329080Z",
+  "version": 1,
+  "prompt": "make it first person like mario kart https://en.wikipedia.org/wiki/Mario_Kart_64 (super tux cart for ref, open source clone: https://github.com/supertuxkart"
+}
