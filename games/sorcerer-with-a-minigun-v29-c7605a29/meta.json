@@ -1,0 +1,11 @@
+{
+  "game_id": "c7605a29a33743da8c98ccd962fbe332",
+  "parent_game_id": "93b212af3be04f65ac239b4afb89b8e3",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v29)",
+  "description": "Darkhold Arena wave-based RPG. Choose the Sorcerer, collect tokens, upgrade your fireballs into a minigun or railgun, summon skeleton minions, and now even arm your skeletons with railguns!",
+  "requested_by": "web:7fbda6b03e03",
+  "created_at": "2026-07-24T23:22:22.815783Z",
+  "version": 1,
+  "prompt": "add an upgrade where you can get the skeletons to have the railgun just like how you can get the skeletons with the minigun and make it cost 500 tokens"
+}
