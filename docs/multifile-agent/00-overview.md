@@ -54,7 +54,14 @@ be forced to read all of it either.** Two mechanisms enforce this:
 - **Whole-module rewrites for v1**, not search/replace diffs. Fuzzy matching
   against a large file is the classic agentic-editor failure mode; a
   whole-module rewrite is unambiguous and still bounded well under the
-  ceiling. Diffs can be earned later (see Sprint 6).
+  ceiling. Diffs can be earned later (see Sprint 6). *(Earned in
+  [Sprint 6a](06a-cache-snapshot-and-edits.md) as `edit_file`, and the
+  concern above is what shaped it: it is **exact-match, exactly once**,
+  never fuzzy, never first-or-all — zero or multiple matches are rejected
+  outright rather than guessed, and no error message may echo a near-miss,
+  since that teaches precisely the matching the tool refuses to do.
+  `write_file` remains the tool for creating a file or genuinely rewriting
+  most of one.)*
 - **Dual-format, no forced global migration.** Legacy games stay
   `format: "single-file"` and keep using the existing
   `run_generation_attempts()` loop. Multi-file is opt-in per game; we pilot
@@ -87,11 +94,35 @@ be forced to read all of it either.** Two mechanisms enforce this:
   source still avoids a whole-game read+write on every enhancement even at
   the higher ceiling — but it does mean single-file games have much more
   headroom before hitting the wall this initiative exists to solve.
-- **Context-pruning strategy for long agent runs.** Superseded file contents
-  should be dropped/summarized from the running message list so a 10-step
-  edit doesn't balloon input. Sprint 2 picks the concrete policy.
-- **How aggressively to explode legacy games.** Sprint 5 decides whether an
-  enhance of a single-file game auto-explodes it or leaves it legacy.
+- ~~**Context-pruning strategy for long agent runs.** Superseded file
+  contents should be dropped/summarized from the running message list so a
+  10-step edit doesn't balloon input.~~ **Resolved, Sprint 6a (2026-07-27) —
+  and the premise was backwards.** Sprints 2 and 6 answered it as posed and
+  pruned; measuring three production enhances showed why that was the wrong
+  question. DeepSeek's prefix cache is byte-exact and prefix-only, and bills
+  a resent cached token at **1/120th** of a fresh one on v4-pro, so retained
+  context is nearly free — cache-hit input was under 2% of what an enhance
+  cost, while cache-*miss* input was 68-85%. **Retention is not the cost;
+  mutation is**: rewriting a message at position *k* re-bills everything
+  from *k* onward at full price, on that turn and every turn after. Each
+  prune was observed collapsing the cached prefix from ~44,000 tokens back
+  to ~4,500. The conversation is now **append-only** — no message already
+  sent is ever mutated or removed — and the ballooning this question worried
+  about is handled at the other end instead: a full source snapshot so
+  modules aren't re-read at all, `edit_file` so small changes don't cost
+  whole-module rewrites, and a context guard that lands the run rather than
+  letting it hit the window.
+- ~~**How aggressively to explode legacy games.** Sprint 5 decides whether an
+  enhance of a single-file game auto-explodes it or leaves it legacy.~~
+  **Resolved, Sprint 5:** size-triggered, not universal.
+  `agent.enhance_game_auto_format()` auto-explodes a single-file source at or
+  over `game_enhancer.LARGE_SOURCE_BYTES` (the intermediate fork is hidden —
+  an implementation detail, not something the requester asked to see) and
+  then enhances that fork; everything smaller stays on the legacy path
+  untouched. A failed explode falls back to the legacy path rather than
+  failing a request over an internal step nobody asked for. Admins can also
+  explode any game on demand from `/admin/stats`' Games tab, and that fork
+  *is* visible, since the format change was the thing asked for.
 
 ## Sprint sequence and dependency rationale
 
@@ -118,7 +149,9 @@ be forced to read all of it either.** Two mechanisms enforce this:
    module-size hygiene (optional).** Token-level SSE streaming, cancel-job
    and live per-job cost; the module-size soft lint is done.
 7. **[Sprint 6a](06a-cache-snapshot-and-edits.md) — Cache discipline,
-   source snapshot, targeted edits.** Runs next, ahead of the rest of
+   source snapshot, targeted edits. Implemented 2026-07-27 (all five steps,
+   commits `4d98a40`..`95d43f1`); live verification and the play-test gate
+   still outstanding.** Ran ahead of the rest of
    Sprint 6. Sprint 6's context pruning mutates already-sent messages,
    which collapses DeepSeek's prefix cache — and a cache hit costs
    **1/120th** of a miss, so cache-miss input turned out to be 68-85% of

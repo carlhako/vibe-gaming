@@ -694,8 +694,14 @@ token counts plus the run's running totals. It's the only per-call
 accounting there is: the `generation_requests` row only gets a total when
 the whole job ends, and `generation_attempts` only gets a row per `finish()`
 verification, so without it a 60-turn agent run's spend is invisible until
-it's over. `agent_chat.js` has no renderer for the role and silently skips
-it, so the job status page is unchanged.
+it's over. `agent_chat.js` renders it two ways: an always-on running-total
+bar (`#chat-usage-bar` — step, in/out/cached/total tokens) that updates on
+every `usage` event, and a terminal summary line appended after the final
+`final`/`error` card. Tokens only, no USD — the dollar readout lives in the
+admin explode dialog (`admin_explode.js`), which is the page that has the
+per-million rates in hand (they're admin-page data attributes, behind
+`ADMIN_TOKEN`); putting spend in front of a public requester is a separate
+decision, not an oversight.
 
 **The transcript is the archive.** `agent_events` rows are never pruned or
 deleted, and the chat pane renders from nothing else, so `/status/<job_id>`

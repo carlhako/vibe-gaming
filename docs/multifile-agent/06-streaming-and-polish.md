@@ -22,16 +22,36 @@ when that Sprint 8 was deleted; this file's name was always about
 streaming, and streaming's real gunicorn worker-occupancy tradeoff is
 worth deciding on its own, separate from these smaller additive items.
 
-**Progress: D done; A and B not started (2026-07-27).** D's soft
-module-size lint landed and is covered below. **Next up: Sprint 6a, then
-item B (job controls — cancel + live per-job cost).** Neither
-cancellation nor a `cancelled` job status exist yet; `agent_chat.js`
-still has no renderer for the `usage` event role (it silently skips it),
-even though the event itself already carries running token totals per
-call. Note that 6a's step 0 (pricing cached tokens at the cached rate)
-is a prerequisite for B's live cost readout being correct — without it
-the pane would display the same ~4x overstatement the admin History tab
-does today.
+**Progress: D and E done; B half done; A not started (revised 2026-07-27,
+after Sprint 6a's five steps landed).** Sprint 6a is implemented
+(commits `4d98a40`..`95d43f1`) and pending live verification, so its step 0
+prerequisite below is satisfied — cached input now bills at the cached rate
+everywhere, and a live cost readout will no longer show the ~4x
+overstatement the admin History tab used to.
+
+Two corrections to the previous status line, both of which claimed less
+was done than actually is:
+
+- **Item B's cost half is largely already shipped**, contrary to the
+  earlier note that `agent_chat.js` "still has no renderer for the `usage`
+  event role". It has had one since `1d3cfd3` (2026-07-26), the day before
+  that line was written: an always-on running-total bar (`#chat-usage-bar`)
+  plus a terminal summary, both fed by `usage` events. `admin_explode.js`
+  goes further and shows live **USD** using the admin page's per-million
+  rate attributes.
+- **What is actually left of B is (i) cancel, entirely, and (ii) the
+  decision of whether the public status page should show USD at all.** The
+  rates are admin-page data attributes behind `ADMIN_TOKEN`; exposing a
+  requester's spend to them is a product call, not a missing renderer. If
+  the answer is no, B's cost half is done and only cancel remains.
+
+**Next up: item B's cancel.** No `cancelled` job status, stop button, or
+cooperative check exists anywhere in the codebase (grep for "cancel" finds
+only an unrelated admin rename dialog). The nearest existing machinery is
+the global AI kill switch, which `ai_client.py:147` checks per call and
+which therefore already aborts an in-flight agent run mid-loop — a per-job
+cancel is the same shape scoped to one `job_id`, plus the fork-directory
+rollback the agent's failure path already performs.
 
 ## Candidate items
 
@@ -54,11 +74,12 @@ does today.
 - **Cancel:** a stop button that flips the job to a `cancelled` state the
   agent loop checks between steps (cooperative cancellation), rolling back
   the half-written fork directory.
-- **Per-job cost:** surface cumulative input/output tokens and a cost
-  estimate live in the conversation pane (reuse the admin history's
-  `_attach_token_costs` math). The `usage` event already carries this data
-  per call — `agent_chat.js` currently has no renderer for the role and
-  silently skips it.
+- **Per-job cost — mostly DONE.** `agent_chat.js` renders `usage` events
+  into a live running-total bar plus a terminal summary (step, in, out,
+  cached, total), and `admin_explode.js`'s dialog adds a live USD figure
+  off the admin page's per-million rate attributes, cached-rate-aware since
+  Sprint 6a step 0. The only open piece is whether `/status/<job_id>` — a
+  public page with no access to those rates — should show USD too.
 
 ### D. Module-size hygiene — DONE (2026-07-26)
 
