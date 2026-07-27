@@ -1,0 +1,11 @@
+{
+  "game_id": "c951f4e95c3d43f8bc2ad722f8019759",
+  "parent_game_id": "fb71c547499143c9a5a31643b8159f15",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v24)",
+  "description": "Enhanced tower defense with procedurally generated mazes featuring loop detours and split-paths where enemies diverge to take alternate routes.",
+  "requested_by": "web:007d10387b5b",
+  "created_at": "2026-07-21T02:52:48.181800Z",
+  "version": 1,
+  "prompt": "Lets add some variation to the path, two main things I want to see show up in path seeds (These can be there in multiples or not there at all)\r\n\r\nLoops, where the path loops around and crosses over itself, in this case, the enemy must follow the entire loop path, there should always be a minimum of 4 squares (2x2) inside of a loop, but they can be larger\r\n\r\nSplit paths, where a path can split into 2 directions, they should rejoin before the end point, no maximum deviations here, and upto a maximum of 3 paths (Splits) per map, the enemies should split 50:50 between these paths."
+}
