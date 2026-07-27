@@ -1,0 +1,11 @@
+{
+  "game_id": "baee8dfe3ccd4621bc98af1283ef4751",
+  "parent_game_id": "2cd2a702769c445d973b4e0e4fbec5a8",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v36)",
+  "description": "Enhanced tower-defense maze: steam rollers respawn every 20s, enemy info updates live, and all towers track lifetime damage dealt.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-21T08:11:06.955286Z",
+  "version": 1,
+  "prompt": "update the steam roller unit so it releases a new steam roller every 20 seconds.\r\n\r\nsecondly fix the info for when you click onto a unit so it live updates its HP it currently only updates when you click off the unit and back onto it.\r\n\r\nthird thing is in the towers information box add a total damange which is the cumulative damage that the tower has done. this number never resets and survives upgrades."
+}
