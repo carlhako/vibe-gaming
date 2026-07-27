@@ -1,0 +1,12 @@
+{
+  "game_id": "e02147d0bcc64ce88c7966a3919130fa",
+  "parent_game_id": "dd28bc578ded478388ab683b5cba9bb2",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v46)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-27T07:02:48.212302Z",
+  "version": 6,
+  "prompt": "the glowing purple square that is meant to show randomly after wave 5 has a bug. the square is invisible its meant to glow all the time and be visible. \r\n\r\nCheck it spawns normal enemies as well as 2 witch bosses. If its not spawning normal enemies make it spawn a few random enemies as well. They should be stronger then normal enemies double HP.",
+  "format": "multi-file"
+}
