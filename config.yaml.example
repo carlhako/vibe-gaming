@@ -158,6 +158,16 @@ job_runner:
   workers: 1                 # poll-loop threads per process (dev) / per gunicorn worker (prod)
   poll_interval_seconds: 1   # how often an idle worker checks for a newly queued job
 
+# Auto-commit + push every successfully generated/enhanced game directory
+# to the GitHub remote this checkout already has configured (origin), with
+# the generation/enhancement prompt as the commit message. Requires
+# GITHUB_PUSH_TOKEN in .env. A push failure is logged and never fails the
+# job itself - the game already generated and smoke-tested fine. Off by
+# default so a fresh clone/dev checkout with no token configured behaves
+# exactly as before this existed. See git_sync.py.
+git_sync:
+  enabled: false
+
 # Caps how often one visitor (by vg_uid cookie OR IP, whichever fires first —
 # same anti-abuse posture as the ratings table's two UNIQUE constraints) can
 # queue a /games/new or /enhance job, to bound worst-case DeepSeek token

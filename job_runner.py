@@ -24,6 +24,7 @@ import agent
 import ai_qa
 import db
 import game_generator
+import git_sync
 
 
 def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
@@ -106,6 +107,15 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
             answer=result.get("answer"),
             conn=conn,
         )
+        # Best-effort: push the finished game directory to GitHub. Never
+        # lets a git failure (bad token, network blip, GitHub outage) turn
+        # a successful generation/enhancement into a failed job — the game
+        # already generated and smoke-tested fine.
+        if job["kind"] in ("create", "enhance", "explode") and git_sync.is_enabled(config):
+            try:
+                git_sync.push_game(games_dir / result["slug"], job["prompt"], config)
+            except git_sync.GitSyncError as exc:
+                print(f"job_runner: git push failed for job {job_id}: {exc}")
     else:
         db.update_generation_request(
             job_id, status="failed", attempts=result["attempts"], model=result["model"],

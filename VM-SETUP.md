@@ -17,14 +17,24 @@ git clone https://github.com/carlhako/vibe-gaming.git vibegames
 cd vibegames
 ```
 
-If you're moving from an existing machine instead of a fresh clone, copy
-the whole `vibegames/` directory over (including `games/` and, if you want
-to keep history, `vibegames.db`) rather than starting from git alone —
-`vibegames.db` and any generated games under `games/` are gitignored and
-won't come from `git clone`. The copied `vibegames.db` must already be on
-the current GUID schema (`game_id`-keyed `web_games`); the one-off
-migration script for pre-GUID databases has been removed, so a DB from
-the old platform can't be upgraded from here.
+`vibegames.db` is gitignored and always VM-local — it won't come from
+`git clone`, and there's no automated sync for it (see `git_sync` below,
+which only ever pushes game *files*, never the DB). If you're moving from
+an existing machine, copy `vibegames.db` over if you want to keep its
+history (ratings, creator identities, generation audit trail); it must
+already be on the current GUID schema (`game_id`-keyed `web_games`) — the
+one-off migration script for pre-GUID databases has been removed, so a DB
+from the old platform can't be upgraded from here.
+
+Generated games under `games/` are a different story depending on whether
+the *source* VM had `git_sync.enabled: true` (see step 5): if it did,
+every game generated or enhanced after that was already pushed to GitHub,
+so a fresh `git clone` on the new machine already has them, and the
+startup `sync_games_from_disk()` reconstructs the matching `web_games`
+rows the first time the app runs there — no manual copy needed. Only
+games generated *before* `git_sync` was enabled (or on a VM that never
+enabled it) are gitignored and VM-local, and still need a manual copy of
+`games/` the same as before.
 
 ## 3. Python environment
 
@@ -63,6 +73,21 @@ Edit `.env` and set:
 `port: 8600`). If this VM sits behind a domain/reverse proxy, set
 `game_web.base_url` so generated "play it" links point at the public URL
 instead of `localhost`.
+
+**Optional: auto-push generated games to GitHub.** If this VM should
+commit and push every successfully generated/enhanced game directory back
+to this repo's GitHub remote (commit message = the prompt that produced
+it), set `git_sync.enabled: true` in `config.yaml` and generate a
+fine-grained GitHub Personal Access Token scoped to just this repo
+(Contents: read/write) at
+https://github.com/settings/personal-access-tokens/new, then set
+`GITHUB_PUSH_TOKEN` in `.env` to it. Leave `git_sync.enabled: false`
+(the default) to keep this VM's generated games VM-local, exactly as
+before this feature existed. If you're turning this on for a VM that
+already has pre-existing games in `games/`, run
+`python3 scripts/backfill_games_to_git.py` once first (see its `--dry-run`
+flag) to commit/push everything already there — the live hook only
+covers *future* jobs.
 
 ## 6. Database and bundled games — nothing to do
 
