@@ -1,0 +1,12 @@
+{
+  "game_id": "29f74ae88cf8436eb9d51117f4d52233",
+  "parent_game_id": "3bd2d83573a84bf8ba6c4e778f67c44d",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v48)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-27T08:39:42.323164Z",
+  "version": 8,
+  "prompt": "Replace the Witch boss with a new boss called Earthshaker starting from Wave 13 onwards.\r\n\r\nEarthshaker:\r\n- Large stone-like boss with glowing purple cracks.\r\n- HP significantly higher than Witch (around 2x to 3x Witch HP).\r\n- Slow movement speed.\r\n- Drops more tokens than Witch.\r\n\r\nAbilities:\r\n\r\n1. Ground Slam\r\n- Every 5-7 seconds Earthshaker stops moving and charges for 1 second.\r\n- During the charge, show a visible warning effect around the boss.\r\n- After charging, Earthshaker slams the ground and creates a shockwave that expands outward.\r\n- Shockwave damages and stuns the player for 1.5 seconds.\r\n- Shockwave cancels railgun charging and interrupts dash if it hits.\r\n- Shockwave must NOT travel through walls or stone blocks. Walls block the wave completely.\r\n\r\n2. Teleport\r\n- Every 8-12 seconds Earthshaker teleports to a random valid open tile.\r\n- Never teleport into walls, stone blocks, map borders, purple crystals, enemies, minions, or the player.\r\n- Must teleport at least 200 pixels away from the player.\r\n- Show purple particle effects before and after teleporting.\r\n\r\n3. Rage Phase\r\n- Trigger at 50% HP.\r\n- Ground Slam cooldown reduced by 25%.\r\n- Movement speed increased by 20%.\r\n- Teleport cooldown reduced by 25%.\r\n\r\nGoal:\r\nReplace the Witch's devil summoning mechanic with a more dangerous boss that forces movement, positioning, and timing rather than spawning extra enemies.",
+  "format": "multi-file"
+}
