@@ -990,6 +990,7 @@ body {
   justify-content: space-between;
   gap: 10px;
   flex-shrink: 0;
+  margin-bottom: 12px;
 }
 
 .chat-pane-head {
@@ -997,15 +998,18 @@ body {
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin-bottom: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .chat-usage-bar {
   font-size: 11px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
-  margin-bottom: 12px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .chat-log {
@@ -1014,6 +1018,7 @@ body {
   gap: 10px;
   overflow-y: auto;
   max-height: 65vh;
+  padding-top: 4px;
   padding-right: 4px;
   scrollbar-width: thin;
   scrollbar-color: var(--line) var(--panel);

@@ -54,8 +54,7 @@ if (shelfDrawer && shelfToggleBtn && shelfCloseBtn && shelfBackdrop) {
   }
 
   const stored = localStorage.getItem(DRAWER_KEY);
-  const defaultOpen = matchMedia("(min-width: 1400px)").matches;
-  setDrawerOpen(stored === null ? defaultOpen : stored === "1");
+  setDrawerOpen(stored === null ? true : stored === "1");
 
   function openDrawer() {
     setDrawerOpen(true);
