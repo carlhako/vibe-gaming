@@ -2240,7 +2240,8 @@ def enhance_multifile_game(source_game_id: str, description: str, requested_by: 
     )
     result["message"] = ge.format_report(result)
     _safe_emit(emit, "final", result["notes"] or "Enhancement complete.",
-               {"slug": result["slug"], "title": result["title"], "url": result["url"]})
+               {"slug": result["slug"], "title": result["title"],
+                "url": f"/play/{result['slug']}"})
     return result
 
 
@@ -2396,7 +2397,8 @@ def explode_game(source_game_id: str, requested_by: str, config: dict, db_conn=N
     result["message"] = ge.format_report(result)
     if announce_completion:
         _safe_emit(emit, "final", result["notes"],
-                   {"slug": result["slug"], "title": result["title"], "url": result["url"]})
+                   {"slug": result["slug"], "title": result["title"],
+                    "url": f"/play/{result['slug']}"})
     else:
         _safe_emit(
             emit, "assistant",

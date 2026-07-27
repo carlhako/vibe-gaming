@@ -17,6 +17,20 @@ def write_game(games_dir, slug, meta):
     return d
 
 
+def write_multifile_game(games_dir, slug, meta):
+    d = games_dir / slug
+    d.mkdir()
+    (d / "index.html").write_text("<canvas></canvas>", encoding="utf-8")
+    (d / "game.md").write_text("# game\n", encoding="utf-8")
+    src = d / "src"
+    src.mkdir()
+    (src / "index.html").write_text("<canvas></canvas>", encoding="utf-8")
+    (src / "main.js").write_text("// main\n", encoding="utf-8")
+    meta = dict(meta, format="multi-file")
+    (d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    return d
+
+
 def make_client(games_dir, monkeypatch, admin_token="secret-token"):
     monkeypatch.setenv("ADMIN_TOKEN", admin_token)
     flask_app = app_module.create_app(games_dir=games_dir)
@@ -31,6 +45,9 @@ def test_admin_download_zips_every_game(isolated_db, games_dir, monkeypatch):
     write_game(games_dir, "connect-4-4", {
         "title": "Connect 4", "game_id": "b" * 32, "root_game_id": "b" * 32,
     })
+    write_multifile_game(games_dir, "darkhold-arena", {
+        "title": "Darkhold Arena", "game_id": "c" * 32, "root_game_id": "c" * 32,
+    })
 
     client = make_client(games_dir, monkeypatch)
     resp = client.get("/admin/games/download?token=secret-token")
@@ -41,10 +58,16 @@ def test_admin_download_zips_every_game(isolated_db, games_dir, monkeypatch):
 
     zf = zipfile.ZipFile(io.BytesIO(resp.data))
     names = set(zf.namelist())
-    assert "block-dodge/index.html" in names
-    assert "block-dodge/meta.json" in names
-    assert "connect-4-4/index.html" in names
-    assert "connect-4-4/meta.json" in names
+    assert "single file games/block-dodge/index.html" in names
+    assert "single file games/block-dodge/meta.json" in names
+    assert "single file games/connect-4-4/index.html" in names
+    assert "single file games/connect-4-4/meta.json" in names
+
+    assert "multi file games/darkhold-arena/index.html" in names
+    assert "multi file games/darkhold-arena/meta.json" in names
+    assert "multi file games/darkhold-arena/game.md" in names
+    assert "multi file games/darkhold-arena/src/index.html" in names
+    assert "multi file games/darkhold-arena/src/main.js" in names
 
 
 def test_admin_download_requires_valid_token(isolated_db, games_dir, monkeypatch):

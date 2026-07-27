@@ -1119,6 +1119,7 @@ def create_app(games_dir=None) -> Flask:
             "duration_seconds": job["duration_seconds"],
             "input_tokens": job["input_tokens"],
             "output_tokens": job["output_tokens"],
+            "cached_tokens": job["cached_tokens"],
             "tokens_used": job["tokens_used"],
             "error": job["error"],
         })
@@ -1299,10 +1300,20 @@ def create_app(games_dir=None) -> Flask:
                     continue
                 if not (entry / "index.html").exists():
                     continue
-                zf.write(entry / "index.html", arcname=f"{entry.name}/index.html")
-                meta_path = entry / "meta.json"
-                if meta_path.exists():
-                    zf.write(meta_path, arcname=f"{entry.name}/meta.json")
+                if builder.is_multi_file(entry):
+                    top = f"multi file games/{entry.name}"
+                    # game.md + src/ is the authored source; index.html is
+                    # just builder.py's deterministic inline of it, but ship
+                    # it too so the zip is playable without a build step.
+                    for path in entry.rglob("*"):
+                        if path.is_file():
+                            zf.write(path, arcname=f"{top}/{path.relative_to(entry)}")
+                else:
+                    top = f"single file games/{entry.name}"
+                    zf.write(entry / "index.html", arcname=f"{top}/index.html")
+                    meta_path = entry / "meta.json"
+                    if meta_path.exists():
+                        zf.write(meta_path, arcname=f"{top}/meta.json")
         buf.seek(0)
         filename = f"vibegames-games-{db.now_iso()[:10]}.zip"
         return send_file(buf, mimetype="application/zip",
