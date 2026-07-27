@@ -1,0 +1,11 @@
+{
+  "game_id": "9ffd8c471a0e47e09641680db2682fbf",
+  "parent_game_id": "843c6e75a6fc4adcbffe99d5e9c12a42",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Darkhold Arena (v6)",
+  "description": "Wave-based arena RPG. Choose Sorcerer, Wizard, or Knight \u2014 fight through waves, collect tokens, and upgrade your abilities. Skeletons now look and walk like real skeletons, fight enemies, and follow smarter.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-23T03:13:34.275816Z",
+  "version": 1,
+  "prompt": "change the sorcerers skeleton spawn character to look like an actual skeleton, recreate it and make the skeleton walk. Speed them up as well so they move faster then enemy units, make the enemy units stop and attack them and not just focus on you. Update the sorcerers skeletons to follow you better so when you walk away from enemy units once you get about 1/4the screen away from them they turn around and follow you instead."
+}
