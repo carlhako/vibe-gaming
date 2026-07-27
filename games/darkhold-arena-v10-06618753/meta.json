@@ -1,0 +1,11 @@
+{
+  "game_id": "06618753ed734d3d811d4c0feb26ae70",
+  "parent_game_id": "c0d8e0d216be46738afa2bcbd4e4765b",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Darkhold Arena (v10)",
+  "description": "Wave-based arena RPG. Choose Sorcerer, Wizard, or Knight \u2014 destroy walls, collect tokens, upgrade abilities, and survive. Sorcerer skeletons now last 15s and explode destroying nearby walls.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-23T22:56:46.780493Z",
+  "version": 1,
+  "prompt": "change the skeleton timer from 60 seconds to 15 seconds for the sorcerer. When the skeleton explodes also make it destroy any walls nearby."
+}
