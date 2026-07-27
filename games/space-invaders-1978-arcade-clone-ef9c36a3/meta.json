@@ -1,0 +1,11 @@
+{
+  "game_id": "ef9c36a3a49f4b0dbb45207687460259",
+  "parent_game_id": null,
+  "root_game_id": "ef9c36a3a49f4b0dbb45207687460259",
+  "title": "Space Invaders - 1978 Arcade Clone",
+  "description": "A pixel-perfect clone of the 1978 arcade classic: shoot the alien invaders, dodge bombs, and protect your bunkers in monochrome green-on-black retro style.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-22T03:26:26.025654Z",
+  "version": 1,
+  "prompt": "Create a faithful clone of the original 1978 Space Invaders arcade game. The game is a fixed-screen shooter viewed from a top-down perspective. The player controls a laser cannon at the bottom of the screen, moving left and right with the arrow keys (or A/D) and firing with the spacebar. The player can only fire one shot at a time; the shot must hit an invader or reach the top of the screen before another can be fired. A formation of 55 invaders (11 columns, 5 rows) moves horizontally across the screen, descending one step each time it reaches a side edge. The invaders also periodically drop bombs that fall straight down. The player loses a life if hit by a bomb. The player's cannon is protected by four destructible bunkers (simple rectangular blocks with pixelated damage). When all invaders in a column are destroyed, the remaining invaders move faster. Periodically, a flying saucer appears at the top of the screen, moving horizontally; shooting it awards bonus points (randomly 50, 100, 150, or 300). The game ends when all lives are lost. The score is displayed at the top. Visual style: monochrome green or white on black background, with blocky pixel art using straight lines and sharp corners, mimicking the original's vector-like appearance. Sound effects: simple beeps for shooting, explosions, and the saucer, using the Web Audio API. Difficulty ramps as invaders speed up and descend lower. Standout feature: pixel-perfect replication of the original's movement and bomb patterns, including the slight horizontal jitter of the invaders."
+}
