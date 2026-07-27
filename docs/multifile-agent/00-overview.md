@@ -149,9 +149,11 @@ be forced to read all of it either.** Two mechanisms enforce this:
    module-size hygiene (optional).** Token-level SSE streaming, cancel-job
    and live per-job cost; the module-size soft lint is done.
 7. **[Sprint 6a](06a-cache-snapshot-and-edits.md) — Cache discipline,
-   source snapshot, targeted edits. Implemented 2026-07-27 (all five steps,
-   commits `4d98a40`..`95d43f1`); live verification and the play-test gate
-   still outstanding.** Ran ahead of the rest of
+   source snapshot, targeted edits. DONE 2026-07-27** (all five steps,
+   commits `4d98a40`..`95d43f1`; verified live on job `3beb6dc1` and
+   play-tested — 13 steps, 92.2% cached, **0 re-billed prefix tokens**,
+   8,364 output tokens, $0.047 against a $0.154-$0.367 baseline on the same
+   game). Ran ahead of the rest of
    Sprint 6. Sprint 6's context pruning mutates already-sent messages,
    which collapses DeepSeek's prefix cache — and a cache hit costs
    **1/120th** of a miss, so cache-miss input turned out to be 68-85% of

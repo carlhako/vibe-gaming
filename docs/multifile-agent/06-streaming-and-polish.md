@@ -23,11 +23,13 @@ streaming, and streaming's real gunicorn worker-occupancy tradeoff is
 worth deciding on its own, separate from these smaller additive items.
 
 **Progress: D and E done; B half done; A not started (revised 2026-07-27,
-after Sprint 6a's five steps landed).** Sprint 6a is implemented
-(commits `4d98a40`..`95d43f1`) and pending live verification, so its step 0
-prerequisite below is satisfied — cached input now bills at the cached rate
-everywhere, and a live cost readout will no longer show the ~4x
-overstatement the admin History tab used to.
+after Sprint 6a shipped).** [Sprint 6a](06a-cache-snapshot-and-edits.md) is
+**done** — verified live and play-tested — so its step 0 prerequisite below is
+satisfied: cached input now bills at the cached rate everywhere, and a live
+cost readout no longer shows the ~4x overstatement the admin History tab used
+to. Note the bar has moved for item A as well: a post-6a enhance now runs in
+~13 steps and ~140 seconds rather than 18-48 steps and 6-17 minutes, which is
+most of the impatience token-level streaming was meant to relieve.
 
 Two corrections to the previous status line, both of which claimed less
 was done than actually is:

@@ -1,5 +1,12 @@
 # Sprint 6a — Cache discipline, source snapshot, targeted edits
 
+**STATUS: DONE (2026-07-27).** All five steps shipped (commits
+`4d98a40`..`95d43f1`), verified live against production job `3beb6dc1`, and
+play-tested. Every target below was met or beaten; the projected ~$0.28 → 
+~$0.06-0.10 per enhance landed at **$0.047**. See
+[Outcome](#outcome-measured-2026-07-27) for the measured before/after and
+which of the predicted risks actually bit.
+
 See [00-overview.md](00-overview.md). This sprint **absorbs the whole of the
 former Sprint 7 (context pruning vs. prompt caching) and item 2 of the former
 Sprint 8 (targeted diff edits)**, both of which are deleted; Sprint 8's item 1
@@ -702,7 +709,87 @@ build → scan → smoke does not prove a game still *plays* the same.
 
 ---
 
+## Outcome (measured 2026-07-27)
+
+All five steps were deployed together rather than verified one at a time, so
+the figures below are the combined effect. Job `3beb6dc1`, *Sorcerer With A
+Minigun* v45, `deepseek-v4-pro`: *"the glowing purple square that is meant to
+show randomly after wave 5 has a bug — the square is invisible"*. Same game as
+all three baselines (successive versions v41→v45) and, like two of them, a bug
+fix — so this is a like-for-like comparison, not a favourable one.
+
+| | `63a41edd` *(bugfix)* | `d59b2a37` *(bugfix)* | `d5279657` *(feature)* | **`3beb6dc1` (6a)** |
+|---|---|---|---|---|
+| steps | 18 | 35 | 48 | **13** |
+| `read_file` | 13 | 29 | 36 | **2** |
+| `write_file` | 2 | 4 | 11 | **0** |
+| `edit_file` | — | — | — | **4** |
+| output tokens | 42,959 | 61,239 | 118,106 | **8,364** |
+| cache hit | 66.0% | 38.4% | 70.8% | **92.2%** |
+| re-billed prefix | 24.0% | 60.4% | 24.9% | **0.0%** |
+| duration | 394s | 576s | 1046s | **141s** |
+| **cost** | $0.1541 | $0.3674 | $0.3323 | **$0.0470** |
+
+Against the targets: re-billed prefix `<5%` → **0 tokens exactly**; cached
+`>90%` → 92.2%; steps `8-15` → 13; `edit_file > write_file` → 4 vs 0; no step
+over ~5K output → max 2,346. Against the nearest-scope baseline (`63a41edd`,
+same game, also a bug fix): **3.3x cheaper, 5.1x less output, 1.4x fewer
+steps**; against the mean of both bug-fix baselines, 5.5x cheaper. Gameplay
+was confirmed correct by hand.
+
+The cached-token column is a clean monotonic staircase (68,352 → 90,240),
+never once dropping — the append-only invariant holding under production
+conditions rather than only in `scripted_asks`. **Zero re-billed prefix
+tokens** is the direct read-out of step 1 and the single cleanest number here:
+the run mutated nothing it had already sent.
+
+The shape of the run is worth recording, because it is the shape the sprint was
+designed to produce and nothing in the prompt asks for it explicitly:
+
+```
+3 x search  ->  2 x read_file  ->  4 x edit_file  ->  3 x search  ->  finish (passed first try)
+```
+
+Locate with `search`, edit in place, verify with `search`. The run touched
+three modules of a 13-file, 182KB game — including adding 5,053 bytes of new
+code to an 87KB `render.js` — and its **entire** output budget was 8,364
+tokens. Under whole-module rewrites, the two `render.js` edits alone would have
+cost ~87KB of output each. That single substitution is where most of the saving
+lives; the cache work is what makes the *input* side stop mattering.
+
+### Which risks actually bit
+
+- **1 (marker imitation)** — did not occur. No write or edit was rejected for a
+  snapshot marker.
+- **2 (exact-match reproduction from a large snapshot is unproven on v4-pro)** —
+  **did not bite, and this was the sprint's biggest open bet.** 4 of 4
+  `edit_file` calls matched on the first try; the rejection rate was 0%, against
+  a "reconsider above ~30%" threshold. Reproducing an exact span from a
+  68K-token snapshot is evidently within v4-pro's reach.
+- **3 (the model re-reads anyway)** — **bit, mildly.** It read `combat.js` and
+  `enemies.js` (36,783 bytes) at step 4 despite both being in the snapshot,
+  costing 12,367 fresh tokens at step 5: ~15% of the run's fresh input and ~11%
+  of its cost. The read nudge fired and did not deter it. This is the one
+  measured inefficiency left, and it is small. **Do not escalate to withholding
+  bytes on one data point** — that is exactly the refusing-information move this
+  file warns causes state-re-checking loops. If the pattern repeats across
+  several runs, the lever is prompt wording.
+- **4 (cache eviction between long thinking-mode turns)** — did not occur; the
+  staircase above is the evidence.
+- **5 (a larger system prompt buries the instructions)** — did not occur. The
+  model used `search` first rather than exploring blindly, which is snapshot-era
+  behaviour, not pre-snapshot behaviour.
+- **6 (production's `config.yaml` still sets `context_prune_after_steps`)** —
+  **confirmed as designed.** The ignore-and-warn rail fired on the first
+  production run after deploy, with the key still present. That warning was also
+  the cheapest available proof the new code was actually live.
+
+---
+
 ## Risks, in the order they are likely to bite
+
+*(Written before the sprint. See [Outcome](#outcome-measured-2026-07-27) above
+for which of these actually bit — only 3 and 6 did, and 6 as designed.)*
 
 1. **Marker imitation** — the model writes `===== BEGIN render.js =====` into a
    file. Mitigated by the hard reject plus the explicit prompt rule. Same class
@@ -729,7 +816,10 @@ build → scan → smoke does not prove a game still *plays* the same.
 
 ---
 
-## Documentation to update **as part of this sprint**
+## Documentation to update **as part of this sprint** — DONE
+
+All three `CLAUDE.md` items below landed with their respective commits, and the
+measured before/after is folded in above.
 
 `CLAUDE.md`'s multi-file section currently documents pruning,
 `context_prune_after_steps`, and whole-file `write_file` as live behaviour —
