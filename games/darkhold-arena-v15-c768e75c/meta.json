@@ -1,0 +1,11 @@
+{
+  "game_id": "c768e75c0ae8410e8d2102016530c038",
+  "parent_game_id": "7e9ff8ee61a143da8bda502742a0f826",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Darkhold Arena (v15)",
+  "description": "Top-down wave-based arena RPG with destructible walls, skeleton minions, and a new Level 4 Bone Archer upgrade that gives archers fireball miniguns.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-24T01:57:09.462334Z",
+  "version": 1,
+  "prompt": "Add a Level 4 upgrade for the Sorcerer Archer.2\u00a03This new upgrade should replace the Archer\u2019s standard bow-and-arrow attack with the same fireball minigun attack that the Sorcerer receives from one of its existing upgrades.4\u00a05Once upgraded to Level 4, the Sorcerer Archer should no longer use arrows and should instead attack exclusively with the fireball minigun, maintaining the same functionality, firing rate, and visual effects as the Sorcerer\u2019s version."
+}
