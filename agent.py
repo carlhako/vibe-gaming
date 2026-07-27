@@ -2255,6 +2255,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     last_candidate_summary = ""
     error = None
     success = False
+    cancelled = False
 
     def record_verification(outcome: str, detail: str | None) -> None:
         nonlocal tokens_at_last_attempt
@@ -2295,6 +2296,18 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         return False, detail
 
     for step_num in range(1, max_steps + 1):
+        # Cancellation check, checked HERE for the same reason the context
+        # guard below is: the conversation always ends in a tool result or a
+        # user message at this point, so breaking loses nothing this turn —
+        # every tool call from the previous turn already ran and wrote to
+        # disk. Unlike the context guard, a user-initiated cancel skips the
+        # forced final verification too (see below): the user explicitly
+        # asked this to stop, so it should stop, not spend one more
+        # build/scan/smoke cycle first.
+        if job_id is not None and db.is_job_cancelled(job_id, conn=db_conn):
+            cancelled = True
+            error = "cancelled by user"
+            break
         # Context guard, checked HERE — before the request, not after the one
         # that revealed the size. Both branches then act on a conversation
         # that ends in a tool result or a user message, so appending a user
@@ -2610,7 +2623,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     # only when the verification-retry budget is already spent (that ceiling
     # exists to stop exactly this kind of repetition) or when nothing was ever
     # written (nothing to verify).
-    if (not success and wrote_anything
+    if (not success and not cancelled and wrote_anything
             and verification_attempts < max_verification_retries):
         stalled_error = error or f"ran out of steps after {max_steps} turns"
         passed, detail = run_verification(forced=True)

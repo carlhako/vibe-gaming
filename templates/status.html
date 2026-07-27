@@ -34,6 +34,7 @@
             <p class="status-timer" id="status-timer" hidden></p>
             <p class="form-hint" id="status-stats"></p>
             <div class="status-actions" id="status-actions" hidden></div>
+            <button type="button" class="cancel-enhance-btn" id="cancel-enhance-btn" hidden>Cancel enhance</button>
           </div>
         </div>
         <div class="job-chat-pane" id="chat-pane" data-job-id="{{ job_id }}">
@@ -46,6 +47,26 @@
       </div>
     </main>
   </div>
+  <dialog id="cancel-dialog" class="rename-dialog cancel-dialog">
+    <div id="cancel-dialog-confirm">
+      <h3>Cancel this enhance?</h3>
+      <p class="form-hint">This can't be undone — the in-progress enhancement will stop.</p>
+      <p class="form-hint" id="cancel-dialog-error" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" id="cancel-dialog-no">No, keep running</button>
+        <button type="button" id="cancel-dialog-yes">Yes, cancel</button>
+      </div>
+    </div>
+    <div id="cancel-dialog-done" hidden>
+      <h3>Cancelled</h3>
+      <p class="form-hint">Your prompt, in case you want to copy it back out:</p>
+      <textarea id="cancel-dialog-prompt" readonly rows="4"></textarea>
+      <div class="dialog-actions">
+        <button type="button" id="cancel-dialog-copy">Copy prompt</button>
+        <button type="button" id="cancel-dialog-close">Close</button>
+      </div>
+    </div>
+  </dialog>
   <script src="{{ url_for('static', filename='status.js') }}"></script>
   <script src="{{ url_for('static', filename='agent_chat.js') }}"></script>
 </body>

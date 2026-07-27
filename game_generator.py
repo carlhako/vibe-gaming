@@ -430,6 +430,9 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
         })
 
     for attempt in range(1, max_attempts + 1):
+        if job_id is not None and db.is_job_cancelled(job_id, conn=db_conn):
+            previous_failure = "cancelled by user"
+            break
         attempt_t0 = time.monotonic()
         try:
             ask_result = ai.ask_with_tools(

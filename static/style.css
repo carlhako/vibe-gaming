@@ -1617,6 +1617,48 @@ body {
   font-size: 15px;
 }
 
+.cancel-dialog {
+  max-width: 420px;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cancel-dialog[open] {
+  display: flex;
+}
+
+.cancel-dialog h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.cancel-dialog textarea {
+  width: 100%;
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+
+#cancel-enhance-btn {
+  align-self: flex-start;
+  margin-top: 4px;
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+#cancel-enhance-btn:hover {
+  color: var(--ink);
+  border-color: var(--ink);
+  filter: none;
+}
+
 .explode-status {
   display: flex;
   justify-content: space-between;

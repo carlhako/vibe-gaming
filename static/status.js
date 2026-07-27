@@ -10,12 +10,23 @@
   const statsEl = document.getElementById("status-stats");
   const actions = document.getElementById("status-actions");
   const powerLight = document.getElementById("power-light");
+  const cancelBtn = document.getElementById("cancel-enhance-btn");
+  const cancelDialog = document.getElementById("cancel-dialog");
+  const cancelDialogConfirm = document.getElementById("cancel-dialog-confirm");
+  const cancelDialogDone = document.getElementById("cancel-dialog-done");
+  const cancelDialogPrompt = document.getElementById("cancel-dialog-prompt");
+  const cancelDialogYes = document.getElementById("cancel-dialog-yes");
+  const cancelDialogNo = document.getElementById("cancel-dialog-no");
+  const cancelDialogCopy = document.getElementById("cancel-dialog-copy");
+  const cancelDialogClose = document.getElementById("cancel-dialog-close");
+  const cancelDialogError = document.getElementById("cancel-dialog-error");
 
   const LABELS = {
     queued: "Queued…",
     generating: "Generating…",
     success: "Done!",
     failed: "Failed",
+    cancelled: "Cancelled",
   };
 
   const KIND_VERB = {
@@ -26,6 +37,7 @@
   let pollTimer = null;
   let tickTimer = null;
   let generatingStartedAt = null; // Date, derived from the server's timestamp
+  let lastPrompt = ""; // kept around so the cancel dialog can show it post-cancel
 
   function formatMinutes(seconds) {
     const minutes = Math.round(seconds / 60);
@@ -65,6 +77,7 @@
 
   function render(job) {
     heading.textContent = LABELS[job.status] || job.status;
+    if (job.prompt) lastPrompt = job.prompt;
 
     if (sourceEl.hidden && job.source_title) {
       sourceEl.textContent = `Enhancing "${job.source_title}" (v${job.source_version})`;
@@ -76,6 +89,9 @@
       promptEl.textContent = `${verb}: "${job.prompt}"`;
       promptEl.hidden = false;
     }
+
+    const cancellable = job.kind === "enhance" && (job.status === "queued" || job.status === "generating");
+    cancelBtn.hidden = !cancellable;
 
     if (job.status === "queued" || job.status === "generating") {
       if (job.status === "queued") {
@@ -128,6 +144,8 @@
       actions.hidden = false;
     } else if (job.status === "failed") {
       detail.textContent = job.error || "Something went wrong.";
+    } else if (job.status === "cancelled") {
+      detail.textContent = "Cancelled by you.";
     }
   }
 
@@ -165,6 +183,53 @@
       }
     }
   }
+
+  function openCancelDialog() {
+    cancelDialogConfirm.hidden = false;
+    cancelDialogDone.hidden = true;
+    cancelDialogYes.disabled = false;
+    cancelDialogYes.textContent = "Yes, cancel";
+    cancelDialogError.hidden = true;
+    cancelDialog.showModal();
+  }
+
+  cancelBtn.addEventListener("click", openCancelDialog);
+  cancelDialogNo.addEventListener("click", () => cancelDialog.close());
+  cancelDialogClose.addEventListener("click", () => cancelDialog.close());
+
+  cancelDialogYes.addEventListener("click", async () => {
+    cancelDialogYes.disabled = true;
+    cancelDialogYes.textContent = "Cancelling…";
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/cancel`, { method: "POST" });
+      if (!res.ok && res.status !== 409) {
+        throw new Error(`cancel failed: ${res.status}`);
+      }
+      // Either it cancelled just now, or a 409 means it already reached a
+      // terminal state on its own — either way, one more poll picks up the
+      // real status and renders it through the normal terminal branches.
+      await poll();
+      cancelDialogConfirm.hidden = true;
+      cancelDialogDone.hidden = false;
+      cancelDialogPrompt.value = lastPrompt;
+    } catch (err) {
+      console.error("cancel request failed", err);
+      cancelDialogYes.disabled = false;
+      cancelDialogYes.textContent = "Yes, cancel";
+      cancelDialogError.textContent = "Couldn't cancel — please try again.";
+      cancelDialogError.hidden = false;
+    }
+  });
+
+  cancelDialogCopy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(cancelDialogPrompt.value);
+      cancelDialogCopy.textContent = "Copied!";
+      setTimeout(() => { cancelDialogCopy.textContent = "Copy prompt"; }, 1500);
+    } catch (err) {
+      cancelDialogPrompt.select();
+    }
+  });
 
   poll();
   pollTimer = setInterval(poll, 2000);

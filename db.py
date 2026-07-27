@@ -867,6 +867,17 @@ def update_generation_request(job_id, status=None, result_game_id=None, attempts
     c.commit()
 
 
+def is_job_cancelled(job_id, conn=None) -> bool:
+    """Cheap per-job check for the long-running loops (game_generator's
+    retry loop, agent.py's ReAct loop) to notice a user-initiated cancel
+    without waiting for the whole job to finish."""
+    c = _c(conn)
+    row = c.execute(
+        "SELECT status FROM generation_requests WHERE job_id=?", (job_id,)
+    ).fetchone()
+    return row is not None and row["status"] == "cancelled"
+
+
 def claim_next_queued_request(conn=None) -> str | None:
     """Atomically claim the oldest queued job, marking it 'generating'.
     Returns the claimed job_id, or None if no queued job is available.

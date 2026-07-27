@@ -27,9 +27,24 @@ import game_generator
 import git_sync
 
 
+def _already_cancelled(conn, job_id: str) -> bool:
+    """Re-check the job's live DB status right before writing a final
+    success/failed outcome. A user-initiated cancel (POST
+    /api/jobs/<job_id>/cancel) can flip status to 'cancelled' at any time,
+    independent of this worker thread — most likely noticed mid-run by the
+    long-running loops themselves (game_generator.run_generation_attempts,
+    agent._run_react_loop), but possibly racing in right after they finished
+    on their own. Either way the final write below must not clobber it back
+    to success/failed."""
+    current = db.get_generation_request(job_id, conn=conn)
+    return current is not None and current["status"] == "cancelled"
+
+
 def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
     job_id = job["job_id"]
     t0 = time.monotonic()
+    if _already_cancelled(conn, job_id):
+        return
     if not db.is_ai_generation_enabled(conn=conn):
         # Job was queued before an admin flipped the kill switch off — fail
         # it immediately rather than burning a full retry loop against a
@@ -86,6 +101,8 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
         else:
             raise ValueError(f"unknown job kind: {job['kind']!r}")
     except Exception as exc:  # noqa: BLE001 - a job must never take the worker thread down
+        if _already_cancelled(conn, job_id):
+            return
         db.update_generation_request(
             job_id, status="failed", attempts=job.get("attempts", 0) + 1,
             duration_seconds=time.monotonic() - t0,
@@ -95,6 +112,9 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
             job_id, job.get("attempts", 0) + 1, "ai_error",
             detail=f"internal error: {exc}\n{traceback.format_exc()}", conn=conn,
         )
+        return
+
+    if _already_cancelled(conn, job_id):
         return
 
     if result["success"]:

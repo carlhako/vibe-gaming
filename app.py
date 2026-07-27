@@ -1119,6 +1119,22 @@ def create_app(games_dir=None) -> Flask:
             "answer": job.get("answer"),
         })
 
+    @app.post("/api/jobs/<job_id>/cancel")
+    def cancel_job(job_id):
+        """User-initiated cancel for an in-progress enhance job. Flips the
+        job to a terminal 'cancelled' status immediately so /api/status
+        reflects it on the next poll, regardless of whether the background
+        worker thread notices right away (it checks db.is_job_cancelled()
+        at its own natural checkpoints and stops early when it can)."""
+        conn = get_db()
+        job = db.get_generation_request(job_id, conn=conn)
+        if job is None:
+            abort(404)
+        if job["status"] not in ("queued", "generating"):
+            return jsonify({"error": "job already finished", "status": job["status"]}), 409
+        db.update_generation_request(job_id, status="cancelled", error="cancelled by user", conn=conn)
+        return jsonify({"success": True, "status": "cancelled"})
+
     @app.get("/api/jobs/<job_id>/events")
     def api_job_events(job_id):
         """Incremental agent-event feed for a multi-file enhance job
