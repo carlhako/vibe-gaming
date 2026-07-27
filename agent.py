@@ -60,7 +60,7 @@ import shutil
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Callable
+from typing import Callable, NamedTuple
 
 import ai_client as ai
 import builder
@@ -175,6 +175,124 @@ def _finish_nudge_threshold(max_steps: int) -> int:
 # guard against the model copying one back into a real file (Sprint 6 step 2;
 # see _compact_write_calls for the run that made this necessary).
 _PRUNE_SENTINEL = "[context-pruned]"
+
+# Sprint 6a: the whole game source is handed to the model up front, in the
+# system message, rather than discovered a read_file at a time. Input tokens
+# are cheap where output tokens and turns are not, and the block is
+# byte-identical every turn, so after the first call it rides along at the
+# cached rate (1/120th on v4-pro) — a run that instead re-reads its modules
+# 4-6x pays full price for each read AND burns a step on it.
+#
+# 400_000 bytes is roughly 100K tokens, well inside the context window (see
+# ai.CONTEXT_WINDOW_TOKENS) with room for the run's own turns. A source over
+# it falls back to the manifest-only prompt rather than being truncated:
+# a partial snapshot is worse than none, because the model cannot tell which
+# half it is missing. Overridable via cfg["snapshot_max_bytes"]. A CODE
+# default, like DEFAULT_AGENT_MODEL, because config.yaml is gitignored.
+DEFAULT_SNAPSHOT_MAX_BYTES = 400_000
+
+# The snapshot's file delimiters. Line-anchored and unmistakable, and
+# deliberately NOT a fenced code block: game.md is prose that routinely
+# contains fences, and nesting them breaks the first time it does.
+#
+# _SNAPSHOT_MARKER_RE is the guard, not the formatter. Every prior lesson in
+# this module says the model treats anything in its transcript as a worked
+# example (see _compact_write_calls), and a snapshot puts a new piece of
+# scaffolding in front of it that it can copy into a file. Same defense as
+# _PRUNE_SENTINEL: reject the write loudly, turning a silent corruption into
+# a self-correcting error.
+_SNAPSHOT_MARKER_RE = re.compile(r"^=====\s+(?:BEGIN|END)\b.*=====\s*$", re.M)
+
+
+class SourceSnapshot(NamedTuple):
+    """The full source of a multi-file game as handed to the model.
+
+    `text` is None when the source is over the ceiling — `manifest` is still
+    populated, and the prompt falls back to discovery wording. `paths` holds
+    only the files whose bodies are actually in `text`, so it is the right set
+    to test a read_file against (a binary file is in the manifest but not in
+    `paths`)."""
+    text: str | None
+    manifest: str
+    paths: frozenset
+    total_bytes: int
+    file_count: int
+
+
+def _snapshot_files(game_dir: Path) -> list[tuple[str, Path]]:
+    """Every source file as (bare tool-call path, real path), in a fixed
+    order: game.md (the map), then src/index.html (whose <script> order IS
+    the dependency order), then the rest of src/ by posix path.
+
+    The order is fixed because the snapshot has to be byte-identical across
+    runs to hit DeepSeek's prefix cache on a second enhance of the same
+    source. Paths are bare — `render.js`, never `src/render.js` — matching
+    what the tools accept, so the snapshot reinforces _normalize_agent_path's
+    convention rather than fighting it."""
+    files: list[tuple[str, Path]] = []
+    game_md = game_dir / "game.md"
+    if game_md.is_file():
+        files.append(("game.md", game_md))
+    src_dir = game_dir / "src"
+    if not src_dir.is_dir():
+        return files
+    index = src_dir / "index.html"
+    if index.is_file():
+        files.append(("index.html", index))
+    for p in sorted(src_dir.rglob("*"), key=lambda p: p.as_posix()):
+        if p.is_file() and p != index:
+            files.append((p.relative_to(src_dir).as_posix(), p))
+    return files
+
+
+def _build_source_snapshot(game_dir: Path, max_bytes: int) -> SourceSnapshot:
+    """Read every source file into one immutable block for the system prompt.
+
+    Never interpolate anything run-specific here — no timestamp, job id or
+    fork slug. The system message is what makes a second enhance of the same
+    source a cache hit, and one varying byte anywhere in it costs the whole
+    block."""
+    files = _snapshot_files(game_dir)
+    sizes: list[tuple[str, int, bool]] = []   # (path, bytes, is_text)
+    bodies: list[str] = []
+    total = 0
+    text_paths: list[str] = []
+
+    for rel, path in files:
+        try:
+            contents = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            sizes.append((rel, path.stat().st_size if path.is_file() else 0, False))
+            total += sizes[-1][1]
+            continue
+        size = len(contents.encode("utf-8"))
+        total += size
+        sizes.append((rel, size, True))
+        text_paths.append(rel)
+        # A file with no trailing newline would otherwise run its last line
+        # into the END marker. Say that the newline was added, so the model
+        # doesn't take it for part of the file and reproduce it.
+        note = ""
+        if contents and not contents.endswith("\n"):
+            contents += "\n"
+            note = ", no trailing newline"
+        elif not contents:
+            note = ", empty"
+        bodies.append(
+            f"===== BEGIN {rel} ({size} bytes{note}) =====\n"
+            f"{contents}"
+            f"===== END {rel} ====="
+        )
+
+    manifest = "Files ({}, {:,} bytes total): {}".format(
+        len(sizes), total,
+        " · ".join(
+            f"{rel} {size:,}" + ("" if is_text else " (not text — use read_file)")
+            for rel, size, is_text in sizes
+        ) or "none",
+    )
+    text = "\n\n".join(bodies) if bodies and total <= max_bytes else None
+    return SourceSnapshot(text, manifest, frozenset(text_paths), total, len(sizes))
 
 
 class AgentError(Exception):
@@ -498,6 +616,30 @@ def _read_file(game_dir: Path, path: str) -> str:
     return file_path.read_text(encoding="utf-8")
 
 
+def _read_file_nudge(path: str, written: set[str] | None,
+                      snapshot_paths: frozenset | None) -> str:
+    """A one-line prefix for a read of a file the snapshot already carries
+    unchanged, or "" when the read was worth making.
+
+    The full contents still come back underneath it. Withholding information
+    is what historically sent this agent into state-re-checking loops (see
+    _compact_write_calls' note wording), and a read that returns less than it
+    used to just gets made again. This is an *observation*, not an arguments
+    slot, which is the category that has never caused an imitation bug — same
+    shape as _write_file's soft size lint."""
+    if not snapshot_paths or path not in snapshot_paths:
+        return ""
+    if written and path in written:
+        return ""
+    return (
+        f"NOTE: {path} has not been modified during this run, so it is still "
+        "byte-for-byte identical to the copy in the source snapshot in your "
+        "instructions — this read told you nothing new. The snapshot has "
+        "every file in full; read_file is only worth a step for a file "
+        "created or rewritten during this run.\n"
+    )
+
+
 # A search result rides along in the conversation for the rest of the run
 # (unlike a read_file result, which gets pruned once stale) — that's the
 # point: an answer the model can still see is an answer it won't ask for
@@ -587,6 +729,19 @@ def _write_file(game_dir: Path, path: str, contents: str, max_module_bytes: int,
             "file. Call read_file to see what's currently on disk, then "
             "write the complete, real contents."
         )
+    if _SNAPSHOT_MARKER_RE.search(contents):
+        # Same class of bug as the sentinel above, and the same defense. The
+        # source snapshot in the system prompt wraps each file in
+        # '===== BEGIN <path> ... =====' lines, and this model reliably
+        # imitates the scaffolding it is shown — a module whose first line is
+        # a BEGIN marker is a syntax error the moment the build inlines it.
+        return (
+            f"REJECTED: the contents you passed for {path!r} contain a "
+            "'===== BEGIN/END ... =====' line. Those markers are scaffolding "
+            "that delimits files in the source snapshot in your instructions; "
+            "they are never part of a file's contents. Pass only the file's "
+            "own text, with no marker lines around or inside it."
+        )
     if size > max_module_bytes:
         return (
             f"REJECTED: {path!r} is {size} bytes, over the {max_module_bytes}-byte "
@@ -612,15 +767,18 @@ def _write_file(game_dir: Path, path: str, contents: str, max_module_bytes: int,
 
 
 def _execute_tool(tc: ai.ToolCall, game_dir: Path, max_module_bytes: int,
-                   warn_bytes: int, written: set[str] | None = None) -> tuple[str, str | None]:
+                   warn_bytes: int, written: set[str] | None = None,
+                   snapshot_paths: frozenset | None = None) -> tuple[str, str | None]:
     """Run one non-finish tool call. Returns (observation, touched_path) —
-    touched_path is the path read/written (for staleness pruning), or None
-    for tools that don't target a single file. Never raises: an AgentError
-    becomes an "ERROR: ..." observation, same as a rejected submit_game
-    becomes "REJECTED: ..." in game_generator's loop.
+    touched_path is the path read/written, or None for tools that don't
+    target a single file. Never raises: an AgentError becomes an
+    "ERROR: ..." observation, same as a rejected submit_game becomes
+    "REJECTED: ..." in game_generator's loop.
 
     `written` is the set of paths this run has already rewritten, surfaced by
-    list_files (see _list_files)."""
+    list_files (see _list_files). `snapshot_paths` is the set of files the
+    system prompt already carries in full, which turns a redundant read into
+    a nudge (see _read_file_nudge)."""
     try:
         if tc.name == "read_map":
             return _read_map(game_dir), None
@@ -628,7 +786,10 @@ def _execute_tool(tc: ai.ToolCall, game_dir: Path, max_module_bytes: int,
             return _list_files(game_dir, written), None
         if tc.name == "read_file":
             path = _normalize_agent_path(_parse_path_arg(tc.arguments))
-            return _read_file(game_dir, path), path
+            observation = _read_file(game_dir, path)
+            if not observation.startswith("ERROR:"):
+                observation = _read_file_nudge(path, written, snapshot_paths) + observation
+            return observation, path
         if tc.name == "search":
             pattern, path = _parse_search_args(tc.arguments)
             if path is not None:
@@ -802,18 +963,51 @@ def _summarize_observation(tc_name: str, path: str | None, observation: str) -> 
 # Prompt builders
 # ---------------------------------------------------------------------------
 
-def _build_system_prompt(source_title: str) -> str:
+def _build_system_prompt(source_title: str,
+                          snapshot: SourceSnapshot | None = None) -> str:
+    """The enhance pass's system message.
+
+    Everything in it must be stable per source game — no timestamp, job id or
+    fork slug — because that stability is what lets a second enhance of the
+    same source hit DeepSeek's prefix cache on the whole block, snapshot
+    included (Sprint 6a)."""
     allowed_hosts = ", ".join(sorted(safety.ALLOWED_CDN_HOSTS))
-    return (
+    has_snapshot = snapshot is not None and snapshot.text is not None
+    if has_snapshot:
+        # Say what is still true, then name the exceptions. Never a bare
+        # hedge like "this may be out of date": the documented failure mode
+        # is the model reading a hedge as "nothing here is trustworthy" and
+        # launching a re-verification sweep, which is precisely what
+        # _compact_write_calls' first note wording caused.
+        structure = (
+            "The complete current source of this game is included below, "
+            "under '## Current source'. It is every file — game.md plus "
+            "every src/ file — exactly as it is on disk right now, at the "
+            "start of this run. You are not exploring a codebase you cannot "
+            "see; you already have all of it.\n"
+            "The snapshot is authoritative as of the start of this run, and "
+            "stays authoritative for every file you do not change. Do NOT "
+            "call read_map, list_files or read_file for anything it already "
+            "contains — that spends a step and tells you nothing. There are "
+            "exactly two reasons to read: a file created later in this run, "
+            "and re-reading a file after you have rewritten it with "
+            "write_file.\n"
+            "Your tools:\n"
+        )
+    else:
+        structure = (
+            "The game's source is split across multiple files instead of one "
+            "big index.html, so you never have to read or rewrite the whole "
+            "game at once. Explore before you edit, using these tools:\n"
+        )
+    prompt = (
         f"You are enhancing an existing multi-file browser game in the "
         f"arcade, currently titled '{source_title}'. This produces a NEW "
         "game entry — the original is left completely untouched; you are "
         "editing a fresh copy that becomes a new forked entry once your "
         "changes pass verification.\n\n"
         "## How this game is structured\n"
-        "The game's source is split across multiple files instead of one "
-        "big index.html, so you never have to read or rewrite the whole "
-        "game at once. Explore before you edit, using these tools:\n"
+        + structure +
         "- read_map() — game.md: a prose description plus a table of every "
         "src/ file and its purpose.\n"
         "- list_files() — every src/ file with its byte size.\n"
@@ -856,6 +1050,23 @@ def _build_system_prompt(source_title: str) -> str:
         "controls, and existing polish are working and should survive "
         "unrelated edits. Only touch the module(s) the change actually "
         "requires; leave everything else byte-for-byte as it was.\n"
+    )
+    if snapshot is None:
+        return prompt
+    if not has_snapshot:
+        # Over the ceiling: no bodies, but the manifest still costs a few
+        # hundred stable bytes and saves the list_files turn outright.
+        return prompt + "\n## Current source\n" + snapshot.manifest + "\n"
+    return (
+        prompt
+        + "\n## Current source\n"
+        + snapshot.manifest + "\n\n"
+        + "Each file below is delimited by '===== BEGIN <path> (<n> bytes) "
+          "=====' and '===== END <path> =====' lines. Those marker lines are "
+          "scaffolding for this listing ONLY — they are not part of any "
+          "file's contents, and a write must never include one. Paths are "
+          "exactly what the tools take: 'render.js', not 'src/render.js'.\n\n"
+        + snapshot.text + "\n"
     )
 
 
@@ -1572,7 +1783,8 @@ def _compact_write_calls(messages: list[dict], assistant_msg: dict,
 
 def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                      cfg: dict, job_id: str | None, db_conn, emit: Callable | None = None,
-                     extra_verify: Callable | None = None) -> dict:
+                     extra_verify: Callable | None = None,
+                     snapshot_paths: frozenset | None = None) -> dict:
     """Drive the read_map/list_files/read_file/search/write_file/finish loop
     against game_dir until finish() passes build->scan->smoke, the
     verification-retry budget is exhausted, or the step budget runs out.
@@ -1623,6 +1835,12 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     _explode_declaration_check), which catches a whole class of breakage the
     standard gate structurally cannot. The loop itself stays unaware of
     which pass it drives.
+
+    `snapshot_paths` is the set of files the caller already put into the
+    system prompt in full (see _build_source_snapshot). The loop uses it for
+    one thing only — telling the model that a read of an untouched file was
+    redundant — and is otherwise unaware of the snapshot; explode passes
+    nothing, since it starts from an empty directory.
     """
     # 40 was too tight for a real explode: Sprint 6 step 2's pilot split a
     # 159KB game into 12 modules and hit the cap having never once called
@@ -1810,7 +2028,8 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
             call_content, call_data = _summarize_tool_call(tc)
             _safe_emit(emit, "tool_call", call_content, call_data)
             content, touched_path = _execute_tool(
-                tc, game_dir, max_module_bytes, module_warn_bytes, written_paths)
+                tc, game_dir, max_module_bytes, module_warn_bytes, written_paths,
+                snapshot_paths)
             obs_content, obs_data = _summarize_observation(tc.name, touched_path, content)
             _safe_emit(emit, "tool_result", obs_content, obs_data)
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": content})
@@ -2147,11 +2366,31 @@ def enhance_multifile_game(source_game_id: str, description: str, requested_by: 
     dest_dir = games_dir / dest_slug
     _stage_fork(source_dir, dest_dir)
 
+    # Read from dest_dir, not source_dir: it's the staged copy the agent will
+    # actually edit, so "identical to what you were shown" stays true even if
+    # the two ever diverge.
+    snapshot = _build_source_snapshot(
+        dest_dir, cfg.get("snapshot_max_bytes", DEFAULT_SNAPSHOT_MAX_BYTES))
+    # One summary event, never the body. agent_events is a permanent archive
+    # and the chat pane replays from it; a few hundred KB of source per job
+    # would bloat both for nothing anyone would read there.
+    _safe_emit(
+        emit, "tool_result",
+        "Loaded source snapshot: {} files, {:,} bytes".format(
+            snapshot.file_count, snapshot.total_bytes)
+        if snapshot.text is not None else
+        "Source too large to snapshot ({} files, {:,} bytes) — the agent will "
+        "read files as it needs them".format(snapshot.file_count, snapshot.total_bytes),
+        {"tool": "snapshot", "file_count": snapshot.file_count,
+         "bytes": snapshot.total_bytes, "included": snapshot.text is not None},
+    )
+
     outcome = _run_react_loop(
         game_dir=dest_dir,
-        system_prompt=_build_system_prompt(source_row["title"]),
+        system_prompt=_build_system_prompt(source_row["title"], snapshot),
         user_prompt=_build_user_prompt(description),
         cfg=cfg, job_id=job_id, db_conn=db_conn, emit=emit,
+        snapshot_paths=snapshot.paths if snapshot.text is not None else None,
     )
     duration = time.monotonic() - t0
 

@@ -32,6 +32,7 @@
     : inputCostPerMillion;
 
   const TOOL_ICON = {
+    snapshot: "📦",
     read_map: "📖",
     list_files: "📂",
     read_file: "📖",

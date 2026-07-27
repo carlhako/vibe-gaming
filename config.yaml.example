@@ -90,6 +90,15 @@ multifile_agent:
                                # (see docs/multifile-agent/05-migration-and-pilot.md).
                                # What actually drives granularity is the prompt's target
                                # module count, source_bytes / 25000.
+  snapshot_max_bytes: 400000   # enhance only: source at or under this is handed to the
+                               # model whole, in the system prompt, instead of discovered
+                               # a read_file at a time. ~100K tokens, and byte-identical
+                               # every turn, so after the first call it rides along at the
+                               # cached rate -- where re-reading modules 4-6x per run pays
+                               # full price AND burns a step each time. A source over the
+                               # ceiling falls back to a manifest line plus the old
+                               # discovery wording: a partial snapshot would be worse than
+                               # none, since the model cannot tell which half is missing.
   # context_prune_after_steps  # REMOVED in Sprint 6a (2026-07). Read results are no
                                # longer pruned at all, and this key is ignored -- delete it
                                # from your config.yaml if it is still there (_run_react_loop

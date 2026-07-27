@@ -295,6 +295,27 @@ def test_explode_prompt_demands_several_modules_not_one(isolated_db, games_dir):
     assert agent._explode_target_module_count(1_000) == 3
 
 
+def test_explode_prompt_carries_no_source_snapshot(isolated_db, games_dir):
+    """Sprint 6a's snapshot belongs to the enhance pass only. Explode embeds
+    the whole single-file original its own way and starts from an EMPTY
+    dest_dir, where a snapshot builder would find nothing — and a stray
+    '===== BEGIN' here would put marker scaffolding in front of a model whose
+    entire job that run is emitting file contents."""
+    prompt = agent._build_explode_system_prompt(
+        "Big Game", "<html>" + "y" * 1_000 + "</html>", 60_000)
+    assert "===== BEGIN" not in prompt
+    assert "===== END" not in prompt
+
+
+def test_a_snapshot_of_an_empty_directory_is_harmless(isolated_db, games_dir, tmp_path):
+    """The explode-shaped case, defensively: nothing to snapshot must produce
+    an empty (not crashing, not malformed) result."""
+    snap = agent._build_source_snapshot(tmp_path, agent.DEFAULT_SNAPSHOT_MAX_BYTES)
+    assert snap.text is None and snap.file_count == 0 and snap.total_bytes == 0
+    assert snap.paths == frozenset()
+    assert "none" in snap.manifest
+
+
 # ---------------------------------------------------------------------------
 # Part B: enhance_game_auto_format()
 # ---------------------------------------------------------------------------

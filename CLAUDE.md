@@ -321,7 +321,33 @@ forks exactly like `game_enhancer.enhance_game()` (new `games/<slug>/`,
 the half-written fork) — it's the multi-file-source counterpart
 `job_runner.py` dispatches to instead of `game_enhancer.enhance_game()`.
 Config lives under `multifile_agent:` in `config.yaml` (model/effort/
-max_steps/max_verification_retries/max_module_bytes).
+max_steps/max_verification_retries/max_module_bytes/snapshot_max_bytes).
+
+**The model starts with the whole source in hand, not a directory to
+explore.** `_build_source_snapshot()` reads every file of the staged fork —
+`game.md`, then `src/index.html` (whose `<script>` order *is* the dependency
+order), then the rest of `src/` by posix path — into one block appended as the
+last section of the system message, each file wrapped in
+`===== BEGIN <path> (<n> bytes) =====` / `===== END <path> =====` lines (not a
+fenced code block: `game.md` is prose that routinely contains fences). Paths
+are bare — `render.js`, never `src/render.js` — reinforcing
+`_normalize_agent_path`'s convention rather than fighting it. The reasoning is
+the same 1/120 ratio as the append-only invariant: the block is byte-identical
+on every turn, so after the first call it rides along at the cached rate, where
+re-reading modules 4-6× per run (job 79a0abbb read 938KB across 33 `read_file`
+calls for a six-file change) pays full price for each read *and* burns a step.
+Nothing run-specific may ever be interpolated into that system message — no
+timestamp, job id or fork slug — because per-source stability is what makes a
+*second* enhance of the same game a cache hit on the whole block. A source over
+`snapshot_max_bytes` (400,000) degrades to a manifest line plus the old
+discovery wording rather than being truncated: a partial snapshot is worse than
+none, since the model can't tell which half it's missing. Reading a snapshot
+file the run hasn't rewritten still returns the full contents, prefixed with one
+line saying the read told it nothing new — refusing information is what
+historically triggered state-re-checking loops. Only a summary event reaches
+`agent_events` (`{"tool": "snapshot", ...}`), never the body, since that table
+is a permanent archive the chat pane replays from. Explode is untouched: it uses
+`_build_explode_system_prompt` and starts from an empty directory.
 
 Because `ai_client.ask_with_tools()` is stateless, `_run_react_loop`
 resends its whole `messages` list on every turn — so anything left in
@@ -377,6 +403,14 @@ can. Every placeholder the agent does emit now carries `_PRUNE_SENTINEL`,
 and `_write_file` rejects any write whose contents contain it, turning a
 silent corruption into a self-correcting error. Full write-up:
 `docs/multifile-agent/05-migration-and-pilot.md`, "Sprint 6 step 2".
+
+The source snapshot above adds a second piece of copyable scaffolding, and
+gets the same treatment: `_write_file` hard-rejects any contents containing a
+`===== BEGIN/END ... =====` line (`_SNAPSHOT_MARKER_RE`), because a module
+whose first line is a marker is a syntax error the instant the build inlines
+it, and the prompt states outright that markers delimit the listing and are
+never part of a file. Prompt wording alone has never been sufficient against
+this failure mode; the deterministic reject is what holds the line.
 
 Two related lessons from the same pilot, both about the agent reading its
 own transcript literally. The compaction note's wording is load-bearing: an

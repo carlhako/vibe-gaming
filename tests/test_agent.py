@@ -134,12 +134,19 @@ def test_targeted_edit_produces_forked_game_with_only_that_module_changed(isolat
     # Source untouched.
     assert (src_dir / "src" / "core.js").read_text() != NEW_CORE_JS
 
-    # No turn's conversation ever contained the whole assembled game.
+    # No turn's conversation ever contained the whole ASSEMBLED game — the
+    # built index.html with every module inlined, which is exactly the payload
+    # the single-file path has to re-emit and this one exists to avoid. The
+    # split source itself is in the system prompt by design since Sprint 6a
+    # (src/index.html is a shell of <script> tags, not the game), so the check
+    # is against the built artifact, not against "<html".
+    built = (fork_dir / "index.html").read_text()
+    body = built[built.index("<body"):]
     for messages in seen:
         for m in messages:
             content = m.get("content")
             if isinstance(content, str):
-                assert "<html" not in content.lower()
+                assert body not in content
 
     game = db.get_web_game(result["game_id"])
     assert game["parent_game_id"] == SOURCE_GAME_ID
@@ -1114,3 +1121,173 @@ def test_resolve_failure_for_unknown_source_returns_clean_error(isolated_db, gam
     mock_ask.assert_not_called()
     assert not result["success"]
     assert "no game with id" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# Sprint 6a step 2: the source snapshot
+# ---------------------------------------------------------------------------
+
+def _snapshot_of(games_dir, max_bytes=agent.DEFAULT_SNAPSHOT_MAX_BYTES):
+    return agent._build_source_snapshot(games_dir / "click-counter-src", max_bytes)
+
+
+def test_snapshot_carries_every_file_verbatim_in_a_deterministic_order(
+        isolated_db, games_dir):
+    """The snapshot replaces read_file for pre-existing files, so 'byte-for-byte
+    identical to what you were shown' has to be literally true — and the order
+    has to be fixed, because a stable system message is what makes a second
+    enhance of the same source a prefix-cache hit."""
+    _setup_source_game(games_dir)
+    src = games_dir / "click-counter-src"
+    snap = _snapshot_of(games_dir)
+
+    assert snap.text is not None
+    assert snap.file_count == 4  # game.md + src/{index.html,core.js,style.css}
+    assert snap.paths == frozenset({"game.md", "index.html", "core.js", "style.css"})
+
+    for rel, path in (("game.md", src / "game.md"),
+                      ("index.html", src / "src" / "index.html"),
+                      ("core.js", src / "src" / "core.js"),
+                      ("style.css", src / "src" / "style.css")):
+        contents = path.read_text()
+        size = len(contents.encode("utf-8"))
+        begin = f"===== BEGIN {rel} ({size} bytes) ====="
+        assert begin in snap.text, rel
+        block = snap.text.split(begin + "\n", 1)[1].split(f"===== END {rel} =====", 1)[0]
+        assert block == contents, rel
+
+    # game.md first (it's the map), then the index.html shell (whose <script>
+    # order IS the dependency order), then the rest by posix path.
+    order = [snap.text.index(f"===== BEGIN {p} ")
+             for p in ("game.md", "index.html", "core.js", "style.css")]
+    assert order == sorted(order)
+
+
+def test_snapshot_is_byte_identical_across_two_builds_of_the_same_source(
+        isolated_db, games_dir):
+    """A single run-specific byte anywhere in the system message — a timestamp,
+    a job id, the fork slug — costs the whole block's cross-run cache hit, and
+    would do it silently. This is the guard against someone interpolating one."""
+    _setup_source_game(games_dir)
+    assert _snapshot_of(games_dir).text == _snapshot_of(games_dir).text
+
+    # And it must not carry the directory it was read from: enhance reads from
+    # the freshly-minted fork, whose slug differs on every single run.
+    fork = games_dir / "some-other-slug-deadbeef"
+    shutil.copytree(games_dir / "click-counter-src", fork)
+    assert agent._build_source_snapshot(
+        fork, agent.DEFAULT_SNAPSHOT_MAX_BYTES).text == _snapshot_of(games_dir).text
+
+
+def test_snapshot_above_the_ceiling_degrades_to_a_manifest_not_a_truncation(
+        isolated_db, games_dir):
+    """A partial snapshot is worse than none: the model cannot tell which half
+    it is missing, and would trust the half it has. The manifest still costs a
+    few stable bytes and still saves the list_files turn."""
+    _setup_source_game(games_dir)
+    snap = _snapshot_of(games_dir, max_bytes=10)
+
+    assert snap.text is None
+    assert snap.total_bytes > 10
+    assert "game.md" in snap.manifest and "core.js" in snap.manifest
+
+    prompt = agent._build_system_prompt("Click Counter", snap)
+    assert "===== BEGIN" not in prompt
+    assert snap.manifest in prompt
+    # Back to the discovery wording, not the "you already have all of it" one.
+    assert "Explore before you edit" in prompt
+
+
+def test_system_prompt_tells_the_model_the_snapshot_stays_authoritative(
+        isolated_db, games_dir):
+    """Wording is load-bearing here in the same way _compact_write_calls' note
+    is. A bare hedge ('this may be out of date') reads as 'nothing here is
+    trustworthy' and triggers a re-verification sweep; the prompt has to say
+    what is still true and then name the exceptions."""
+    _setup_source_game(games_dir)
+    prompt = agent._build_system_prompt("Click Counter", _snapshot_of(games_dir))
+
+    assert "stays authoritative for every file you do not change" in prompt
+    assert "Do NOT call read_map, list_files or read_file" in prompt
+    assert "scaffolding" in prompt          # the marker rule
+    assert "may be out of date" not in prompt
+
+
+def test_a_write_containing_a_snapshot_marker_is_rejected_and_never_hits_disk(
+        isolated_db, games_dir):
+    """The snapshot introduces new scaffolding the model can copy into a file,
+    which is the exact failure mode of the stub-write disaster and the dropped
+    'path' key. A marker line as the first line of a module is a syntax error
+    the moment the build inlines it — so reject loudly rather than write it."""
+    _setup_source_game(games_dir)
+    bad = f"===== BEGIN core.js (123 bytes) =====\n{NEW_CORE_JS}===== END core.js ====="
+    responses = [
+        _turn([("write_file", {"path": "core.js", "contents": bad})]),
+        _turn([
+            ("write_file", {"path": "core.js", "contents": NEW_CORE_JS}),
+            ("finish", {"summary": "wrote the real core.js"}),
+        ]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    note = _assistant_notes(seen[1])
+    assert "REJECTED" in note and "scaffolding" in note
+    assert (games_dir / result["slug"] / "src" / "core.js").read_text() == NEW_CORE_JS
+
+
+def test_reading_an_unmodified_snapshot_file_is_answered_with_a_nudge(
+        isolated_db, games_dir):
+    """Still returns the full contents — withholding information is what sends
+    this agent into state-re-checking loops. It just says the read was free of
+    new information. A file the run has rewritten gets no nudge: there the
+    snapshot really is superseded."""
+    _setup_source_game(games_dir)
+    style_css = (games_dir / "click-counter-src" / "src" / "style.css").read_text()
+    responses = [
+        _turn([("read_file", {"path": "style.css"})]),
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})]),
+        _turn([("read_file", {"path": "core.js"})]),
+        _turn([("finish", {"summary": "done"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    reads = [m["content"] for m in seen[-1] if m.get("role") == "tool"
+             and m.get("content", "").find("NOTE:") == 0]
+    assert len(reads) == 1, "only the unmodified read should be nudged"
+    assert "told you nothing new" in reads[0]
+    assert style_css in reads[0], "the full contents still come back"
+
+    rewritten = [m["content"] for m in seen[-1] if m.get("role") == "tool"
+                 and NEW_CORE_JS in m.get("content", "")]
+    assert rewritten and not any("NOTE:" in c for c in rewritten)
+
+
+def test_the_snapshot_is_emitted_as_one_summary_event_never_the_body(
+        isolated_db, games_dir):
+    """agent_events is a permanent archive that the chat pane replays from, so
+    a few hundred KB of source per job would bloat both for nothing anyone
+    would read there."""
+    _setup_source_game(games_dir)
+    events = []
+    responses = [_turn([("finish", {"summary": "no changes"})])]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, _seen = _run(
+            games_dir, responses,
+            emit=lambda role, content=None, data=None: events.append((role, content, data)),
+        )
+
+    assert result["success"], result["error"]
+    snaps = [e for e in events if (e[2] or {}).get("tool") == "snapshot"]
+    assert len(snaps) == 1
+    role, content, data = snaps[0]
+    assert role == "tool_result"
+    assert content == "Loaded source snapshot: 4 files, {:,} bytes".format(data["bytes"])
+    assert data["file_count"] == 4 and data["included"] is True
+    assert "===== BEGIN" not in content
