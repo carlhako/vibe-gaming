@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Project Tesseract</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#111;display:flex;justify-content:center;align-items:center;height:100vh;overflow:hidden;}
+canvas{image-rendering:pixelated;max-width:100vw;max-height:100vh;border:2px solid #444;}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+(()=>{
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d');
+
+// Enlarged internal resolution (5x-ish)
+const TILE_SIZE=48;
+const MAP_W=30, MAP_H=20;
+const W=MAP_W*TILE_SIZE, H=MAP_H*TILE_SIZE; // 1440x960
+canvas.width=W; canvas.height=H;
+
+// helpers
+function rndint(min,max){return Math.floor(Math.random()*(max-min+1))+min;}
+function clamp(v,min,max){return Math.max(min,Math.min(max,v));}
+function downloadJSON(data,filename){const blob=new Blob([JSON.stringify(data)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;a.click();}
+function uploadJSON(callback){const input=document.createElement('input');input.type='file';input.accept='.json';input.onchange=e=>{const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=ev=>callback(JSON.parse(ev.target.result));reader.readAsText(file);};input.click();}
+
+// input
+const keys={};
+let mouseX=0,mouseY=0,mouseClicked=false;
+window.addEventListener('keydown',e=>{keys[e.key]=true;e.preventDefault();});
+window.addEventListener('keyup',e=>{keys[e.key]=false;e.preventDefault();});
+canvas.addEventListener('mousemove',e=>{const rect=canvas.getBoundingClientRect();const scaleX=W/rect.width,scaleY=H/rect.height;mouseX=(e.clientX-rect.left)*scaleX;mouseY=(e.clientY-rect.top)*scaleY;});
+canvas.addEventListener('mousedown',e=>{mouseClicked=true;});
+canvas.addEventListener('mouseup',e=>{mouseClicked=false;});
+
+// game state
+let gameState='title';
+let maps={};
+let currentMapData=null;
+let currentMapId='';
+let overworldEntities=[];
+let dialogueLines=[];
+let dialogueIndex=0;
+let battleState=null;
+
+// save slots
+let saves=[{name:'Save 1',data:null},{name:'Save 2',data:null},{name:'Save 3',data:null}];
+
+// player data
+let playerData={
+  name:'Coal',
+  money:500,
+  deck:[],
+  storage:[],
+  inventory:[{id:'potion',count:3},{id:'tesseract_basic',count:5}],
+  codex:{},
+  scholarRank:0,
+  scholarXp:0,
+  arenaTrophies:[false,false,false,false,false],
+  questFlags:{},
+  fastTravelPoints:[],
+  defeatedTrainers:{},
+  defeatedTwins:false,
+  legendariesCaught:{},
+  legendariesDefeated:{},
+  legendaryRespawnTimers:{},
+  time:0, // seconds elapsed in game
+  currentMap:'village',
+  playerPos:{x:0,y:0,dir:0},
+  visitedMaps:{},
+};
+
+// Day/night timing (in seconds)
+const DAY_CYCLE_LENGTH = 45 * 60;   // 45 minutes
+const DAY_LENGTH = 30 * 60;
+const NIGHT_LENGTH = 15 * 60;
+
+// element chart and other data (unchanged)
+const elements=['Fire','Water','Earth','Nature','Electric','Ice','Air','Poison','Metal','Crystal','Light','Shadow','Psychic','Sound','Bug','Spirit','Void'];
+const elementRelations={
+  Fire:{Nature:2,Ice:2,Bug:2,Metal:2,Water:0.5,Earth:0.5,Fire:0.5},
+  Water:{Fire:2,Earth:2,Metal:2,Nature:0.5,Water:0.5,Electric:0.5},
+  Earth:{Electric:2,Poison:2,Metal:2,Fire:2,Water:0.5,Nature:0.5,Air:0},
+  Nature:{Water:2,Earth:2,Rock:2,Fire:0.5,Poison:0.5,Bug:0.5,Ice:0.5},
+  Electric:{Water:2,Air:2,Metal:1.5,Earth:0,Electric:0.5,Nature:0.5},
+  Ice:{Nature:2,Earth:2,Air:2,Fire:0.5,Water:0.5,Ice:0.5,Metal:0.5},
+  Air:{Nature:2,Bug:2,Spirit:2,Electric:0.5,Metal:0.5,Rock:0.5,Earth:0,Fire:1},
+  Poison:{Nature:2,Fairy:2,Bug:1.5,Earth:0.5,Poison:0.5,Metal:1,Ghost:0},
+  Metal:{Rock:2,Ice:2,Fairy:2,Fire:0.5,Water:0.5,Electric:0.5,Metal:0.5},
+  Crystal:{Psychic:2,Ghost:2,Dark:2,Sound:0.5,Spirit:0.5,Metal:0.5,Bug:1},
+  Light:{Shadow:2,Ghost:2,Void:2,Dark:0.5,Shadow:2,Ice:1},
+  Shadow:{Light:2,Spirit:2,Psychic:2,Normal:2,Bug:0.5,Poison:1,Crystal:1},
+  Psychic:{Fighting:2,Poison:2,Sound:1.5,Steel:0.5,Psychic:0.5,Dark:0,Bug:0.5},
+  Sound:{Water:1.5,Steel:1.5,Ground:1.5,Ice:0.5,Crystal:0.5,Sound:0.5,Spirit:1},
+  Bug:{Nature:2,Psychic:2,Dark:2,Fire:0.5,Flying:0.5,Poison:0.5,Ghost:0.5},
+  Spirit:{Fighting:2,Normal:2,Psychic:1.5,Shadow:0.5,Light:0.5,Spirit:0.5,Void:1},
+  Void:{Spirit:2,Crystal:2,Sound:2,Normal:0.5,Dark:0.5,Bug:1,Poison:1}
+};
+function getEffectiveness(attackElem, defenderElems){
+  if(!defenderElems) return 1;
+  let mul=1;
+  for(let def of defenderElems){
+    if(elementRelations[attackElem] && elementRelations[attackElem][def]!==undefined) mul*=elementRelations[attackElem][def];
+    else mul*=1;
+  }
+  return mul;
+}
+
+// hakko species data (keep all original data)
+const hakkoSpecies={
+  1:{name:'Ignipup', elements:['Fire'], stats:{hp:45,atk:55,def:40,spa:35,spd:30,spe:50}, evoLevel:16, evoInto:2, rarity:'starter', habitat:['starter'], moves:[{level:1,move:'Ember'},{level:6,move:'Growl'},{level:10,move:'Quick Attack'},{level:15,move:'Flame Fang'},{level:20,move:'Fire Spin'},{level:25,move:'Bite'},{level:30,move:'Flamethrower'},{level:36,move:'Inferno'}], ability:'Burn Obstacles', desc:'A playful fire pup with a warm tail.', color:'#f50', shinyColor:'#ff0'},
+  2:{name:'Flamberge', elements:['Fire'], stats:{hp:65,atk:80,def:55,spa:55,spd:45,spe:70}, evoLevel:36, evoInto:3, rarity:'uncommon', habitat:['volcano'], moves:[], desc:'A fierce fire hound.', color:'#e30', shinyColor:'#ff0'},
+  3:{name:'Infernalynx', elements:['Fire'], stats:{hp:85,atk:110,def:70,spa:70,spd:60,spe:95}, evoLevel:0, rarity:'rare', habitat:['volcano'], moves:[], desc:'A blazing lynx that controls fire.', color:'#c00', shinyColor:'#ff0'},
+  4:{name:'Aquabud', elements:['Water'], stats:{hp:50,atk:40,def:55,spa:45,spd:50,spe:40}, evoLevel:16, evoInto:5, rarity:'starter', habitat:['lake','river'], moves:[{level:1,move:'Water Gun'},{level:6,move:'Tail Whip'},{level:10,move:'Bubble'},{level:16,move:'Water Pulse'},{level:22,move:'Aqua Ring'},{level:28,move:'Hydro Pump'}], ability:'Swim', desc:'A small aquatic bud with healing waters.', color:'#4af', shinyColor:'#f0f'},
+  5:{name:'Mariflare', elements:['Water'], stats:{hp:70,atk:55,def:75,spa:65,spd:70,spe:55}, evoLevel:36, evoInto:6, rarity:'uncommon', habitat:['ocean'], moves:[], desc:'A graceful sea creature.', color:'#28f', shinyColor:'#f0f'},
+  6:{name:'Oceandria', elements:['Water','Psychic'], stats:{hp:90,atk:70,def:85,spa:95,spd:95,spe:75}, evoLevel:0, rarity:'rare', habitat:['ocean'], moves:[], desc:'A majestic oceanic being.', color:'#06a', shinyColor:'#f0f'},
+  7:{name:'Terratoise', elements:['Earth'], stats:{hp:55,atk:55,def:45,spa:35,spd:45,spe:35}, evoLevel:16, evoInto:8, rarity:'starter', habitat:['cave','mountain'], moves:[{level:1,move:'Rock Throw'},{level:6,move:'Harden'},{level:12,move:'Mud Slap'},{level:18,move:'Rock Slide'},{level:24,move:'Earthquake'},{level:32,move:'Stone Edge'}], ability:'Break Rocks', desc:'A sturdy tortoise with rocky shell.', color:'#ba7', shinyColor:'#fd0'},
+  8:{name:'Boulderon', elements:['Earth'], stats:{hp:75,atk:80,def:70,spa:45,spd:65,spe:50}, evoLevel:36, evoInto:9, rarity:'uncommon', habitat:['mountain'], moves:[], desc:'A massive boulder carrier.', color:'#964', shinyColor:'#fd0'},
+  9:{name:'Gaiazilla', elements:['Earth','Metal'], stats:{hp:100,atk:100,def:120,spa:60,spd:80,spe:40}, evoLevel:0, rarity:'rare', habitat:['mountain'], moves:[], desc:'A colossal metal-plated beast.', color:'#630', shinyColor:'#fd0'},
+  10:{name:'Glimmew', elements:['Crystal'], stats:{hp:45,atk:45,def:45,spa:55,spd:55,spe:50}, evoLevel:20, evoInto:11, rarity:'common', habitat:['cave'], moves:[{level:1,move:'Sparkle'},{level:8,move:'Confusion'}], ability:'Detect Crystal Paths', desc:'A tiny crystalline bird.', color:'#c0f', shinyColor:'#fff'},
+  11:{name:'Prismwing', elements:['Crystal','Air'], stats:{hp:65,atk:55,def:55,spa:80,spd:75,spe:85}, evoLevel:0, rarity:'uncommon', habitat:['cave'], moves:[], desc:'A radiant winged crystal being.', color:'#a0f', shinyColor:'#fff'},
+  12:{name:'Sporecap', elements:['Nature','Poison'], stats:{hp:60,atk:30,def:50,spa:40,spd:60,spe:25}, evoLevel:18, evoInto:13, rarity:'common', habitat:['forest'], moves:[{level:1,move:'Absorb'},{level:6,move:'Poison Powder'}], ability:'Cut Vines', desc:'A mushroom with toxic spores.', color:'#f0f', shinyColor:'#0ff'},
+  13:{name:'Fungrowth', elements:['Nature','Poison'], stats:{hp:80,atk:40,def:70,spa:60,spd:80,spe:35}, evoLevel:0, rarity:'uncommon', habitat:['forest'], moves:[], desc:'A large toxic fungus.', color:'#c0c', shinyColor:'#0ff'},
+  14:{name:'Voltick', elements:['Electric'], stats:{hp:35,atk:40,def:30,spa:60,spd:40,spe:70}, evoLevel:15, evoInto:15, rarity:'common', habitat:['grassland'], moves:[{level:1,move:'Thunder Shock'},{level:8,move:'Quick Attack'}], ability:'Power', desc:'A fast electric rodent.', color:'#ff0', shinyColor:'#0f0'},
+  15:{name:'Electrohare', elements:['Electric'], stats:{hp:55,atk:55,def:45,spa:80,spd:55,spe:95}, evoLevel:0, rarity:'uncommon', habitat:['grassland'], moves:[], desc:'A hare that zips with electricity.', color:'#fd0', shinyColor:'#0f0'},
+  16:{name:'Shadewisp', elements:['Shadow'], stats:{hp:40,atk:35,def:30,spa:70,spd:45,spe:60}, evoLevel:22, evoInto:17, rarity:'uncommon', habitat:['swamp','ruins'], moves:[{level:1,move:'Night Shade'},{level:10,move:'Curse'}], ability:'Reveal', desc:'A ghostly shadow wisp.', color:'#336', shinyColor:'#99f'},
+  17:{name:'Phantomb', elements:['Shadow'], stats:{hp:60,atk:45,def:50,spa:95,spd:70,spe:80}, evoLevel:0, rarity:'rare', habitat:['ruins'], moves:[], desc:'A haunting phantom.', color:'#225', shinyColor:'#99f'},
+  18:{name:'Magiwhirl', elements:['Psychic'], stats:{hp:50,atk:25,def:35,spa:70,spd:60,spe:45}, evoLevel:24, evoInto:19, rarity:'rare', habitat:['ruins'], moves:[{level:1,move:'Confusion'},{level:12,move:'Psybeam'}], ability:'Detect Spirits', desc:'A swirling psychic energy.', color:'#f6f', shinyColor:'#fff'},
+  19:{name:'Mystirix', elements:['Psychic'], stats:{hp:70,atk:35,def:50,spa:100,spd:85,spe:65}, evoLevel:0, rarity:'very rare', habitat:['ruins'], moves:[], desc:'A mystical psychic being.', color:'#d4f', shinyColor:'#fff'},
+  20:{name:'Pebblit', elements:['Earth'], stats:{hp:40,atk:50,def:60,spa:20,spd:30,spe:25}, evoLevel:18, evoInto:21, rarity:'common', habitat:['cave','mine'], moves:[{level:1,move:'Rock Throw'},{level:8,move:'Harden'}], ability:'Push Boulders', desc:'A small rock creature.', color:'#a96', shinyColor:'#fd0'},
+  21:{name:'Bouldash', elements:['Earth'], stats:{hp:60,atk:75,def:90,spa:30,spd:50,spe:40}, evoLevel:0, rarity:'uncommon', habitat:['mine'], moves:[], desc:'A rolling boulder.', color:'#875', shinyColor:'#fd0'},
+  22:{name:'Aerolisk', elements:['Air'], stats:{hp:45,atk:40,def:35,spa:35,spd:40,spe:75}, evoLevel:20, evoInto:23, rarity:'common', habitat:['mountain'], moves:[{level:1,move:'Gust'},{level:10,move:'Wing Attack'}], ability:'Fly', desc:'A swift lizard with gliding wings.', color:'#adf', shinyColor:'#faa'},
+  23:{name:'Draconix', elements:['Air','Dragon'], stats:{hp:70,atk:60,def:55,spa:50,spd:55,spe:95}, evoLevel:0, rarity:'rare', habitat:['mountain'], moves:[], desc:'A small dragon with fierce speed.', color:'#48f', shinyColor:'#faa'},
+  24:{name:'Frostpup', elements:['Ice'], stats:{hp:45,atk:45,def:40,spa:30,spd:35,spe:45}, evoLevel:18, evoInto:25, rarity:'uncommon', habitat:['snow'], moves:[{level:1,move:'Powder Snow'},{level:8,move:'Bite'}], ability:'Melt Ice', desc:'A fluffy ice pup.', color:'#aff', shinyColor:'#fcf'},
+  25:{name:'Glacierwolf', elements:['Ice'], stats:{hp:75,atk:70,def:60,spa:45,spd:55,spe:70}, evoLevel:0, rarity:'rare', habitat:['snow'], moves:[], desc:'A wolf made of ice.', color:'#8ef', shinyColor:'#fcf'},
+  26:{name:'Emberash', elements:['Fire'], stats:{hp:40,atk:35,def:30,spa:50,spd:35,spe:55}, evoLevel:0, rarity:'common', habitat:['volcano'], moves:[{level:1,move:'Ember'},{level:7,move:'Smokescreen'}], ability:'Burn Obstacles', desc:'A small firebird.', color:'#f70', shinyColor:'#ff0'},
+  27:{name:'Aquatter', elements:['Water'], stats:{hp:50,atk:45,def:45,spa:40,spd:45,spe:40}, evoLevel:0, rarity:'common', habitat:['lake'], moves:[{level:1,move:'Water Gun'},{level:6,move:'Tail Whip'}], ability:'Swim', desc:'An otter-like water creature.', color:'#48f', shinyColor:'#f8f'},
+  28:{name:'Vineroot', elements:['Nature'], stats:{hp:55,atk:40,def:55,spa:35,spd:50,spe:30}, evoLevel:20, evoInto:29, rarity:'common', habitat:['forest'], moves:[{level:1,move:'Vine Whip'},{level:8,move:'Growth'}], ability:'Cut Vines', desc:'A walking plant with vines.', color:'#3a3', shinyColor:'#fa0'},
+  29:{name:'Thornwood', elements:['Nature'], stats:{hp:75,atk:60,def:80,spa:50,spd:70,spe:40}, evoLevel:0, rarity:'uncommon', habitat:['forest'], moves:[], desc:'A thorny ancient tree.', color:'#060', shinyColor:'#fa0'},
+  30:{name:'Toxislug', elements:['Poison'], stats:{hp:45,atk:55,def:40,spa:30,spd:45,spe:30}, evoLevel:22, evoInto:31, rarity:'common', habitat:['swamp'], moves:[{level:1,move:'Acid'},{level:8,move:'Sludge'}], ability:'Clear Fog', desc:'A toxic slug.', color:'#a0a', shinyColor:'#0ff'},
+  31:{name:'Venomire', elements:['Poison','Water'], stats:{hp:70,atk:80,def:60,spa:45,spd:65,spe:45}, evoLevel:0, rarity:'uncommon', habitat:['swamp'], moves:[], desc:'A venomous eel.', color:'#707', shinyColor:'#0ff'},
+  32:{name:'Luminfox', elements:['Light'], stats:{hp:50,atk:40,def:35,spa:60,spd:55,spe:65}, evoLevel:24, evoInto:33, rarity:'rare', habitat:['forest','plains'], moves:[{level:1,move:'Flash'},{level:10,move:'Dazzling Gleam'}], ability:'Light', desc:'A glowing fox that lights dark areas.', color:'#ffe', shinyColor:'#ff0'},
+  33:{name:'Solarix', elements:['Light','Psychic'], stats:{hp:70,atk:50,def:55,spa:90,spd:80,spe:80}, evoLevel:0, rarity:'very rare', habitat:['plains'], moves:[], desc:'A majestic light fox.', color:'#ffd', shinyColor:'#ff0'},
+  34:{name:'Metallbug', elements:['Metal','Bug'], stats:{hp:50,atk:60,def:70,spa:25,spd:40,spe:35}, evoLevel:20, evoInto:35, rarity:'uncommon', habitat:['mine','cave'], moves:[{level:1,move:'Metal Claw'},{level:8,move:'Iron Defense'}], ability:'Repair', desc:'A metal-plated beetle.', color:'#aaa', shinyColor:'#fa0'},
+  35:{name:'Alloybex', elements:['Metal','Bug'], stats:{hp:70,atk:90,def:100,spa:35,spd:60,spe:45}, evoLevel:0, rarity:'rare', habitat:['mine'], moves:[], desc:'A heavily armored bug.', color:'#888', shinyColor:'#fa0'},
+  36:{name:'Echowl', elements:['Sound'], stats:{hp:45,atk:30,def:35,spa:55,spd:50,spe:40}, evoLevel:22, evoInto:37, rarity:'common', habitat:['forest'], moves:[{level:1,move:'Echo'},{level:8,move:'Supersonic'}], ability:'Detect Hidden', desc:'An owl that uses echolocation.', color:'#b86', shinyColor:'#fff'},
+  37:{name:'Sonorave', elements:['Sound','Air'], stats:{hp:65,atk:40,def:50,spa:80,spd:70,spe:70}, evoLevel:0, rarity:'uncommon', habitat:['forest'], moves:[], desc:'A raven with sonic screams.', color:'#a64', shinyColor:'#fff'},
+  38:{name:'Spiritfox', elements:['Spirit'], stats:{hp:50,atk:45,def:40,spa:60,spd:60,spe:55}, evoLevel:0, rarity:'rare', habitat:['ruins','forest'], moves:[{level:1,move:'Shadow Ball'}], ability:'Detect Spirits', desc:'A fox that bridges the spirit world.', color:'#ccc', shinyColor:'#ff0'},
+  39:{name:'Voidling', elements:['Void'], stats:{hp:40,atk:35,def:30,spa:70,spd:45,spe:50}, evoLevel:30, evoInto:40, rarity:'very rare', habitat:['ruins','abandoned lab'], moves:[{level:1,move:'Void Swipe'}], ability:'Cross Gaps', desc:'A small creature from the void.', color:'#000', shinyColor:'#fff'},
+  40:{name:'Abysmith', elements:['Void','Shadow'], stats:{hp:70,atk:60,def:55,spa:100,spd:80,spe:75}, evoLevel:0, rarity:'legendary', habitat:['void'], moves:[], desc:'A legendary void being.', color:'#111', shinyColor:'#fff'},
+  41:{name:'Sandyke', elements:['Earth'], stats:{hp:40,atk:45,def:45,spa:20,spd:30,spe:40}, evoLevel:18, evoInto:42, rarity:'common', habitat:['desert'], moves:[{level:1,move:'Sand Attack'},{level:9,move:'Bite'}], ability:'Dig', desc:'A small desert serpent.', color:'#db9', shinyColor:'#fd0'},
+  42:{name:'Sandspire', elements:['Earth','Poison'], stats:{hp:60,atk:70,def:65,spa:35,spd:50,spe:55}, evoLevel:0, rarity:'uncommon', habitat:['desert'], moves:[], desc:'A venomous sand serpent.', color:'#c98', shinyColor:'#fd0'},
+  43:{name:'Rubbleon', elements:['Earth'], stats:{hp:50,atk:60,def:65,spa:30,spd:40,spe:30}, evoLevel:0, rarity:'common', habitat:['mine'], moves:[{level:1,move:'Rock Throw'}], ability:'Push Boulders', desc:'A rubble golem.', color:'#a87', shinyColor:'#fd0'},
+  44:{name:'Lavafly', elements:['Fire','Bug'], stats:{hp:35,atk:30,def:25,spa:55,spd:40,spe:65}, evoLevel:20, evoInto:45, rarity:'uncommon', habitat:['volcano'], moves:[{level:1,move:'Ember'},{level:10,move:'Fire Spin'}], ability:'Burn Obstacles', desc:'A lava-dwelling insect.', color:'#f60', shinyColor:'#ff0'},
+  45:{name:'Infermoth', elements:['Fire','Bug'], stats:{hp:60,atk:45,def:40,spa:85,spd:65,spe:90}, evoLevel:0, rarity:'rare', habitat:['volcano'], moves:[], desc:'A blazing moth.', color:'#e40', shinyColor:'#ff0'},
+  46:{name:'Cryshard', elements:['Crystal'], stats:{hp:45,atk:40,def:55,spa:45,spd:55,spe:35}, evoLevel:0, rarity:'common', habitat:['cave','mine'], moves:[{level:1,move:'Crystal Shard'}], ability:'Detect Crystal Paths', desc:'A living crystal shard.', color:'#faf', shinyColor:'#fff'},
+  47:{name:'Polarfin', elements:['Water','Ice'], stats:{hp:50,atk:45,def:40,spa:55,spd:50,spe:45}, evoLevel:0, rarity:'uncommon', habitat:['snow','ocean'], moves:[{level:1,move:'Water Gun'}], ability:'Swim', desc:'A fish that thrives in icy waters.', color:'#acf', shinyColor:'#ffa'},
+  48:{name:'Mossrock', elements:['Nature','Earth'], stats:{hp:55,atk:40,def:60,spa:30,spd:55,spe:25}, evoLevel:0, rarity:'common', habitat:['forest','cave'], moves:[{level:1,move:'Vine Whip'}], ability:'Cut Vines', desc:'A mossy rock creature.', color:'#5a5', shinyColor:'#fd0'},
+  49:{name:'Pyraclaw', elements:['Fire','Metal'], stats:{hp:40,atk:65,def:45,spa:50,spd:35,spe:55}, evoLevel:0, rarity:'uncommon', habitat:['volcano','mine'], moves:[{level:1,move:'Metal Claw'}], ability:'Break Rocks', desc:'A fiery metal clawed beast.', color:'#e80', shinyColor:'#ff0'},
+  50:{name:'Miragis', elements:['Light','Shadow'], stats:{hp:80,atk:70,def:70,spa:80,spd:80,spe:70}, evoLevel:0, rarity:'legendary', habitat:['hidden'], moves:[], desc:'The legendary mirage hakko, balancing light and shadow.', color:'#ff0', shinyColor:'#fff'},
+};
+
+// moves data (abbreviated, keep original)
+const movesData={
+  'Tackle':{type:'Physical',power:40,accuracy:95,element:null,cooldown:0,effect:null},
+  'Scratch':{type:'Physical',power:40,accuracy:100,element:null,cooldown:0},
+  'Growl':{type:'Status',power:0,accuracy:100,element:null,cooldown:0,effect:'atkdown1'},
+  'Tail Whip':{type:'Status',power:0,accuracy:100,element:null,cooldown:0,effect:'defdown1'},
+  'Ember':{type:'Special',power:40,accuracy:100,element:'Fire',cooldown:0,effect:'burn10'},
+  'Water Gun':{type:'Special',power:40,accuracy:100,element:'Water',cooldown:0},
+  'Rock Throw':{type:'Physical',power:50,accuracy:90,element:'Earth',cooldown:0},
+  'Vine Whip':{type:'Physical',power:45,accuracy:100,element:'Nature',cooldown:0},
+  'Thunder Shock':{type:'Special',power:40,accuracy:100,element:'Electric',cooldown:0,effect:'paralyze10'},
+  'Confusion':{type:'Special',power:50,accuracy:100,element:'Psychic',cooldown:0,effect:'confuse10'},
+  'Sparkle':{type:'Special',power:40,accuracy:100,element:'Crystal',cooldown:0},
+  'Absorb':{type:'Special',power:20,accuracy:100,element:'Nature',cooldown:0,heal:0.5},
+  'Poison Powder':{type:'Status',power:0,accuracy:75,element:'Poison',cooldown:0,effect:'poison'},
+  'Bite':{type:'Physical',power:60,accuracy:100,element:null,cooldown:0,effect:'flinch20'},
+  'Quick Attack':{type:'Physical',power:40,accuracy:100,element:null,cooldown:0,priority:1},
+  'Night Shade':{type:'Special',power:0,accuracy:100,element:'Shadow',cooldown:0,damage:50},
+  'Curse':{type:'Status',power:0,accuracy:100,element:'Shadow',cooldown:2,effect:'curse'},
+  'Flash':{type:'Status',power:0,accuracy:100,element:'Light',cooldown:0,effect:'blind1'},
+  'Dazzling Gleam':{type:'Special',power:80,accuracy:100,element:'Light',cooldown:1},
+  'Metal Claw':{type:'Physical',power:50,accuracy:95,element:'Metal',cooldown:0,effect:'atkup10'},
+  'Iron Defense':{type:'Status',power:0,accuracy:100,element:'Metal',cooldown:1,effect:'defup2'},
+  'Echo':{type:'Special',power:30,accuracy:100,element:'Sound',cooldown:0},
+  'Supersonic':{type:'Status',power:0,accuracy:55,element:'Sound',cooldown:0,effect:'confuse'},
+  'Sand Attack':{type:'Status',power:0,accuracy:100,element:'Earth',cooldown:0,effect:'blind1'},
+  'Gust':{type:'Special',power:40,accuracy:100,element:'Air',cooldown:0},
+  'Wing Attack':{type:'Physical',power:60,accuracy:100,element:'Air',cooldown:0},
+  'Powder Snow':{type:'Special',power:40,accuracy:100,element:'Ice',cooldown:0,effect:'freeze10'},
+  'Acid':{type:'Special',power:40,accuracy:100,element:'Poison',cooldown:0,effect:'poison10'},
+  'Sludge':{type:'Special',power:65,accuracy:100,element:'Poison',cooldown:0,effect:'poison30'},
+  'Flamethrower':{type:'Special',power:90,accuracy:100,element:'Fire',cooldown:1,effect:'burn10'},
+  'Hydro Pump':{type:'Special',power:110,accuracy:80,element:'Water',cooldown:1},
+  'Earthquake':{type:'Physical',power:100,accuracy:100,element:'Earth',cooldown:2},
+  'Rock Slide':{type:'Physical',power:75,accuracy:90,element:'Earth',cooldown:1},
+  'Stone Edge':{type:'Physical',power:100,accuracy:80,element:'Earth',cooldown:1},
+  'Psybeam':{type:'Special',power:65,accuracy:100,element:'Psychic',cooldown:0,effect:'confuse10'},
+  'Shadow Ball':{type:'Special',power:80,accuracy:100,element:'Shadow',cooldown:1,effect:'spddown10'},
+  'Crystal Shard':{type:'Physical',power:40,accuracy:100,element:'Crystal',cooldown:0},
+  'Flame Fang':{type:'Physical',power:65,accuracy:95,element:'Fire',cooldown:0,effect:'burn10'},
+  'Fire Spin':{type:'Special',power:35,accuracy:85,element:'Fire',cooldown:0,effect:'trap'},
+  'Inferno':{type:'Special',power:100,accuracy:50,element:'Fire',cooldown:2,effect:'burn100'},
+  'Void Swipe':{type:'Physical',power:45,accuracy:100,element:'Void',cooldown:0,effect:'spddown10'},
+};
+
+const itemsData={
+  'potion':{name:'Potion',desc:'Heals 20 HP.',category:'healing',heal:20,cost:50},
+  'superpotion':{name:'Super Potion',desc:'Heals 50 HP.',category:'healing',heal:50,cost:150},
+  'hyperpotion':{name:'Hyper Potion',desc:'Heals 150 HP.',category:'healing',heal:150,cost:500},
+  'antidote':{name:'Antidote',desc:'Cures poison.',category:'status',cure:'poison',cost:30},
+  'awakening':{name:'Awakening',desc:'Cures sleep.',category:'status',cure:'sleep',cost:30},
+  'burnheal':{name:'Burn Heal',desc:'Cures burn.',category:'status',cure:'burn',cost:30},
+  'iceheal':{name:'Ice Heal',desc:'Cures freeze.',category:'status',cure:'freeze',cost:30},
+  'paralyzeheal':{name:'Paralyze Heal',desc:'Cures paralysis.',category:'status',cure:'paralysis',cost:30},
+  'revive':{name:'Revival Herb',desc:'Revives a fainted Hakko with half HP.',category:'revive',cost:500},
+  'tesseract_basic':{name:'Basic Tesseract',desc:'Capture device.',tesseract:1,cost:100},
+  'tesseract_stable':{name:'Stable Tesseract',desc:'More reliable capture.',tesseract:1.5,cost:250},
+  'tesseract_reinforced':{name:'Reinforced Tesseract',desc:'Even stronger.',tesseract:2,cost:500},
+  'tesseract_refined':{name:'Refined Tesseract',desc:'High chance.',tesseract:3,cost:1000},
+  'tesseract_quantum':{name:'Quantum Tesseract',desc:'Very high chance.',tesseract:5,cost:3000},
+  'tesseract_legend':{name:'Legend Tesseract',desc:'For legendaries.',tesseract:10,cost:9999},
+};
+
+// ---------------------------------------------------------------------------
+// ENHANCED MAP GENERATION
+// ---------------------------------------------------------------------------
+function isPassable(tile){ return tile===0||tile===1; } // grass & path
+
+function createMaps(){
+  // --- village ---
+  let v={name:'Terraview Village', bg:[], warps:[], npcs:[], wildSpawns:[]};
+  for(let y=0;y<MAP_H;y++){ v.bg[y]=new Array(MAP_W).fill(0); }
+  // main paths (cross shape)
+  for(let y=9;y<=11;y++) for(let x=0;x<MAP_W;x++) v.bg[y][x]=1;
+  for(let x=14;x<=16;x++) for(let y=0;y<MAP_H;y++) v.bg[y][x]=1;
+
+  // buildings: walls (3), door tile (1) on path in front
+  function placeBuilding(map, bx, by, bw, bh, targetMap, targetX, targetY){
+    for(let yy=by; yy<by+bh; yy++) for(let xx=bx; xx<bx+bw; xx++) map.bg[yy][xx]=3;
+    const doorX = bx + Math.floor(bw/2);
+    const doorY = by + bh;
+    if(doorX>=0 && doorX<MAP_W && doorY>=0 && doorY<MAP_H){
+      map.bg[doorY][doorX] = 1;
+      map.warps.push({x:doorX, y:doorY, targetMap, targetX, targetY});
+    }
+  }
+  placeBuilding(v, 4, 3, 4, 2, 'player_house', 5, 8); // player home
+  placeBuilding(v, 19, 3, 4, 2, 'lab', 4, 6);
+  placeBuilding(v, 6, 13, 4, 2, 'shop', 3, 5);
+  placeBuilding(v, 21, 13, 4, 2, 'vet', 3, 5);
+
+  // NPCs
+  v.npcs.push({id:'mom', name:'Mom', x:6, y:7, dir:2, script:'mom_start'}); // in front of house
+  v.npcs.push({id:'researcher', name:'Prof. Elmwood', x:21, y:7, dir:2, script:'researcher_start'});
+  maps['village']=v;
+
+  // --- player house ---
+  let ph={name:'Coal\'s Home', bg:[], warps:[], npcs:[], wildSpawns:[]};
+  for(let y=0;y<10;y++) ph.bg[y]=new Array(12).fill(0);
+  for(let y=0;y<10;y++) for(let x=0;x<12;x++) ph.bg[y][x]=0; // floor
+  // walls
+  for(let x=0;x<12;x++){ ph.bg[0][x]=3; ph.bg[9][x]=3; }
+  for(let y=1;y<9;y++){ ph.bg[y][0]=3; ph.bg[y][11]=3; }
+  ph.bg[9][5]=1; // door
+  ph.warps.push({x:5, y:9, targetMap:'village', targetX:6, targetY:5}); // back to outside door tile
+  ph.npcs.push({id:'mom', name:'Mom', x:6, y:4, dir:2, script:'mom_start'});
+  maps['player_house']=ph;
+
+  // --- lab ---
+  let lab={name:'Lab', bg:[], warps:[], npcs:[], wildSpawns:[]};
+  for(let y=0;y<10;y++) lab.bg[y]=new Array(12).fill(0);
+  for(let x=0;x<12;x++){ lab.bg[0][x]=3; lab.bg[9][x]=3; }
+  for(let y=1;y<9;y++){ lab.bg[y][0]=3; lab.bg[y][11]=3; }
+  lab.bg[9][5]=1;
+  lab.warps.push({x:5, y:9, targetMap:'village', targetX:21, targetY:5});
+  lab.npcs.push({id:'elmwood', name:'Prof. Elmwood', x:6, y:4, dir:2, script:'elmwood_intro'});
+  maps['lab']=lab;
+
+  // --- shop ---
+  let shop={name:'Shop', bg:[], warps:[], npcs:[], wildSpawns:[]};
+  for(let y=0;y<8;y++) shop.bg[y]=new Array(10).fill(0);
+  for(let x=0;x<10;x++){ shop.bg[0][x]=3; shop.bg[7][x]=3; }
+  for(let y=1;y<7;y++){ shop.bg[y][0]=3; shop.bg[y][9]=3; }
+  shop.bg[7][4]=1;
+  shop.warps.push({x:4, y:7, targetMap:'village', targetX:8, targetY:14});
+  shop.npcs.push({id:'shopkeeper', name:'Clerk', x:4, y:3, dir:2, script:'shop'});
+  maps['shop']=shop;
+
+  // --- vet ---
+  let vet={name:'Hakko Vet', bg:[], warps:[], npcs:[], wildSpawns:[]};
+  for(let y=0;y<8;y++) vet.bg[y]=new Array(10).fill(0);
+  for(let x=0;x<10;x++){ vet.bg[0][x]=3; vet.bg[7][x]=3; }
+  for(let y=1;y<7;y++){ vet.bg[y][0]=3; vet.bg[y][9]=3; }
+  vet.bg[7][4]=1;
+  vet.warps.push({x:4, y:7, targetMap:'village', targetX:23, targetY:14});
+  vet.npcs.push({id:'vet', name:'Nurse Joy', x:4, y:3, dir:2, script:'vet'});
+  maps['vet']=vet;
+
+  // --- Route 1 ---
+  let r1={name:'Route 1', bg:[], warps:[], npcs:[], wildSpawns:[]};
+  for(let y=0;y<MAP_H;y++) r1.bg[y]=new Array(MAP_W).fill(0);
+  for(let y=16;y<MAP_H;y++) for(let x=0;x<MAP_W;x++) r1.bg[y][x]=1; // path bottom
+  r1.bg[10][14]=1; r1.bg[10][15]=1; // connection
+  r1.warps.push({x:14, y:MAP_H-1, targetMap:'village', targetX:15, targetY:0});
+  for(let i=0;i<4;i++) r1.wildSpawns.push({x:rndint(5,25), y:rndint(2,13), species:14, rarity:'common'});
+  for(let i=0;i<2;i++) r1.wildSpawns.push({x:rndint(5,25), y:rndint(2,13), species:28, rarity:'common'});
+  r1.wildSpawns.push({x:rndint(5,25), y:rndint(2,13), species:20, rarity:'uncommon'});
+  r1.npcs.push({id:'trainer1', name:'Youngster Tim', x:12, y:5, dir:2, script:'trainer_battle', team:[{species:14,level:5}]});
+  maps['route1']=r1;
+
+  // --- Farmcrest Town ---
+  let t1={name:'Farmcrest Town', bg:[], warps:[], npcs:[], wildSpawns:[]};
+  for(let y=0;y<MAP_H;y++) t1.bg[y]=new Array(MAP_W).fill(0);
+  for(let y=8;y<=11;y++) for(let x=0;x<MAP_W;x++) t1.bg[y][x]=1;
+  for(let x=14;x<=16;x++) for(let y=0;y<MAP_H;y++) t1.bg[y][x]=1;
+  placeBuilding(t1, 5, 6, 4, 2, 'shop', 3, 5);
+  placeBuilding(t1, 21, 6, 4, 2, 'vet', 3, 5);
+  placeBuilding(t1, 12, 14, 6, 2, 'arena1', 10, 10);
+  t1.warps.push({x:14, y:MAP_H-1, targetMap:'route1', targetX:14, targetY:0});
+  t1.npcs.push({id:'townsperson1', name:'Lady', x:8, y:9, dir:2, script:'talk_town1'});
+  t1.npcs.push({id:'arenaclerk', name:'Arena Clerk', x:15, y:15, dir:2, script:'arena_entrance'});
+  maps['farmcrest']=t1;
+
+  // --- Arena 1 ---
+  let a1={name:'Farmcrest Arena', bg:[], warps:[], npcs:[], wildSpawns:[]};
+  for(let y=0;y<MAP_H;y++) a1.bg[y]=new Array(MAP_W).fill(0);
+  for(let x=0;x<MAP_W;x++){ a1.bg[0][x]=3; a1.bg[MAP_H-1][x]=3; }
+  for(let y=1;y<MAP_H-1;y++){ a1.bg[y][0]=3; a1.bg[y][MAP_W-1]=3; }
+  a1.bg[MAP_H-1][14]=1; // door
+  a1.warps.push({x:14, y:MAP_H-1, targetMap:'farmcrest', targetX:15, targetY:14});
+  a1.npcs.push({id:'arenaboss1', name:'Boss Agrias', x:14, y:10, dir:0, script:'arena_boss1'});
+  maps['arena1']=a1;
+}
+
+function setPlayerMap(mapId, x, y, dir=0){
+  playerData.currentMap=mapId;
+  playerData.playerPos={x:x*TILE_SIZE+TILE_SIZE/2, y:y*TILE_SIZE+TILE_SIZE/2, dir:dir};
+  currentMapId=mapId;
+  currentMapData=maps[mapId];
+  overworldEntities=[]; // reset wilds for new map
+}
+
+// ---------------------------------------------------------------------------
+// PIXEL SPRITE RENDERING (enhanced detail)
+// ---------------------------------------------------------------------------
+const PIXEL_SIZE = 6; // each sprite pixel = 6x6 screen pixels
+
+function drawPixelSprite(x, y, sprite, palette, pixelW=PIXEL_SIZE, pixelH=PIXEL_SIZE){
+  if(!sprite || !palette) return;
+  const rows = sprite.length;
+  const cols = sprite[0].length;
+  const totalW = cols * pixelW;
+  const totalH = rows * pixelH;
+  const startX = x - totalW/2;
+  const startY = y - totalH/2;
+  for(let row=0; row<rows; row++){
+    for(let col=0; col<cols; col++){
+      const idx = sprite[row][col];
+      if(idx === 0) continue; // transparent
+      ctx.fillStyle = palette[idx-1]; // palette is 0-indexed array
+      ctx.fillRect(startX + col*pixelW, startY + row*pixelH, pixelW, pixelH);
+    }
+  }
+}
+
+// Player Coal sprite (8x8)
+const playerSprite = [
+  [0,0,0,2,2,2,0,0],
+  [0,0,2,2,2,2,2,0],
+  [0,1,1,3,4,3,4,3],
+  [0,1,1,1,1,1,1,1],
+  [5,5,5,5,5,5,5,5],
+  [5,5,5,5,5,5,5,5],
+  [5,5,5,5,5,5,5,5],
+  [0,6,6,6,6,6,6,0]
+];
+const playerPalette = ['#ffdbac','#4a2c0c','#fff','#000','#3b5323','#666']; // skin, hair, white, black, clothes, shoes
+
+// NPC generic sprite
+const npcSprite = [
+  [0,0,0,2,2,2,0,0],
+  [0,0,2,2,2,2,2,0],
+  [0,1,1,3,4,3,4,3],
+  [0,1,1,1,1,1,1,1],
+  [5,5,5,5,5,5,5,5],
+  [5,5,5,5,5,5,5,5],
+  [5,5,5,5,5,5,5,5],
+  [0,6,6,6,6,6,6,0]
+];
+const npcPalette = ['#ffd8a8','#6b4a2e','#fff','#000','#8b4513','#555']; // brown clothes
+
+function drawPlayer(){
+  const p = playerData.playerPos;
+  drawPixelSprite(p.x, p.y-2, playerSprite, playerPalette);
+}
+
+function drawNPC(sprite, palette, xPix, yPix){
+  drawPixelSprite(xPix, yPix, npcSprite, npcPalette);
+}
+
+// Wild hakko shapes (simple colored blob with face)
+function drawHakko(x, y, species, isShiny=false){
+  const sp = hakkoSpecies[species];
+  const col1 = isShiny ? sp.shinyColor : sp.color;
+  const col2 = '#000'; // eye
+  // Body ellipse
+  ctx.fillStyle = col1;
+  ctx.beginPath(); ctx.ellipse(x, y, 14, 16, 0, 0, Math.PI*2); ctx.fill();
+  // Eyes
+  ctx.fillStyle = col2;
+  ctx.fillRect(x-6, y-6, 4, 4);
+  ctx.fillRect(x+2, y-6, 4, 4);
+  // Mouth
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(x-4, y+6, 8, 4);
+}
+
+// ---------------------------------------------------------------------------
+// TILE TEXTURES
+// ---------------------------------------------------------------------------
+function drawGrassTile(tx, ty, tileX, tileY){
+  ctx.fillStyle = '#8bc34a';
+  ctx.fillRect(tx, ty, TILE_SIZE, TILE_SIZE);
+  // pattern: lighter patches
+  const seed = (tileX*31 + tileY*37) % 7;
+  ctx.fillStyle = '#9ccc65';
+  for(let i=0; i<5; i++){
+    const sx = tx + ((tileX*13 + tileY*17 + i*7) % TILE_SIZE);
+    const sy = ty + ((tileX*19 + tileY*23 + i*11) % TILE_SIZE);
+    ctx.fillRect(sx, sy, 6, 6);
+  }
+}
+function drawPathTile(tx, ty, tileX, tileY){
+  ctx.fillStyle = '#c2a062';
+  ctx.fillRect(tx, ty, TILE_SIZE, TILE_SIZE);
+  // stones
+  ctx.fillStyle = '#b08d4a';
+  const seed = (tileX*43 + tileY*53) % 5;
+  for(let i=0; i<4; i++){
+    const sx = tx + ((tileX*23 + tileY*31 + i*11) % (TILE_SIZE-8));
+    const sy = ty + ((tileX*37 + tileY*41 + i*13) % (TILE_SIZE-8));
+    ctx.fillRect(sx, sy, 8, 8);
+  }
+}
+function drawWaterTile(tx, ty, tileX, tileY){
+  ctx.fillStyle = '#4a7ab5';
+  ctx.fillRect(tx, ty, TILE_SIZE, TILE_SIZE);
+  ctx.fillStyle = '#5a8ac5';
+  for(let i=0; i<2; i++){
+    ctx.fillRect(tx + 10*i + (tileX%8)*2, ty + 15, 8, 4);
+  }
+}
+function drawBuildingTile(tx, ty, tileX, tileY){
+  // brick wall
+  ctx.fillStyle = '#8b7355';
+  ctx.fillRect(tx, ty, TILE_SIZE, TILE_SIZE);
+  ctx.strokeStyle = '#6a4f3b';
+  for(let y=0; y<TILE_SIZE; y+=8){
+    const off = (y/8)%2 ? 0 : 12;
+    for(let x=off; x<TILE_SIZE; x+=24){
+      ctx.strokeRect(tx+x, ty+y, 12, 8);
+    }
+  }
+}
+function drawBuildingRoof(tx, ty){
+  ctx.fillStyle = '#b73d3d';
+  ctx.beginPath(); ctx.moveTo(tx, ty-8); ctx.lineTo(tx+24, ty-8-TILE_SIZE/2); ctx.lineTo(tx+TILE_SIZE-24, ty-8-TILE_SIZE/2); ctx.lineTo(tx+TILE_SIZE, ty-8); ctx.closePath(); ctx.fill();
+}
+
+// ---------------------------------------------------------------------------
+// RENDER OVERWORLD
+// ---------------------------------------------------------------------------
+function renderOverworld(){
+  if(!currentMapData) return;
+  for(let y=0; y<MAP_H; y++){
+    for(let x=0; x<MAP_W; x++){
+      const tile = currentMapData.bg[y][x];
+      const tx = x*TILE_SIZE, ty = y*TILE_SIZE;
+      if(tile===0) drawGrassTile(tx, ty, x, y);
+      else if(tile===1) drawPathTile(tx, ty, x, y);
+      else if(tile===2) drawWaterTile(tx, ty, x, y);
+      else if(tile===3) drawBuildingTile(tx, ty, x, y);
+    }
+  }
+  // draw roofs on buildings? (optional)
+  // draw NPCs
+  for(let n of currentMapData.npcs){
+    const nx = n.x*TILE_SIZE + TILE_SIZE/2;
+    const ny = n.y*TILE_SIZE + TILE_SIZE/2;
+    drawNPC(nx, ny);
+  }
+  // draw wild hakkos
+  for(let e of overworldEntities){
+    drawHakko(e.x, e.y, e.species);
+  }
+  drawPlayer();
+}
+
+// ---------------------------------------------------------------------------
+// DAY / NIGHT OVERLAY
+// ---------------------------------------------------------------------------
+function getDayPhase(cycleTime){
+  if(cycleTime < DAY_LENGTH){
+    if(cycleTime < 360) return 'Dawn';
+    if(cycleTime < 1080) return 'Morning';
+    if(cycleTime < 1440) return 'Afternoon';
+    return 'Evening';
+  }
+  return 'Night';
+}
+
+function applyDayNightOverlay(){
+  const cycleTime = playerData.time % DAY_CYCLE_LENGTH;
+  const phase = getDayPhase(cycleTime);
+  let alpha = 0, color = '#000';
+  if(phase === 'Night'){ alpha = 0.35; color = '#0a1030'; }
+  else if(phase === 'Evening'){ alpha = 0.15; color = '#ffaa50'; }
+  else if(phase === 'Dawn'){ alpha = 0.1; color = '#ffccaa'; }
+  // else no overlay
+  if(alpha > 0){
+    ctx.fillStyle = color;
+    ctx.globalAlpha = alpha;
+    ctx.fillRect(0,0,W,H);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// HUD
+// ---------------------------------------------------------------------------
+function drawHUD(){
+  const cycleTime = playerData.time % DAY_CYCLE_LENGTH;
+  const phase = getDayPhase(cycleTime);
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0,0,W,24);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 14px monospace';
+  ctx.fillText(currentMapData? currentMapData.name : '', 10, 18);
+  ctx.fillText(phase, W-80, 18);
+  ctx.fillText('⌂ '+playerData.name, W-200, 18);
+}
+
+// ---------------------------------------------------------------------------
+// MOVEMENT & COLLISION (FIXED)
+// ---------------------------------------------------------------------------
+const MOVE_SPEED = 4; // pixels per frame, faster now
+
+function handlePlayingInput(){
+  const p = playerData.playerPos;
+  let dx=0, dy=0;
+  if(keys['ArrowUp']||keys['w']) dy=-1;
+  if(keys['ArrowDown']||keys['s']) dy=1;
+  if(keys['ArrowLeft']||keys['a']) dx=-1;
+  if(keys['ArrowRight']||keys['d']) dx=1;
+  if(dx||dy){
+    let newX = p.x + dx*MOVE_SPEED;
+    let newY = p.y + dy*MOVE_SPEED;
+    // check tile passability at the corners of the player's bounding box (16x16 hitbox)
+    const hw = 14, hh = 16; // half-width/height
+    // check four corners
+    const corners = [
+      [newX-hw, newY-hh],
+      [newX+hw, newY-hh],
+      [newX-hw, newY+hh],
+      [newX+hw, newY+hh]
+    ];
+    let blocked = false;
+    for(let [cx, cy] of corners){
+      const tileX = Math.floor(cx / TILE_SIZE);
+      const tileY = Math.floor(cy / TILE_SIZE);
+      if(tileX<0 || tileX>=MAP_W || tileY<0 || tileY>=MAP_H || !isPassable(currentMapData.bg[tileY][tileX])){
+        blocked = true; break;
+      }
+    }
+    if(!blocked){
+      p.x = clamp(newX, 0, MAP_W*TILE_SIZE-1);
+      p.y = clamp(newY, 0, MAP_H*TILE_SIZE-1);
+      p.dir = dx>0?1:dx<0?3:dy>0?2:0;
+    }
+  }
+  // interaction (Enter)
+  if(keys['Enter'] || keys[' ']){
+    keys['Enter']=false; keys[' ']=false;
+    const tileX = Math.floor(p.x / TILE_SIZE);
+    const tileY = Math.floor(p.y / TILE_SIZE);
+    // check warps (only if walkable tile)
+    for(let w of currentMapData.warps){
+      if(w.x===tileX && w.y===tileY){
+        setPlayerMap(w.targetMap, w.targetX, w.targetY);
+        return;
+      }
+    }
+    // check NPCs (proximity)
+    for(let n of currentMapData.npcs){
+      const nx = n.x*TILE_SIZE + TILE_SIZE/2;
+      const ny = n.y*TILE_SIZE + TILE_SIZE/2;
+      const dist = Math.hypot(nx-p.x, ny-p.y);
+      if(dist < TILE_SIZE*1.2){
+        triggerNPC(n);
+        return;
+      }
+    }
+    // check wild encounter
+    for(let e of overworldEntities){
+      if(Math.abs(e.x-p.x) < TILE_SIZE*0.8 && Math.abs(e.y-p.y) < TILE_SIZE*0.8){
+        startWildBattle(e.species, rndint(2,5));
+        return;
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// NPC DIALOGUE & EVENTS (mostly unchanged)
+// ---------------------------------------------------------------------------
+function triggerNPC(npc){
+  if(!npc.script) return;
+  switch(npc.script){
+    case 'mom_start':
+      dialogueLines=['Mom: Good morning, Coal! Ready to become a Hakko handler?','Mom: Visit Prof. Elmwood at the lab.'];
+      dialogueIndex=0;
+      break;
+    case 'elmwood_intro':
+      dialogueLines=['Prof. Elmwood: Welcome! I have three Hakko for you. Choose one:','(Open menu to choose starter - not yet implemented)'];
+      // starter selection would go here
+      break;
+    case 'shop':
+      dialogueLines=['Clerk: Welcome to the shop! Items available for purchase.'];
+      break;
+    case 'vet':
+      for(let h of playerData.deck) h.currentHp=h.stats.maxHp;
+      dialogueLines=['Nurse: Your Hakkos are fully healed!'];
+      break;
+    case 'trainer_battle':
+      startTrainerBattle(npc);
+      break;
+    case 'arena_boss1':
+      if(playerData.arenaTrophies[0]) dialogueLines=['Boss: You already won!'];
+      else startTrainerBattle({name:'Boss Agrias',team:[{species:14,level:8},{species:28,level:8},{species:20,level:9}]});
+      break;
+    default: break;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// BATTLE SYSTEM (keep original logic, just visual tweaks)
+// ---------------------------------------------------------------------------
+function createHakko(speciesId,level=5){
+  const sp=hakkoSpecies[speciesId];
+  const hp=sp.stats.hp+level*2;
+  const stats={hp:hp,maxHp:hp,atk:sp.stats.atk+level,def:sp.stats.def+level,spa:sp.stats.spa+level,spd:sp.stats.spd+level,spe:sp.stats.spe+level};
+  const moves=[];
+  if(sp.moves) for(let m of sp.moves) if(m.level<=level) moves.push({name:m.move});
+  if(moves.length===0) moves.push({name:'Tackle'});
+  return {
+    id:Date.now()+Math.random(),
+    species:speciesId,
+    name:sp.name,
+    level,
+    xp:0,
+    stats,
+    currentHp:hp,
+    status:null,
+    moves:moves.slice(0,6),
+    shiny: Math.random()<0.003?true:false,
+    gender: Math.random()<0.5?'m':'f',
+  };
+}
+function startWildBattle(speciesId,level){
+  battleState={
+    type:'wild',
+    enemy:createHakko(speciesId,level),
+    playerDeck:playerData.deck.slice(0,5),
+    activePlayerIndex:playerData.deck.findIndex(h=>h.currentHp>0),
+    turn:0,
+    log:['A wild '+hakkoSpecies[speciesId].name+' appeared!'],
+    cooldowns:{},
+    playerWins:null,
+    captureAttempt:false,
+  };
+  if(battleState.activePlayerIndex<0) battleState.activePlayerIndex=0;
+  gameState='battle';
+}
+function startTrainerBattle(trainer){
+  battleState={
+    type:'trainer',
+    enemyDeck:trainer.team.map(t=>createHakko(t.species,t.level)),
+    activeEnemyIndex:0,
+    playerDeck:playerData.deck.slice(0,5),
+    activePlayerIndex:playerData.deck.findIndex(h=>h.currentHp>0),
+    turn:0,
+    log:[trainer.name+' challenges you!'],
+    cooldowns:{},
+    playerWins:null,
+    trainer:trainer,
+  };
+  if(battleState.activePlayerIndex<0) battleState.activePlayerIndex=0;
+  gameState='battle';
+}
+function applyMove(moveName,attacker,defender){
+  const move=movesData[moveName];
+  if(!move) return 0;
+  let dmg=0;
+  if(move.power){
+    const atkStat=move.type==='Special'?attacker.stats.spa:attacker.stats.atk;
+    const defStat=move.type==='Special'?defender.stats.spd:defender.stats.def;
+    dmg=Math.floor(((2*attacker.level/5+2)*move.power*atkStat/defStat)/50+2);
+    const mult=getEffectiveness(move.element, defender.species?hakkoSpecies[defender.species].elements:null);
+    dmg=Math.floor(dmg*mult);
+    if(Math.random()<0.0625) dmg=Math.floor(dmg*1.5);
+  } else if(move.damage) dmg=move.damage;
+  if(move.effect){
+    if(move.effect.includes('burn') && Math.random()<0.1) defender.status='burn';
+    else if(move.effect.includes('poison') && Math.random()<0.3) defender.status='poison';
+    else if(move.effect.includes('paralyze') && Math.random()<0.1) defender.status='paralysis';
+    else if(move.effect.includes('freeze') && Math.random()<0.1) defender.status='freeze';
+    else if(move.effect.includes('sleep') && Math.random()<0.1) defender.status='sleep';
+    else if(move.effect.includes('confuse') && Math.random()<0.1) defender.status='confuse';
+  }
+  if(dmg) defender.currentHp-=dmg;
+  return dmg;
+}
+function battlePlayerAction(move){
+  if(!battleState) return;
+  const playerHakko=battleState.playerDeck[battleState.activePlayerIndex];
+  const enemyHakko=battleState.type==='wild'?battleState.enemy:battleState.enemyDeck[battleState.activeEnemyIndex];
+  if(!playerHakko||playerHakko.currentHp<=0) return;
+  const cdKey=playerHakko.id+'_'+move;
+  if(battleState.cooldowns[cdKey]>0) return;
+  const dmg=applyMove(move,playerHakko,enemyHakko);
+  battleState.log.push(playerHakko.name+' used '+move+'!');
+  if(dmg>0) battleState.log.push('Dealt '+dmg+' damage.');
+  if(movesData[move]&&movesData[move].cooldown) battleState.cooldowns[cdKey]=movesData[move].cooldown;
+  battleState.turn++;
+  if(enemyHakko.currentHp<=0){
+    enemyHakko.currentHp=0;
+    battleState.log.push(enemyHakko.name+' fainted!');
+    if(battleState.type==='trainer'){
+      battleState.activeEnemyIndex++;
+      if(battleState.activeEnemyIndex>=battleState.enemyDeck.length) endBattle(true);
+      else battleState.log.push('Enemy sends out '+battleState.enemyDeck[battleState.activeEnemyIndex].name+'!');
+    } else if(battleState.type==='wild'){
+      endBattle(true, enemyHakko.species);
+    }
+  } else {
+    enemyTurn();
+  }
+}
+function enemyTurn(){
+  if(!battleState) return;
+  const enemyHakko=battleState.type==='wild'?battleState.enemy:battleState.enemyDeck[battleState.activeEnemyIndex];
+  const playerHakko=battleState.playerDeck[battleState.activePlayerIndex];
+  if(!enemyHakko||enemyHakko.currentHp<=0) return;
+  const availMoves=enemyHakko.moves.map(m=>m.name).filter(m=>!battleState.cooldowns[enemyHakko.id+'_'+m]);
+  if(availMoves.length===0) return;
+  const move=availMoves[Math.floor(Math.random()*availMoves.length)];
+  const dmg=applyMove(move,enemyHakko,playerHakko);
+  battleState.log.push('Foe '+enemyHakko.name+' used '+move+'!');
+  if(dmg>0) battleState.log.push('Dealt '+dmg+' damage.');
+  if(movesData[move]&&movesData[move].cooldown) battleState.cooldowns[enemyHakko.id+'_'+move]=movesData[move].cooldown;
+  if(playerHakko.currentHp<=0){
+    playerHakko.currentHp=0;
+    battleState.log.push(playerHakko.name+' fainted!');
+    const nextIdx=playerData.deck.findIndex(h=>h.currentHp>0);
+    if(nextIdx>=0){
+      battleState.activePlayerIndex=nextIdx;
+      battleState.log.push('Go! '+playerData.deck[nextIdx].name+'!');
+    } else endBattle(false);
+  }
+  battleState.turn++;
+  for(let k in battleState.cooldowns) if(battleState.cooldowns[k]>0) battleState.cooldowns[k]--;
+}
+function attemptCapture(tesseractId){ /* similar to original */ }
+function endBattle(win, caughtSpecies){
+  if(win){
+    if(caughtSpecies) {
+      if(!playerData.codex[caughtSpecies]) playerData.codex[caughtSpecies]={seen:true,caught:true,shiny:false};
+      else playerData.codex[caughtSpecies].caught=true;
+    }
+    for(let h of playerData.deck) if(h.currentHp>0) h.xp+=50;
+    playerData.money+=100;
+  }
+  battleState=null;
+  gameState='playing';
+}
+
+// ---------------------------------------------------------------------------
+// MAIN LOOP
+// ---------------------------------------------------------------------------
+function update(){
+  if(gameState==='playing'){
+    // day/night time
+    playerData.time += 1/60;
+    // wild AI
+    updateOverworld();
+  }
+}
+function updateOverworld(){
+  if(!currentMapData) return;
+  if(overworldEntities.length===0 && currentMapData.wildSpawns){
+    for(let s of currentMapData.wildSpawns){
+      if(Math.random()<0.5) continue; // only show some
+      overworldEntities.push({
+        x: s.x*TILE_SIZE + TILE_SIZE/2,
+        y: s.y*TILE_SIZE + TILE_SIZE/2,
+        species: s.species,
+        timer: 0,
+      });
+    }
+  }
+  // simple idle movement
+  for(let e of overworldEntities){
+    if(Math.random()<0.02){
+      e.targetX = e.x + rndint(-32,32);
+      e.targetY = e.y + rndint(-32,32);
+    }
+    if(e.targetX){
+      const dx = e.targetX - e.x, dy = e.targetY - e.y;
+      const dist = Math.hypot(dx, dy);
+      if(dist < 2){ e.targetX=null; }
+      else{ e.x += dx/dist * 1.5; e.y += dy/dist * 1.5; }
+    }
+  }
+}
+
+function render(){
+  ctx.clearRect(0,0,W,H);
+  if(gameState==='title'){
+    ctx.fillStyle='#112'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#ffa'; ctx.font='28px monospace'; ctx.fillText('Project Tesseract', 200, 200);
+    ctx.font='20px monospace';
+    ctx.fillText('[N]ew Game  [L]oad  [I]mport', 220, 260);
+  }
+  else if(gameState==='playing'){
+    renderOverworld();
+    applyDayNightOverlay();
+    drawHUD();
+  }
+  else if(gameState==='battle'){
+    drawBattle();
+  }
+  // dialogue box
+  if(dialogueLines.length>0){
+    ctx.fillStyle='#000'; ctx.fillRect(40, H-80, W-80, 60);
+    ctx.strokeStyle='#fff'; ctx.strokeRect(40, H-80, W-80, 60);
+    ctx.fillStyle='#fff'; ctx.font='14px monospace';
+    ctx.fillText(dialogueLines[dialogueIndex], 50, H-50);
+  }
+}
+
+function drawBattle(){
+  if(!battleState) return;
+  ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#fff'; ctx.font='16px monospace';
+  const enemy=battleState.type==='wild'?battleState.enemy:battleState.enemyDeck[battleState.activeEnemyIndex];
+  const player=battleState.playerDeck[battleState.activePlayerIndex];
+  ctx.fillText('Foe: '+enemy.name+' Lv'+enemy.level, 400, 80);
+  ctx.fillText('HP: '+enemy.currentHp+'/'+enemy.stats.maxHp, 400, 110);
+  ctx.fillText('You: '+player.name+' Lv'+player.level, 30, 300);
+  ctx.fillText('HP: '+player.currentHp+'/'+player.stats.maxHp, 30, 330);
+  for(let i=0;i<player.moves.length;i++){
+    ctx.fillText((i+1)+'. '+player.moves[i].name, 30, 360+i*25);
+  }
+  ctx.fillText('[I]tems [C]apture [R]un', 30, 500);
+  const log=battleState.log.slice(-3).join(' ');
+  ctx.fillText(log, 30, 530);
+}
+
+// ---------------------------------------------------------------------------
+// INPUT ROUTING
+// ---------------------------------------------------------------------------
+function handleGlobalInput(){
+  if(dialogueLines.length>0){
+    if(keys['Enter']||keys[' ']){
+      dialogueIndex++;
+      if(dialogueIndex>=dialogueLines.length){ dialogueLines=[]; dialogueIndex=0; }
+      keys['Enter']=false; keys[' ']=false;
+    }
+    return;
+  }
+  if(gameState==='title'){
+    if(keys['n']){ keys['n']=false; newGame(); }
+    if(keys['l']){ keys['l']=false; /* load menu stub */ }
+    if(keys['i']){ keys['i']=false; importSave(); }
+  }
+  else if(gameState==='playing'){
+    handlePlayingInput();
+  }
+  else if(gameState==='battle'){
+    // battle input handling (keys 1-4 for moves)
+    if(keys['1']){keys['1']=false;battlePlayerAction(battleState.playerDeck[battleState.activePlayerIndex].moves[0]?.name);}
+    if(keys['2']){keys['2']=false;battlePlayerAction(battleState.playerDeck[battleState.activePlayerIndex].moves[1]?.name);}
+    if(keys['3']){keys['3']=false;battlePlayerAction(battleState.playerDeck[battleState.activePlayerIndex].moves[2]?.name);}
+    if(keys['4']){keys['4']=false;battlePlayerAction(battleState.playerDeck[battleState.activePlayerIndex].moves[3]?.name);}
+    if(keys['c']){keys['c']=false;attemptCapture('tesseract_basic');}
+    if(keys['r']){keys['r']=false;endBattle(false);}
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SAVE / NEW GAME
+// ---------------------------------------------------------------------------
+function newGame(){
+  playerData={
+    name:'Coal',
+    money:500,
+    deck:[],
+    storage:[],
+    inventory:[{id:'potion',count:3},{id:'tesseract_basic',count:5}],
+    codex:{},
+    scholarRank:0,
+    scholarXp:0,
+    arenaTrophies:[false,false,false,false,false],
+    questFlags:{},
+    fastTravelPoints:[],
+    defeatedTrainers:{},
+    defeatedTwins:false,
+    legendariesCaught:{},
+    legendariesDefeated:{},
+    legendaryRespawnTimers:{},
+    time:0,
+    currentMap:'village',
+    playerPos:{x:0,y:0,dir:0},
+    visitedMaps:{},
+  };
+  setPlayerMap('village', 15, 10); // start at crossroad
+  gameState='playing';
+}
+function saveGame(slot){
+  const data=JSON.parse(JSON.stringify(playerData));
+  saves[slot].data=data;
+}
+function loadGame(slot){
+  if(!saves[slot].data) return false;
+  playerData=JSON.parse(JSON.stringify(saves[slot].data));
+  const px = Math.floor(playerData.playerPos.x / TILE_SIZE);
+  const py = Math.floor(playerData.playerPos.y / TILE_SIZE);
+  setPlayerMap(playerData.currentMap, px, py, playerData.playerPos.dir);
+  gameState='playing';
+  return true;
+}
+function exportSave(){
+  const data={name:playerData.name, data:playerData};
+  downloadJSON(data,'project_tesseract_save.json');
+}
+function importSave(callback){
+  uploadJSON(json=>{
+    playerData=json.data;
+    const px = Math.floor(playerData.playerPos.x / TILE_SIZE);
+    const py = Math.floor(playerData.playerPos.y / TILE_SIZE);
+    setPlayerMap(playerData.currentMap, px, py, playerData.playerPos.dir);
+    gameState='playing';
+    if(callback) callback();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// STARTUP
+// ---------------------------------------------------------------------------
+createMaps();
+setPlayerMap('village', 15, 10);
+gameState='title';
+
+function gameLoop(){
+  update();
+  render();
+  handleGlobalInput();
+  requestAnimationFrame(gameLoop);
+}
+requestAnimationFrame(gameLoop);
+})();
+</script>
+</body>
+</html>

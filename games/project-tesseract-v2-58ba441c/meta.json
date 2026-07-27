@@ -1,0 +1,11 @@
+{
+  "game_id": "58ba441c225945188ab1d98eae67c6ab",
+  "parent_game_id": "06f775f5799f4f45929a2f01b6eef60a",
+  "root_game_id": "06f775f5799f4f45929a2f01b6eef60a",
+  "title": "Project Tesseract (v2)",
+  "description": "A monster-catching RPG with pixel art, day/night cycle, and a large explorable world.",
+  "requested_by": "web:007d10387b5b",
+  "created_at": "2026-07-20T02:30:25.745442Z",
+  "version": 1,
+  "prompt": "I am not able to move, the art is close, but too small, we need to increase the overall size (About 5x) and add some more detail to the models, the ground should have texture, not just 1 colour.\r\n\r\nThe day night cycle should also only happen about once every 30m, lets say\r\n\r\nDay 30m, (you can progress through Morning, Afternoon etc over this time, but no visual changes)\r\nNight should take 15m"
+}
