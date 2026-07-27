@@ -1,0 +1,11 @@
+{
+  "game_id": "86224e904b7245c8bb89ceaa962fa729",
+  "parent_game_id": "9a3169a079ec48a0b5785c2c8a53f325",
+  "root_game_id": "9a3169a079ec48a0b5785c2c8a53f325",
+  "title": "Windblown Archery (v2)",
+  "description": "A challenging archery range game with wind, a smaller moving target, and slower arrows. Hold and release to shoot!",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-20T05:24:50.780367Z",
+  "version": 1,
+  "prompt": "make the game harder, the target is huge, make the target smaller and make it go up and down. also make the arrow go a bit slower to also make the game harder."
+}
