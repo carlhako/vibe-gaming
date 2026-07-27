@@ -90,6 +90,14 @@ DEFAULT_MAX_MODULE_BYTES = ai.MAX_OUTPUT_TOKENS * 3
 # nudge to split proactively, on the next unrelated edit to that module,
 # well before it's forced to by a rejection. Never blocks the write.
 # Configurable per-call via cfg["module_warn_bytes"].
+#
+# Sprint 6a's edit_file weakens this lint's rationale without removing it: a
+# targeted edit to a 100KB module no longer costs 100KB of output, so module
+# size stops being the dominant per-edit cost. What survives is the ceiling
+# itself — a module that ever needs a genuine whole-file rewrite (a
+# restructure, a split, a fix edit_file can't express as one exact match)
+# still has to fit in one response, and a module close to the ceiling has no
+# room for that fallback.
 DEFAULT_MODULE_WARN_RATIO = 0.5
 
 # The ReAct agent defaults to v4-pro where the rest of the app defaults to
@@ -202,6 +210,21 @@ DEFAULT_SNAPSHOT_MAX_BYTES = 400_000
 # _PRUNE_SENTINEL: reject the write loudly, turning a silent corruption into
 # a self-correcting error.
 _SNAPSHOT_MARKER_RE = re.compile(r"^=====\s+(?:BEGIN|END)\b.*=====\s*$", re.M)
+
+# Sprint 6a: an edit_file call is normally left in the conversation with its
+# real arguments, unlike write_file (see _compact_write_calls). They are small
+# by construction, and leaving them is what makes one specific sentence TRUE:
+# "the current contents of a file you have edited are the snapshot's version
+# with your edits applied, in order". Take the edits out of history and that
+# statement becomes unsupported, which is exactly the kind of gap this agent
+# answers by re-reading everything.
+#
+# The exception is a genuinely large edit — a near-whole-module replacement
+# expressed as one exact match. Those are write_file in all but name, and get
+# write_file's treatment: removed outright (never a rewritten arguments slot,
+# see _compact_write_calls). Overridable via cfg["edit_compact_bytes"]; a CODE
+# default, like DEFAULT_AGENT_MODEL, because config.yaml is gitignored.
+DEFAULT_EDIT_COMPACT_BYTES = 8_000
 
 
 class SourceSnapshot(NamedTuple):
@@ -357,6 +380,53 @@ READ_FILE_TOOL = {
     },
 }
 
+# The cheap counterpart to write_file, and the reason this sprint exists: a
+# one-line change to a 73KB module used to cost 73KB of *output* tokens, which
+# are the expensive kind and are capped per response. An exact-match edit costs
+# the two strings it names.
+#
+# Exact match, exactly once, no fuzz. Every softer rule — match the first
+# occurrence, match all of them, normalize whitespace, take the closest match —
+# is a way to silently edit the wrong span of a file the model cannot see the
+# result of. A rejection costs one cheap turn; a wrong-span edit costs a
+# broken game that may still pass build, scan and smoke.
+EDIT_FILE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "edit_file",
+        "description": (
+            "Replace one exact span of text in an existing file. This is the "
+            "PREFERRED way to change a file you are not rewriting wholesale: "
+            "it costs only the text you pass, where write_file costs the "
+            "whole module. 'old_string' must appear EXACTLY ONCE in the "
+            "file's current contents, matched byte for byte including "
+            "indentation and line breaks — the call is rejected if it appears "
+            "zero times or more than once, and nothing is guessed or matched "
+            "approximately. Include enough surrounding lines to make it "
+            "unique. 'new_string' replaces it, and may be empty to delete the "
+            "span. Make several edit_file calls for several separate changes."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": _PATH_ARG_DESCRIPTION},
+                "old_string": {
+                    "type": "string",
+                    "description": (
+                        "The exact text to replace, copied verbatim from the "
+                        "file's current contents. Must occur exactly once."
+                    ),
+                },
+                "new_string": {
+                    "type": "string",
+                    "description": "The replacement text. May be empty to delete the span.",
+                },
+            },
+            "required": ["path", "old_string", "new_string"],
+        },
+    },
+}
+
 WRITE_FILE_TOOL = {
     "type": "function",
     "function": {
@@ -364,11 +434,13 @@ WRITE_FILE_TOOL = {
         "description": (
             "Replace one whole file with new contents, creating it if it "
             "doesn't exist yet. Always pass the COMPLETE file, never a diff "
-            "or fragment. If you add, remove, split, or rename any src/ "
-            "file, also call write_file(\"game.md\", ...) to keep the map "
-            "accurate. A write over the module size ceiling is rejected — "
-            "split the module into smaller, cohesive files instead of "
-            "trying to shrink it."
+            "or fragment. Use this to CREATE a file or to genuinely rewrite "
+            "most of one — for a change to part of an existing file, prefer "
+            "edit_file, which costs a fraction as much. If you add, remove, "
+            "split, or rename any src/ file, also call "
+            "write_file(\"game.md\", ...) to keep the map accurate. A write "
+            "over the module size ceiling is rejected — split the module into "
+            "smaller, cohesive files instead of trying to shrink it."
         ),
         "parameters": {
             "type": "object",
@@ -454,7 +526,7 @@ FINISH_TOOL = {
 }
 
 AGENT_TOOLS = [READ_MAP_TOOL, LIST_FILES_TOOL, READ_FILE_TOOL, SEARCH_TOOL,
-               WRITE_FILE_TOOL, FINISH_TOOL]
+               EDIT_FILE_TOOL, WRITE_FILE_TOOL, FINISH_TOOL]
 
 
 # ---------------------------------------------------------------------------
@@ -558,6 +630,46 @@ def _parse_write_args(arguments_json: str) -> tuple[str, str]:
     if not isinstance(contents, str):
         raise AgentError("malformed write_file arguments: missing 'contents'")
     return path.strip(), contents
+
+
+def _parse_edit_args(arguments_json: str) -> tuple[str, str, str]:
+    """(path, old_string, new_string). new_string may legitimately be empty —
+    that's how a span is deleted — so it's checked for type, not truthiness."""
+    try:
+        args = json.loads(arguments_json)
+    except json.JSONDecodeError as exc:
+        raise AgentError(
+            f"malformed edit_file arguments: not valid JSON ({exc}) — if the "
+            "strings you passed are very large, the reply may have been cut "
+            "off by the output length limit; make the edit in smaller pieces "
+            "and try again."
+        ) from None
+    if not isinstance(args, dict):
+        raise AgentError("malformed edit_file arguments: must be a JSON object")
+    path = args.get("path")
+    old_string = args.get("old_string")
+    new_string = args.get("new_string")
+    if not isinstance(path, str) or not path.strip():
+        raise AgentError("malformed edit_file arguments: missing a non-empty 'path'")
+    if not isinstance(old_string, str):
+        raise AgentError("malformed edit_file arguments: missing 'old_string'")
+    if not isinstance(new_string, str):
+        raise AgentError(
+            "malformed edit_file arguments: missing 'new_string' — pass an "
+            "empty string to delete the matched text."
+        )
+    return path.strip(), old_string, new_string
+
+
+def _edit_payload_bytes(arguments_json: str) -> int:
+    """How much text an edit_file call actually carries, for the compaction
+    fuse in _run_react_loop. Unparseable arguments count as 0: there is
+    nothing worth removing from a call that never ran."""
+    try:
+        _, old_string, new_string = _parse_edit_args(arguments_json)
+    except AgentError:
+        return 0
+    return len(old_string.encode("utf-8")) + len(new_string.encode("utf-8"))
 
 
 def _parse_finish_summary(arguments_json: str) -> str:
@@ -766,6 +878,104 @@ def _write_file(game_dir: Path, path: str, contents: str, max_module_bytes: int,
     return ok
 
 
+def _edit_file(game_dir: Path, path: str, old_string: str, new_string: str,
+                max_module_bytes: int, warn_bytes: int) -> str:
+    """Replace one exactly-once occurrence of old_string in `path`.
+
+    Every rejection below leaves the file byte-identical on disk, and none of
+    them ever echoes a candidate `old_string` back, offers a "did you mean",
+    or shows a near-miss diff. All three would teach precisely the fuzzy
+    matching this tool refuses to do — the model imitates what its transcript
+    shows it (see _compact_write_calls), and a tool that demonstrates
+    approximate matching in its error messages will get approximate matches
+    passed back. Counts and a directive; nothing else."""
+    file_path = _resolve_agent_path(game_dir, path)
+    if not file_path.is_file():
+        return (
+            f"ERROR: {path!r} not found — edit_file only changes an existing "
+            "file. Use write_file(path, contents) to create it."
+        )
+    if not old_string:
+        return (
+            f"REJECTED: 'old_string' was empty for {path!r}. edit_file replaces "
+            "one exact span of existing text; to create a file or replace all "
+            "of it, use write_file(path, contents)."
+        )
+    # Same two guards as _write_file, applied to BOTH strings. old_string is
+    # guarded too because a match attempt against snapshot scaffolding is the
+    # model treating the listing as file content — the same misreading that
+    # would corrupt a write, one step earlier.
+    for label, text in (("old_string", old_string), ("new_string", new_string)):
+        if _PRUNE_SENTINEL in text:
+            return (
+                f"REJECTED: the {label} you passed for {path!r} contains a "
+                "context-pruning placeholder from this conversation's history, "
+                "not real file text. Those placeholders mark where earlier "
+                "material was dropped to save context — they are never part of "
+                "any file. Call read_file to see what is currently on disk."
+            )
+        if _SNAPSHOT_MARKER_RE.search(text):
+            return (
+                f"REJECTED: the {label} you passed for {path!r} contains a "
+                "'===== BEGIN/END ... =====' line. Those markers are scaffolding "
+                "that delimits files in the source snapshot in your instructions; "
+                "they are never part of a file's contents. Pass only text from "
+                "inside the file itself."
+            )
+    text = file_path.read_text(encoding="utf-8")
+    count = text.count(old_string)
+    if count == 0:
+        return (
+            f"REJECTED: that 'old_string' does not appear in {path!r}. The "
+            "match is exact — byte for byte, including indentation and line "
+            "breaks — and nothing is matched approximately. Use "
+            "search(pattern, path=" + repr(path) + ") to find the text as it "
+            "is actually written in the file's CURRENT contents (which include "
+            "every edit you have already made this run), and pass that exactly."
+        )
+    if count > 1:
+        return (
+            f"REJECTED: that 'old_string' appears {count} times in {path!r}, so "
+            "it is ambiguous — edit_file only replaces a span that occurs "
+            "exactly once. Extend 'old_string' with the surrounding lines that "
+            "make the occurrence you mean unique, and call edit_file again. If "
+            "you meant to change all of them, make one call per occurrence, "
+            "each with its own unique surrounding context."
+        )
+    if new_string == old_string:
+        # Would consume a step and, worse, register as progress against the
+        # stall guard while changing nothing.
+        return (
+            f"REJECTED: 'new_string' is identical to 'old_string' for {path!r}, "
+            "so this edit would change nothing. Pass the text you actually want "
+            "in its place."
+        )
+    updated = text.replace(old_string, new_string, 1)
+    size = len(updated.encode("utf-8"))
+    if size > max_module_bytes:
+        # Checked against the RESULT, not the payload: a small edit can still
+        # push a module over. The file is left untouched.
+        return (
+            f"REJECTED: that edit would make {path!r} {size} bytes, over the "
+            f"{max_module_bytes}-byte module size ceiling. {path!r} is unchanged. "
+            "Split this module into smaller, cohesive files instead of shrinking "
+            "it. If you do, you MUST also rewrite src/index.html so its <script> "
+            "tags list the new files in place of this one, and update game.md's "
+            "file table to match."
+        )
+    file_path.write_text(updated, encoding="utf-8")
+    removed = len(old_string.encode("utf-8"))
+    added = len(new_string.encode("utf-8"))
+    ok = f"OK: edited {path} (-{removed} +{added} bytes, now {size} bytes)"
+    if size > warn_bytes:
+        ok += (
+            f". Note: {path!r} is getting large ({size} of a {max_module_bytes}-byte "
+            "ceiling) — consider splitting it into smaller cohesive modules on "
+            "your next pass through this file, before it forces a rejection."
+        )
+    return ok
+
+
 def _execute_tool(tc: ai.ToolCall, game_dir: Path, max_module_bytes: int,
                    warn_bytes: int, written: set[str] | None = None,
                    snapshot_paths: frozenset | None = None) -> tuple[str, str | None]:
@@ -795,6 +1005,11 @@ def _execute_tool(tc: ai.ToolCall, game_dir: Path, max_module_bytes: int,
             if path is not None:
                 path = _normalize_agent_path(path)
             return _search(game_dir, pattern, path), path
+        if tc.name == "edit_file":
+            path, old_string, new_string = _parse_edit_args(tc.arguments)
+            path = _normalize_agent_path(path)
+            return _edit_file(game_dir, path, old_string, new_string,
+                              max_module_bytes, warn_bytes), path
         if tc.name == "write_file":
             path, contents = _parse_write_args(tc.arguments)
             path = _normalize_agent_path(path)
@@ -824,6 +1039,10 @@ def _progress_key(tc: ai.ToolCall, touched_path: str | None):
         except AgentError:
             return None
         return ("search", pattern, touched_path)
+    # write_file and edit_file fall through: a mutation is not an observation.
+    # Their progress is tracked separately, and only when they SUCCEED (see
+    # _run_react_loop), so a run looping on an old_string that never matches
+    # still trips the stall guard.
     return None
 
 
@@ -905,6 +1124,19 @@ def _summarize_tool_call(tc: ai.ToolCall) -> tuple[str, dict]:
             return f"write_file({path!r}, {size} bytes)", {"tool": tc.name, "path": path, "bytes": size}
         except AgentError:
             return "write_file(...)", {"tool": tc.name}
+    if tc.name == "edit_file":
+        # Byte counts only. agent_events is a permanent, publicly replayable
+        # archive (the chat pane renders from nothing else), and old_string/
+        # new_string are file contents — the same reason write_file's contents
+        # never reach an event.
+        try:
+            path, old_string, new_string = _parse_edit_args(tc.arguments)
+            removed = len(old_string.encode("utf-8"))
+            added = len(new_string.encode("utf-8"))
+            return (f"edit_file({path!r}, -{removed} +{added} bytes)",
+                    {"tool": tc.name, "path": path, "removed": removed, "added": added})
+        except AgentError:
+            return "edit_file(...)", {"tool": tc.name}
     if tc.name == "search":
         try:
             pattern, path = _parse_search_args(tc.arguments)
@@ -927,9 +1159,9 @@ def _summarize_tool_call(tc: ai.ToolCall) -> tuple[str, dict]:
 def _summarize_observation(tc_name: str, path: str | None, observation: str) -> tuple[str, dict]:
     """A tool_result event's (content, data) for a non-finish tool call.
     read_map/read_file observations ARE the file's full contents, so those
-    get replaced with a short "read N bytes" summary; write_file's
-    observation is already just an OK/REJECTED line (safe to keep
-    verbatim); list_files' observation is a small path+size listing, not
+    get replaced with a short "read N bytes" summary; write_file's and
+    edit_file's observations are already just an OK/REJECTED line (safe to
+    keep verbatim); list_files' observation is a small path+size listing, not
     file bytes, so it's also kept verbatim."""
     data: dict = {"tool": tc_name}
     if path:
@@ -941,7 +1173,9 @@ def _summarize_observation(tc_name: str, path: str | None, observation: str) -> 
         data["bytes"] = size
         label = path if tc_name == "read_file" else "game.md"
         return f"Read {label} ({size} bytes)", data
-    if tc_name == "write_file":
+    if tc_name in ("write_file", "edit_file"):
+        # Both observations are already just an OK/REJECTED line — no file
+        # bytes in either — so they're kept verbatim.
         data["outcome"] = "ok" if observation.startswith("OK:") else "rejected"
         return observation, data
     if tc_name == "list_files":
@@ -992,6 +1226,9 @@ def _build_system_prompt(source_title: str,
             "exactly two reasons to read: a file created later in this run, "
             "and re-reading a file after you have rewritten it with "
             "write_file.\n"
+            "You never need to re-read a file after an edit_file call you can "
+            "still see in this conversation: that file's current contents are "
+            "the snapshot's version with those edits applied, in order.\n"
             "Your tools:\n"
         )
     else:
@@ -1021,9 +1258,20 @@ def _build_system_prompt(source_title: str,
         "re-reading a module you've already seen — reach for read_file only "
         "when you need a file's whole text because you're about to rewrite "
         "it.\n"
+        "- edit_file(path, old_string, new_string) — replace one exact span "
+        "of text in an existing file. THIS IS THE TOOL TO REACH FOR when you "
+        "are changing part of a file: it costs only the text you pass, where "
+        "write_file costs the entire module. old_string must match the file's "
+        "current contents byte for byte and appear EXACTLY ONCE — include "
+        "enough surrounding lines to make it unique — and nothing is matched "
+        "approximately, so a mismatch is rejected rather than guessed at. Use "
+        "one call per change; several small edits are far cheaper than one "
+        "whole-file rewrite.\n"
         "- write_file(path, contents) — replace ONE WHOLE file (or create a "
-        "new one). Always the complete file, never a diff. Rejected if over "
-        "the module size ceiling — split it instead of shrinking it.\n"
+        "new one). Always the complete file, never a diff. Use it to create a "
+        "file, or when you are genuinely rewriting most of one; otherwise "
+        "prefer edit_file. Rejected if over the module size ceiling — split "
+        "it instead of shrinking it.\n"
         "- finish(summary) — call once you're done. Triggers a build + "
         "safety scan + smoke test; a failure comes back as this call's "
         "result so you can keep editing and call finish again.\n\n"
@@ -1613,7 +1861,12 @@ def _build_explode_system_prompt(source_title: str, source_html: str,
         "already written, and search(pattern) to grep every module you've "
         "written so far — that is much the cheaper way to check whether a "
         "name is declared, declared twice, or referenced with no "
-        "declaration, which is exactly what verification checks. Call "
+        "declaration, which is exactly what verification checks. To fix a "
+        "small mistake in a module you have already written — a duplicated "
+        "declaration, a name that needs renaming, a missing <script> tag — "
+        "use edit_file(path, old_string, new_string) rather than rewriting "
+        "the whole module: it replaces one exactly-once occurrence and costs "
+        "only the text you pass. Call "
         "finish(summary) only once EVERY file "
         "(including src/index.html and game.md) has been written — it "
         "triggers a build + safety scan + smoke test of the assembled "
@@ -1704,10 +1957,21 @@ def _build_explode_user_prompt() -> str:
 # ---------------------------------------------------------------------------
 
 def _compact_write_calls(messages: list[dict], assistant_msg: dict,
-                          records: list[tuple[str, str]]) -> None:
+                          records: list[tuple[str, str, str | None, str]],
+                          snapshot_paths: frozenset | None = None,
+                          modified_paths: set[str] | None = None) -> None:
     """Drop executed write_file calls out of the conversation entirely,
     replacing them with a short plain-text note on the assistant message
     that made them.
+
+    `records` are (call_id, tool_name, path, observation) for the calls to
+    compact — every write_file this turn, plus any edit_file whose strings
+    were large enough to be a whole-module rewrite in disguise (see
+    DEFAULT_EDIT_COMPACT_BYTES). Ordinary small edits are deliberately NOT
+    passed in: they stay in history with their real arguments, which is what
+    keeps "the file is the snapshot's version with my edits applied" a
+    statement the model can verify from the transcript rather than take on
+    faith.
 
     Why they must go: a write_file call's own arguments carry the COMPLETE
     new file contents (potentially tens of KB) inside the assistant message
@@ -1748,7 +2012,7 @@ def _compact_write_calls(messages: list[dict], assistant_msg: dict,
     no write calls to compact."""
     if not records:
         return
-    ids = {call_id for call_id, _ in records}
+    ids = {call_id for call_id, _, _, _ in records}
     remaining = [e for e in (assistant_msg.get("tool_calls") or []) if e.get("id") not in ids]
     if remaining:
         assistant_msg["tool_calls"] = remaining
@@ -1764,14 +2028,42 @@ def _compact_write_calls(messages: list[dict], assistant_msg: dict,
     # ran out of budget before ever calling finish. So: lead with the write
     # having SUCCEEDED, and be explicit that only the bulky argument was
     # trimmed and that the file is on disk.
+    tool_names = sorted({name for _, name, _, _ in records})
+    # "write_file" alone keeps the original wording byte for byte — explode
+    # never emits an edit large enough to be compacted, so its note is
+    # unchanged and stays a cache hit against every run before this one.
+    label = " / ".join(tool_names)
+    trimmed = ("Only the bulky 'contents' argument has been trimmed"
+               if tool_names == ["write_file"]
+               else "Only the bulky arguments have been trimmed")
     note = (
-        f"{_PRUNE_SENTINEL} The write_file call(s) below COMPLETED SUCCESSFULLY and "
-        "the files are on disk. Only the bulky 'contents' argument has been trimmed "
+        f"{_PRUNE_SENTINEL} The {label} call(s) below COMPLETED SUCCESSFULLY and "
+        f"the files are on disk. {trimmed} "
         "from this transcript, to save context. Results: "
-        + "; ".join(observation for _, observation in records)
+        + "; ".join(observation for _, _, _, observation in records)
         + ". There is no need to re-write or re-check these files; call read_file "
           "only if you need to see their current contents again."
     )
+    # Say which snapshot files this run has superseded, and — the load-bearing
+    # half — that every other one is still exactly as the snapshot shows it.
+    # Without that second sentence the model generalises one stale file into a
+    # stale snapshot and re-reads the whole game, which is the cost this
+    # sprint exists to remove. The list is every file modified so far, not
+    # just this turn's, so "every other file" is literally true.
+    superseded = sorted(
+        (modified_paths or set()) & (snapshot_paths or frozenset())
+    )
+    if superseded:
+        note += (
+            " Note on the source snapshot in your instructions: it shows "
+            + ", ".join(superseded)
+            + " as "
+            + ("it was" if len(superseded) == 1 else "they were")
+            + " before your changes, so for "
+            + ("that file" if len(superseded) == 1 else "those files")
+            + " your edits above are what is on disk now. Every other file in "
+              "the snapshot is still exactly as shown there."
+        )
     existing = (assistant_msg.get("content") or "").strip()
     assistant_msg["content"] = f"{existing}\n{note}" if existing else note
 
@@ -1856,6 +2148,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     module_warn_bytes = cfg.get(
         "module_warn_bytes", int(max_module_bytes * DEFAULT_MODULE_WARN_RATIO)
     )
+    edit_compact_bytes = cfg.get("edit_compact_bytes", DEFAULT_EDIT_COMPACT_BYTES)
     # Sprint 6a removed read-result pruning outright; a config still carrying
     # the key is stale, and saying so beats silently ignoring it. Warn rather
     # than fail: an out-of-date config.yaml must not stop a production run.
@@ -2023,7 +2316,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         other_calls = [tc for tc in ask_result.tool_calls if tc.name != "finish"]
         made_progress = False
 
-        write_records: list[tuple[str, str]] = []
+        compact_records: list[tuple[str, str, str | None, str]] = []
         for tc in other_calls:
             call_content, call_data = _summarize_tool_call(tc)
             _safe_emit(emit, "tool_call", call_content, call_data)
@@ -2041,8 +2334,14 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                 if key is not None and key not in seen_observations:
                     seen_observations.add(key)
                     made_progress = True
-            if tc.name == "write_file":
-                write_records.append((tc.id, content))
+            if tc.name in ("write_file", "edit_file"):
+                # Every write_file is compacted; an edit_file only when its
+                # strings are big enough to be a whole-module rewrite wearing
+                # a different tool's name. A small edit stays in history with
+                # its real arguments on purpose (see DEFAULT_EDIT_COMPACT_BYTES).
+                if (tc.name == "write_file"
+                        or _edit_payload_bytes(tc.arguments) > edit_compact_bytes):
+                    compact_records.append((tc.id, tc.name, touched_path, content))
                 if touched_path and content.startswith("OK:"):
                     made_progress = True
                     wrote_anything = True
@@ -2054,7 +2353,8 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                     # then wrote six more files and was killed outright at
                     # the next pause with everything unverified.
                     nudged_to_finish = False
-        _compact_write_calls(messages, assistant_msg, write_records)
+        _compact_write_calls(messages, assistant_msg, compact_records,
+                             snapshot_paths, written_paths)
 
         for extra in finish_calls[1:]:
             messages.append({

@@ -37,6 +37,7 @@
     list_files: "📂",
     read_file: "📖",
     search: "🔍",
+    edit_file: "✂️",
     write_file: "✏️",
     finish: "🏁",
   };
@@ -121,7 +122,7 @@
       case "tool_result": {
         let text = event.content || "";
         let cls = "chat-msg chat-msg-tool_result";
-        if (data.tool === "write_file") {
+        if (data.tool === "write_file" || data.tool === "edit_file") {
           const ok = data.outcome === "ok";
           cls += ok ? "" : " is-rejected";
           text = (ok ? "✅ " : "❌ ") + text;

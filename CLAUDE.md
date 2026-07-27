@@ -169,8 +169,9 @@ aspirational:
   that split source back into the one served `index.html` — no AI
   involved in the build step itself. Enhancing a multi-file game runs
   `agent.py`'s ReAct loop (`read_map`/`list_files`/`read_file`/`search`/
-  `write_file`/`finish` tools) instead of the whole-file resubmit loop, so
-  the model only ever reads/rewrites the modules a change touches. See
+  `edit_file`/`write_file`/`finish` tools) instead of the whole-file
+  resubmit loop, so the model only ever reads/rewrites the modules a change
+  touches — and with `edit_file`, often only the lines it touches. See
   "Multi-file games" below for the full picture, including the live agent
   transcript UI and the explode/dual-format policy that converts an
   existing single-file game into this format.
@@ -311,6 +312,7 @@ through) for single-file games.
 Instead of resubmitting the complete file, the model drives a bounded
 tool loop: `read_map()`, `list_files()`, `read_file(path)`, `search(pattern,
 path=None)` to explore, then
+`edit_file(path, old_string, new_string)` to replace one exact span or
 `write_file(path, contents)` to replace one whole module (rejected over
 `max_module_bytes` — split it instead of shrinking it), then
 `finish(summary)` to trigger `builder.build_and_verify()`; a failure comes
@@ -321,7 +323,8 @@ forks exactly like `game_enhancer.enhance_game()` (new `games/<slug>/`,
 the half-written fork) — it's the multi-file-source counterpart
 `job_runner.py` dispatches to instead of `game_enhancer.enhance_game()`.
 Config lives under `multifile_agent:` in `config.yaml` (model/effort/
-max_steps/max_verification_retries/max_module_bytes/snapshot_max_bytes).
+max_steps/max_verification_retries/max_module_bytes/snapshot_max_bytes/
+edit_compact_bytes).
 
 **The model starts with the whole source in hand, not a directory to
 explore.** `_build_source_snapshot()` reads every file of the staged fork —
@@ -388,6 +391,47 @@ the prefix. `tests/agent_harness.py`'s `scripted_asks` asserts the invariant on
 every agent test rather than in one dedicated case, because a run that mutates
 its prefix still writes the right files, passes verification and ships; only
 the bill changes, so nothing else would catch a regression.
+
+**`edit_file(path, old_string, new_string)` replaces one exact span, so a
+small change stops costing a whole-module rewrite.** `write_file` costs the
+entire module in *output* tokens — the expensive kind, and the one capped per
+response — even for a one-line change; `edit_file` costs the two strings it
+names. It is exact-match only and `old_string` must occur **exactly once**:
+zero or several matches are rejected outright, never guessed, never
+first-or-all, because the model cannot see the result of a mis-applied edit
+and a wrong-span edit can still pass build → scan → smoke. Check order in
+`_edit_file`: missing file (points at `write_file`) → empty `old_string` →
+the `_PRUNE_SENTINEL`/snapshot-marker guards on **both** strings → match count
+→ a no-op edit where `new_string == old_string` (rejected, or it would burn a
+step *and* register as progress against the stall guard) → `max_module_bytes`
+enforced on the **result**, not the payload, since a tiny edit can still push
+a module over. Every rejection leaves the file byte-identical on disk. No
+error message ever echoes a candidate `old_string`, offers a "did you mean",
+or shows a near-miss diff — all three teach precisely the fuzzy matching the
+tool refuses to do, and this model imitates its own transcript. A rejected
+edit is not progress, so a run looping on an `old_string` that never matches
+trips the stall guard on cheap turns rather than being kept alive by them.
+`write_file` remains the tool for *creating* a file or genuinely rewriting
+most of one, and its module-size lint survives edit_file for a narrower
+reason than before: a module that ever needs a real whole-file rewrite still
+has to fit in one response.
+
+**Small edits are deliberately left in the conversation with their real
+arguments**, which is where this diverges from `write_file`. They are small
+by construction, they ride at the cached rate once sent, and keeping them is
+what makes one specific sentence true — *the current contents of a file you
+have edited are the snapshot's version with your edits applied, in order* —
+so the model can check it against the transcript instead of taking it on
+faith or re-reading. The Sprint 6 lesson is narrower than "compact
+everything": never leave *synthesized* arguments the model can see. A genuine
+unmodified call it emitted itself is not that. The one exception is a size
+fuse: an edit whose `old_string + new_string` exceeds `edit_compact_bytes`
+(8,000) is a whole-module rewrite wearing another tool's name and goes
+through `_compact_write_calls`' **removal** path like a `write_file`. That
+note also gains a snapshot clause naming every snapshot file the run has
+modified, ending with the load-bearing *"Every other file in the snapshot is
+still exactly as shown there."* — without it the model generalises one stale
+file into a stale snapshot and re-reads the whole game.
 
 **Never leave synthesized arguments in a tool call the model can see.** The
 first version of the above kept each write_file call and merely replaced

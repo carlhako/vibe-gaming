@@ -327,11 +327,15 @@ def test_no_turn_ever_carries_a_synthetic_write_file_arguments_payload(isolated_
     writes of ~113-120 bytes for multi-KB modules, the stub's contents being
     the placeholder text itself. So: every write_file call that survives in
     any turn's history must carry the model's own real, unmodified
-    arguments — no synthesized ones, ever."""
+    arguments — no synthesized ones, ever. Sprint 6a extends the same rule to
+    edit_file: a small edit is deliberately RETAINED, so its arguments have to
+    be the model's own, and a large one is removed outright."""
     _setup_source_game(games_dir)
     responses = [
         _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS})]),
         _turn([("write_file", {"path": "style.css", "contents": "body { margin: 0; }\n"})]),
+        _turn([("edit_file", {"path": "style.css", "old_string": "margin: 0",
+                              "new_string": "margin: 1px"})]),
         _turn([("read_file", {"path": "core.js"})]),
         _turn([("finish", {"summary": "done"})]),
     ]
@@ -342,18 +346,24 @@ def test_no_turn_ever_carries_a_synthetic_write_file_arguments_payload(isolated_
     assert result["success"], result["error"]
 
     real_payloads = {NEW_CORE_JS, "body { margin: 0; }\n"}
+    real_edits = {("margin: 0", "margin: 1px")}
     for messages in seen:
         for m in messages:
             if m.get("role") != "assistant":
                 continue
             for entry in m.get("tool_calls") or []:
-                if entry["function"]["name"] != "write_file":
-                    continue
+                name = entry["function"]["name"]
                 args = json.loads(entry["function"]["arguments"])
-                # A surviving write call is one the loop hasn't executed yet,
-                # so its contents must be verbatim what the model produced.
-                assert args["contents"] in real_payloads
-                assert agent._PRUNE_SENTINEL not in args["contents"]
+                if name == "write_file":
+                    # A surviving write call is one the loop hasn't executed
+                    # yet, so its contents must be verbatim what the model
+                    # produced.
+                    assert args["contents"] in real_payloads
+                    assert agent._PRUNE_SENTINEL not in args["contents"]
+                elif name == "edit_file":
+                    assert (args["old_string"], args["new_string"]) in real_edits
+                    assert agent._PRUNE_SENTINEL not in args["old_string"]
+                    assert agent._PRUNE_SENTINEL not in args["new_string"]
 
 
 def test_src_prefixed_paths_collapse_instead_of_nesting(isolated_db, games_dir):
@@ -408,6 +418,13 @@ def test_compaction_note_states_the_write_succeeded(isolated_db, games_dir):
     assert "COMPLETED SUCCESSFULLY" in note
     assert "on disk" in note
     assert "OK: wrote" in note
+    # Sprint 6a: the note also reconciles the write against the source
+    # snapshot in the system prompt. Naming the superseded file is only half
+    # of it — the closing sentence is what stops the model generalising one
+    # stale file into a stale snapshot and re-reading the whole game.
+    assert "core.js" in note
+    assert "Every other file in the snapshot is still exactly as shown there." in note
+    assert "style.css" not in note
 
 
 def test_compaction_leaves_every_sent_conversation_structurally_valid(isolated_db, games_dir):
@@ -1291,3 +1308,374 @@ def test_the_snapshot_is_emitted_as_one_summary_event_never_the_body(
     assert content == "Loaded source snapshot: 4 files, {:,} bytes".format(data["bytes"])
     assert data["file_count"] == 4 and data["included"] is True
     assert "===== BEGIN" not in content
+
+
+# ---------------------------------------------------------------------------
+# Sprint 6a step 3: edit_file — exact match, exactly once
+#
+# The point of the tool is cost: a one-line change to a 73KB module used to
+# cost 73KB of OUTPUT tokens (the expensive, per-response-capped kind). The
+# point of its strictness is that the model cannot see the result of a
+# mis-applied edit — every rejection below leaves the file byte-identical on
+# disk, and none of them ever shows a near-miss, which would teach exactly the
+# fuzzy matching the tool refuses to do.
+# ---------------------------------------------------------------------------
+
+def _tool_results(messages):
+    return [m["content"] for m in messages if m.get("role") == "tool"]
+
+
+def _edit_config(**overrides):
+    return {
+        "game_web": CONFIG["game_web"],
+        "multifile_agent": dict(CONFIG["multifile_agent"], **overrides),
+    }
+
+
+def test_edit_file_applies_a_unique_match_and_changes_nothing_else(
+        isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    original = (games_dir / "click-counter-src" / "src" / "core.js").read_text()
+    responses = [
+        _turn([("edit_file", {"path": "core.js",
+                              "old_string": "count += 1;",
+                              "new_string": "count += 2;"})]),
+        _turn([("finish", {"summary": "count by twos"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    fork = games_dir / result["slug"]
+    assert (fork / "src" / "core.js").read_text() == original.replace(
+        "count += 1;", "count += 2;")
+    # Only that span moved; every other file is untouched.
+    assert (fork / "src" / "style.css").read_text() == (
+        games_dir / "click-counter-src" / "src" / "style.css").read_text()
+
+    ok = [c for c in _tool_results(seen[-1]) if c.startswith("OK: edited")]
+    assert len(ok) == 1
+    assert "core.js" in ok[0]
+
+
+def test_an_old_string_that_does_not_match_is_rejected_and_the_file_untouched(
+        isolated_db, games_dir):
+    """A rejection costs one cheap turn. A guessed match costs a broken game
+    that may still pass build, scan and smoke — so nothing is guessed."""
+    _setup_source_game(games_dir)
+    original = (games_dir / "click-counter-src" / "src" / "core.js").read_text()
+    responses = [
+        _turn([("edit_file", {"path": "core.js",
+                              "old_string": "count+=1;",   # real text has spaces
+                              "new_string": "count += 2;"})]),
+        _turn([("finish", {"summary": "nothing changed"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    assert (games_dir / result["slug"] / "src" / "core.js").read_text() == original
+
+    rejection = next(c for c in _tool_results(seen[-1]) if c.startswith("REJECTED:"))
+    assert "does not appear" in rejection
+    assert "search(pattern" in rejection      # points at the cheap way to find it
+    # Never a near-miss, a "did you mean", or a candidate string echoed back —
+    # all three teach the fuzzy matching this tool exists to refuse.
+    assert "did you mean" not in rejection.lower()
+    assert "count += 1;" not in rejection
+
+
+def test_an_ambiguous_old_string_is_rejected_and_the_file_untouched(
+        isolated_db, games_dir):
+    """Neither first-match nor all-matches is safe when the model cannot see
+    the result: it has to say which one it means."""
+    _setup_source_game(games_dir)
+    original = (games_dir / "click-counter-src" / "src" / "core.js").read_text()
+    assert original.count("  var ") == 3
+    responses = [
+        _turn([("edit_file", {"path": "core.js",
+                              "old_string": "  var ", "new_string": "  let "})]),
+        _turn([("finish", {"summary": "nothing changed"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    assert (games_dir / result["slug"] / "src" / "core.js").read_text() == original
+
+    rejection = next(c for c in _tool_results(seen[-1]) if c.startswith("REJECTED:"))
+    assert "appears 3 times" in rejection
+    assert "Extend 'old_string'" in rejection
+
+
+def test_an_empty_old_string_is_rejected_and_points_at_write_file(
+        isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    original = (games_dir / "click-counter-src" / "src" / "core.js").read_text()
+    responses = [
+        _turn([("edit_file", {"path": "core.js",
+                              "old_string": "", "new_string": "// hello\n"})]),
+        _turn([("finish", {"summary": "nothing changed"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    assert (games_dir / result["slug"] / "src" / "core.js").read_text() == original
+    rejection = next(c for c in _tool_results(seen[-1]) if c.startswith("REJECTED:"))
+    assert "was empty" in rejection and "write_file" in rejection
+
+
+def test_editing_a_file_that_does_not_exist_points_at_write_file(
+        isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("edit_file", {"path": "hud.js",
+                              "old_string": "a", "new_string": "b"})]),
+        _turn([("finish", {"summary": "nothing changed"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    assert not (games_dir / result["slug"] / "src" / "hud.js").exists()
+    err = next(c for c in _tool_results(seen[-1]) if c.startswith("ERROR:"))
+    assert "not found" in err and "write_file" in err
+
+
+def test_an_edit_that_changes_nothing_is_rejected_and_is_not_progress(
+        isolated_db, games_dir):
+    """A no-op edit would otherwise burn a step AND register as progress
+    against the stall guard, which is how a run goes in circles forever."""
+    _setup_source_game(games_dir)
+    noop = _turn([("edit_file", {"path": "core.js",
+                                 "old_string": "count += 1;",
+                                 "new_string": "count += 1;"})])
+    # Two full runs of the guard: the first trip spends the one nudge, the
+    # second ends the run. If a no-op edit counted as progress, none of this
+    # would ever fire.
+    responses = [noop] * (agent._MAX_NO_PROGRESS_STEPS * 2 + 1)
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses, config=_edit_config(max_steps=30))
+
+    assert not result["success"]
+    assert "no progress" in result["error"]
+    rejection = next(c for c in _tool_results(seen[-1]) if c.startswith("REJECTED:"))
+    assert "identical to 'old_string'" in rejection
+
+
+def test_an_empty_new_string_deletes_the_matched_span(isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    original = (games_dir / "click-counter-src" / "src" / "core.js").read_text()
+    responses = [
+        _turn([("edit_file", {"path": "core.js",
+                              "old_string": "  var count = 0;\n", "new_string": ""})]),
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS}),
+               ("finish", {"summary": "done"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    # The deletion landed before the later whole-file rewrite replaced it.
+    deleted = next(c for c in _tool_results(seen[1]) if c.startswith("OK: edited"))
+    assert "-17 +0 bytes" in deleted
+    assert original.replace("  var count = 0;\n", "") != original
+
+
+def test_an_edit_over_the_module_ceiling_is_rejected_and_the_file_untouched(
+        isolated_db, games_dir):
+    """The ceiling is checked against the RESULT, not the payload — a tiny
+    edit can still push a module over — and the file is left alone."""
+    _setup_source_game(games_dir)
+    small = "var a = 1;\n"
+    responses = [
+        _turn([("write_file", {"path": "core.js", "contents": small})]),
+        _turn([("edit_file", {"path": "core.js",
+                              "old_string": "var a = 1;", "new_string": "x" * 120})]),
+        _turn([("finish", {"summary": "done"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses,
+                            config=_edit_config(max_module_bytes=100))
+
+    assert result["success"], result["error"]
+    assert (games_dir / result["slug"] / "src" / "core.js").read_text() == small
+    rejection = next(c for c in _tool_results(seen[-1]) if c.startswith("REJECTED:"))
+    assert "over the 100-byte module size ceiling" in rejection
+    assert "unchanged" in rejection
+
+
+def test_snapshot_scaffolding_in_either_edit_string_is_rejected(
+        isolated_db, games_dir):
+    """Same guard as write_file's, on both strings. A marker in new_string
+    would corrupt the file; a marker in old_string is the model treating the
+    snapshot listing as file content, one step earlier."""
+    _setup_source_game(games_dir)
+    original = (games_dir / "click-counter-src" / "src" / "core.js").read_text()
+    responses = [
+        _turn([("edit_file", {"path": "core.js", "old_string": "count += 1;",
+                              "new_string": "===== BEGIN core.js (12 bytes) ====="})]),
+        _turn([("edit_file", {"path": "core.js",
+                              "old_string": "===== END core.js =====",
+                              "new_string": "count += 2;"})]),
+        _turn([("edit_file", {"path": "core.js",
+                              "old_string": "count += 1;",
+                              "new_string": agent._PRUNE_SENTINEL})]),
+        _turn([("finish", {"summary": "nothing changed"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    assert (games_dir / result["slug"] / "src" / "core.js").read_text() == original
+    rejections = [c for c in _tool_results(seen[-1]) if c.startswith("REJECTED:")]
+    assert len(rejections) == 3
+    assert "new_string" in rejections[0] and "scaffolding" in rejections[0]
+    assert "old_string" in rejections[1] and "scaffolding" in rejections[1]
+    assert "context-pruning placeholder" in rejections[2]
+
+
+def test_a_successful_edit_shows_as_written_this_run_in_a_later_list_files(
+        isolated_db, games_dir):
+    """Same bookkeeping write_file gets: the model otherwise cannot tell an
+    edited module from an untouched one without reading it."""
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("edit_file", {"path": "core.js", "old_string": "count += 1;",
+                              "new_string": "count += 3;"})]),
+        _turn([("list_files", {})]),
+        _turn([("finish", {"summary": "done"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    listing = json.loads(next(m["content"] for m in seen[-1]
+                              if m.get("tool_call_id") == "call_0_list_files"))
+    assert {e["path"]: e.get("written_this_run") for e in listing} == {
+        "core.js": True, "index.html": None, "style.css": None,
+    }
+
+
+def test_a_small_edit_keeps_its_real_arguments_in_history(isolated_db, games_dir):
+    """The divergence from write_file, and it is deliberate. Small edits are
+    small by construction and ride at the cached rate once sent; leaving them
+    is what makes "this file is the snapshot's version with my edits applied,
+    in order" checkable from the transcript instead of taken on faith."""
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("edit_file", {"path": "core.js", "old_string": "count += 1;",
+                              "new_string": "count += 4;"})]),
+        _turn([("read_map", {})]),
+        _turn([("finish", {"summary": "done"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    blob = json.dumps(seen[-1])
+    assert "call_0_edit_file" in blob, "a small edit must survive in history"
+    call = next(
+        e for m in seen[-1] if m.get("role") == "assistant"
+        for e in (m.get("tool_calls") or [])
+        if e["function"]["name"] == "edit_file"
+    )
+    args = json.loads(call["function"]["arguments"])
+    assert args == {"path": "core.js", "old_string": "count += 1;",
+                    "new_string": "count += 4;"}
+    # And its result is still there as a real tool message, not a note.
+    assert any(m.get("tool_call_id") == "call_0_edit_file" for m in seen[-1])
+    assert agent._PRUNE_SENTINEL not in _assistant_notes(seen[-1])
+
+
+def test_an_edit_over_the_compaction_fuse_is_removed_like_a_write(
+        isolated_db, games_dir):
+    """A near-whole-module replacement expressed as one exact match is a
+    write_file wearing another name, and gets write_file's treatment:
+    REMOVED, never a rewritten arguments slot."""
+    _setup_source_game(games_dir)
+    big = "x" * 200
+    responses = [
+        _turn([("edit_file", {"path": "core.js", "old_string": "count += 1;",
+                              "new_string": big})]),
+        _turn([("read_map", {})]),
+        _turn([("finish", {"summary": "done"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses,
+                            config=_edit_config(edit_compact_bytes=50))
+
+    assert result["success"], result["error"]
+    blob = json.dumps(seen[-1])
+    assert big not in blob
+    assert "call_0_edit_file" not in blob
+    note = _assistant_notes(seen[-1])
+    assert "edit_file call(s) below COMPLETED SUCCESSFULLY" in note
+    assert "OK: edited core.js" in note
+    assert "Every other file in the snapshot is still exactly as shown there." in note
+
+
+def test_repeated_failed_edits_trip_the_stall_guard_and_the_run_still_ships(
+        isolated_db, games_dir):
+    """A rejected edit is not progress — a model looping on an old_string that
+    never matches has to trip the existing guard rather than being kept alive
+    by cheap turns. The work it did land is still force-verified."""
+    _setup_source_game(games_dir)
+    responses = (
+        [_turn([("edit_file", {"path": "core.js", "old_string": "count += 1;",
+                               "new_string": "count += 5;"})])]
+        + [_turn([("edit_file", {"path": "core.js", "old_string": "nope",
+                                 "new_string": "also nope"})])
+           for _ in range(agent._MAX_NO_PROGRESS_STEPS * 2 + 1)]
+    )
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, _seen = _run(games_dir, responses, config=_edit_config(max_steps=30))
+
+    assert result["success"], result["error"]
+    assert "without calling finish" in result["notes"]
+    assert "count += 5;" in (games_dir / result["slug"] / "src" / "core.js").read_text()
+
+
+def test_edit_file_events_never_carry_the_edited_text(isolated_db, games_dir):
+    """agent_events is a permanent, publicly replayable archive. Byte counts
+    only — the same rule write_file's contents follow."""
+    _setup_source_game(games_dir)
+    events = []
+    responses = [
+        _turn([("edit_file", {"path": "core.js", "old_string": "count += 1;",
+                              "new_string": "count += 6;"})]),
+        _turn([("finish", {"summary": "done"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, _seen = _run(
+            games_dir, responses,
+            emit=lambda role, content=None, data=None: events.append((role, content, data)),
+        )
+
+    assert result["success"], result["error"]
+    edits = [e for e in events if (e[2] or {}).get("tool") == "edit_file"]
+    assert len(edits) == 2      # the call and its result
+    call, obs = edits
+    assert call[1] == "edit_file('core.js', -11 +11 bytes)"
+    assert call[2] == {"tool": "edit_file", "path": "core.js",
+                       "removed": 11, "added": 11}
+    assert obs[1].startswith("OK: edited core.js")
+    assert obs[2]["outcome"] == "ok"
+    for _role, content, data in edits:
+        blob = json.dumps([content, data])
+        assert "count += 1;" not in blob and "count += 6;" not in blob

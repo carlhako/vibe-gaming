@@ -11,6 +11,7 @@
     list_files: "📂",
     read_file: "📖",
     search: "🔍",
+    edit_file: "✂️",
     write_file: "✏️",
     finish: "🏁",
   };
@@ -93,7 +94,7 @@
     let cls = "chat-msg chat-msg-tool_result";
     if (data.tool === "list_files" && data.file_count != null) {
       text = `📂 ${data.file_count} file${data.file_count === 1 ? "" : "s"}`;
-    } else if (data.tool === "write_file") {
+    } else if (data.tool === "write_file" || data.tool === "edit_file") {
       const ok = data.outcome === "ok";
       cls += ok ? "" : " is-rejected";
       text = (ok ? "✅ " : "❌ ") + text;

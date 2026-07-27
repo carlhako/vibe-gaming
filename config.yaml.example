@@ -99,6 +99,17 @@ multifile_agent:
                                # ceiling falls back to a manifest line plus the old
                                # discovery wording: a partial snapshot would be worse than
                                # none, since the model cannot tell which half is missing.
+  edit_compact_bytes: 8000     # an edit_file call whose old_string + new_string
+                               # exceed this is removed from the transcript once
+                               # executed, exactly like a write_file (that is a
+                               # whole-module rewrite wearing another tool's
+                               # name). SMALLER edits are deliberately left in
+                               # history with their real arguments: they cost
+                               # little, they ride at the cached rate once sent,
+                               # and keeping them is what makes "this file is
+                               # the snapshot's version with my edits applied,
+                               # in order" something the model can check from
+                               # the transcript instead of taking on faith.
   # context_prune_after_steps  # REMOVED in Sprint 6a (2026-07). Read results are no
                                # longer pruned at all, and this key is ignored -- delete it
                                # from your config.yaml if it is still there (_run_react_loop
