@@ -1,0 +1,11 @@
+{
+  "game_id": "b8b049527c8045baa71dde23da945190",
+  "parent_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v2)",
+  "description": "Build towers along a procedurally generated maze path to defend against waves of enemies.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-19T01:47:34.017130Z",
+  "version": 1,
+  "prompt": "fix the gamem when the enemy from wave 1 finish coming out and are all destroyed nothing happens. the wave should end and the wave button becomes clickable again to start the next wave. Fix the second issue where there is no upgrade button to upgrade a tower."
+}
