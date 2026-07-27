@@ -1,0 +1,12 @@
+{
+  "game_id": "9c7f9e89eac9418995096860f9543c7a",
+  "parent_game_id": "665ede6908d74625b32c569bac81b801",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v44)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-27T01:05:34.005307Z",
+  "version": 4,
+  "prompt": "there seems to be a bug in the game i suspect its when an amulet is generated from destroying a block. the game froze the exact moment a block would have been destroyed. investigate and fix this bug.\r\n\r\nsecondly add a little icon on the bottom right of the loading screen that's just a little square, when clicked the game is launched as the sorcerer but has 10000 tokens, its for testing the game all weapons etc.",
+  "format": "multi-file"
+}
