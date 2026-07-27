@@ -1,0 +1,11 @@
+{
+  "game_id": "c0d8e0d216be46738afa2bcbd4e4765b",
+  "parent_game_id": "bee34356cd2e44b3804563508b71b47f",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Darkhold Arena (v9)",
+  "description": "Wave-based arena RPG with destructible walls, skeleton minions that expire after 60s with bone-splinter explosions, long-range bone archers, and deep upgrade trees.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-23T22:38:36.289122Z",
+  "version": 1,
+  "prompt": "make the sorcerers spawned skeletons die after 60 seconds. Give each one a little circle above its head that is like a pie chart that goes down as the 60 seconds runs down. When they die make them explode and bones fly out damaging enemy units that they hit.\r\n\r\nsecondly change the upgrade of archers for the sorcerer when you have that upgrade it spawns 1 archer unit as well as the existing skeletons. Increase the range of the archers to be able to shoot 2/3 across the screen.\r\n\r\nchange the sorcerer upgrade of extra skeletons, it says 2 skeletons just call it extra skeletons, each upgrade will spawn an extra one."
+}
