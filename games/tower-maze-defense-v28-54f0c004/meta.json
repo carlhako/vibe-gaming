@@ -1,0 +1,11 @@
+{
+  "game_id": "54f0c00433814255afda74dceda2cd0d",
+  "parent_game_id": "9ecae276232d43d888becce563668003",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v28)",
+  "description": "A strategic tower-defense game with procedural maze paths, loops, splits, and upgradeable towers.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-21T04:44:10.720222Z",
+  "version": 1,
+  "prompt": "put a light grey square under units that have been placed down to make it clearer where they are."
+}
