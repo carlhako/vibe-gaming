@@ -1,0 +1,11 @@
+{
+  "game_id": "ee685997b22b4e12ad8e065630564c81",
+  "parent_game_id": "95ff71d0225f4e2daa681a5238512ed6",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Darkhold Arena (v19)",
+  "description": "Wave-based arena RPG where all enemies now spawn at map edges far from the player, preventing unfair close-range deaths in later waves.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-24T04:33:20.976019Z",
+  "version": 1,
+  "prompt": "make sure less enemies spawn near the player when it spawns. in later game there are too many close by and you die straight away. Dont reduce the number of enemies just have them spawn further away from the player or off screen to be found."
+}
