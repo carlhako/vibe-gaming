@@ -1,0 +1,11 @@
+{
+  "game_id": "efdec6803a49463c83e9043c4d186e41",
+  "parent_game_id": "5d646658e68e4e13943c6e9121238009",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v40)",
+  "description": "A tower-defense maze game where you place towers, buffs, mints, and steam rollers along a procedurally generated path to stop waves of enemies.",
+  "requested_by": "web:7fbda6b03e03",
+  "created_at": "2026-07-22T08:33:09.739668Z",
+  "version": 1,
+  "prompt": "make it so the rollers are not as good as they are. \r\n\r\nupdate cost and hp to\r\nintial cost: 1000\r\nlevel 2 update: 1000\r\nlevel 3 upgrade: 5000\r\n\r\ninitial hp: 500\r\nlevel 2 hp: 1000\r\nlevel 3 hp: 2000\r\n\r\nlimit max steam roller towers to 15."
+}
