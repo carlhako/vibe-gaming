@@ -1,0 +1,11 @@
+{
+  "game_id": "e98a42a8ac494123982aceb3214b6063",
+  "parent_game_id": null,
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Darkhold Arena",
+  "description": "A top-down wave-survival RPG where you choose a Sorcerer, Wizard, or Knight and upgrade your weapons through a deep skill tree between waves of dark fantasy enemies.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-21T22:40:16.739230Z",
+  "version": 1,
+  "prompt": "The game is a top-down RPG where the player selects one of three characters: Sorcerer, Wizard, or Knight. Each character has a primary melee weapon and a secondary weapon. For the Sorcerer and Wizard, the secondary is a ranged attack (e.g., fireball or magic bolt); for the Knight, the secondary is a slower but more powerful melee attack (e.g., heavy swing). The game is played in waves: enemies spawn randomly on the map and the player must defeat them all to progress. Killing enemies drops tokens. After each wave, the player enters a shop screen where they can spend tokens to upgrade their weapons (e.g., increase damage, attack speed, range, or unlock special effects). Each subsequent wave increases in difficulty: enemies have more health, deal more damage, and may spawn in greater numbers or with new behaviors. The player has a health bar; if it reaches zero, the game ends and the player can restart from wave 1. The visual style is pixel-art with a dark fantasy mood: a top-down view with a clear ground texture, simple walls or obstacles, and distinct character sprites. The camera follows the player. Controls: WASD or arrow keys to move, mouse to aim (character rotates toward cursor), left-click for primary attack, right-click for secondary attack. The standout feature is the weapon upgrade system: each weapon has a skill tree with multiple upgrade paths, allowing the player to customize their playstyle between waves (e.g., Sorcerer's ranged attack can become a homing projectile or an area-of-effect blast)."
+}
