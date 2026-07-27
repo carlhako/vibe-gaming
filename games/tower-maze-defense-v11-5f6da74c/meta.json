@@ -1,0 +1,11 @@
+{
+  "game_id": "5f6da74c58ee4c42b385aed7d0fd5a2c",
+  "parent_game_id": "d00bdab50a1649b4a9eb9e68d25824fb",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v11)",
+  "description": "A maze-path tower defense game where you build towers, upgrade them, and survive waves of enemies with a new map button to regenerate the layout before the first wave.",
+  "requested_by": "web:eea6f7fe20ff",
+  "created_at": "2026-07-19T22:17:11.709647Z",
+  "version": 1,
+  "prompt": "add a new map button when you first load the game that will generate a new map. Once you start the game the button disappears."
+}
