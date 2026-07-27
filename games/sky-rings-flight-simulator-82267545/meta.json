@@ -1,0 +1,11 @@
+{
+  "game_id": "82267545d4554d4d9df055739ec26273",
+  "parent_game_id": null,
+  "root_game_id": "82267545d4554d4d9df055739ec26273",
+  "title": "Sky Rings Flight Simulator",
+  "description": "Fly a plane through golden rings in the sky \u2014 steer with your mouse, dodge clouds, build combos, and rack up the highest score.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-20T07:59:59.595842Z",
+  "version": 1,
+  "prompt": "Make a flight simulator where the goal is to fly through rings in the sky. You start off up high in the sky, the plane tracks the mouse cursor so you move the mouse around to direct the plane. The game will be a 3d rendered game and add clouds."
+}

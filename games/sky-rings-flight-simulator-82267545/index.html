@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Sky Rings Flight Simulator</title>
+    <style>
+        :root {
+            --bg: #1a1a2e;
+        }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #000;
+            overflow: hidden;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            cursor: none;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            height: 100vh;
+            width: 100vw;
+            touch-action: none;
+        }
+        #gameCanvas {
+            display: block;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        #hud {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 20px 28px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            pointer-events: none;
+            z-index: 10;
+        }
+        #scorePanel {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        #scoreLabel {
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        #scoreValue {
+            font-size: 48px;
+            font-weight: 800;
+            color: #fff;
+            line-height: 1;
+            text-shadow: 0 0 30px rgba(255, 180, 50, 0.6);
+        }
+        #comboDisplay {
+            font-size: 16px;
+            font-weight: 700;
+            color: #ffcc00;
+            opacity: 0;
+            transition: opacity 0.15s;
+            text-shadow: 0 0 12px rgba(255, 200, 0, 0.7);
+        }
+        #comboDisplay.active {
+            opacity: 1;
+        }
+        #livesPanel {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+        .lifeIcon {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #ff3355;
+            box-shadow: 0 0 10px rgba(255, 50, 80, 0.7);
+            transition: all 0.3s;
+        }
+        .lifeIcon.lost {
+            background: #333;
+            box-shadow: none;
+            transform: scale(0.6);
+        }
+        #messageOverlay {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 20;
+            text-align: center;
+        }
+        #messageText {
+            font-size: 72px;
+            font-weight: 900;
+            color: #fff;
+            text-shadow: 0 0 40px rgba(255, 200, 50, 0.9), 0 4px 20px rgba(0, 0, 0, 0.5);
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        #messageText.show {
+            opacity: 1;
+            animation: popIn 0.5s ease-out;
+        }
+        @keyframes popIn {
+            0% {
+                transform: scale(0.3);
+                opacity: 0;
+            }
+            60% {
+                transform: scale(1.15);
+                opacity: 1;
+            }
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+        #gameOverPanel {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            z-index: 30;
+            opacity: 0;
+            transition: opacity 0.5s;
+            background: rgba(0, 0, 0, 0.55);
+        }
+        #gameOverPanel.active {
+            opacity: 1;
+            pointer-events: all;
+            cursor: pointer;
+        }
+        #gameOverTitle {
+            font-size: 56px;
+            font-weight: 900;
+            color: #fff;
+            text-shadow: 0 0 30px rgba(255, 80, 60, 0.8);
+            margin-bottom: 12px;
+        }
+        #gameOverScore {
+            font-size: 28px;
+            color: #ffcc00;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        #gameOverSub {
+            font-size: 18px;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 30px;
+        }
+        #restartBtn {
+            font-size: 20px;
+            font-weight: 700;
+            padding: 14px 40px;
+            border-radius: 40px;
+            border: 2px solid rgba(255, 255, 255, 0.7);
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            cursor: pointer;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            transition: all 0.2s;
+            pointer-events: all;
+        }
+        #restartBtn:hover {
+            background: rgba(255, 255, 255, 0.25);
+            border-color: #fff;
+            box-shadow: 0 0 30px rgba(255, 255, 255, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="hud">
+        <div id="scorePanel">
+            <div id="scoreLabel">Score</div>
+            <div id="scoreValue">0</div>
+            <div id="comboDisplay">COMBO x1</div>
+        </div>
+        <div id="livesPanel"></div>
+    </div>
+    <div id="messageOverlay"><div id="messageText"></div></div>
+    <div id="gameOverPanel">
+        <div id="gameOverTitle">Game Over</div>
+        <div id="gameOverScore">Final Score: 0</div>
+        <div id="gameOverSub">Click or press Space to fly again</div>
+        <button id="restartBtn">Fly Again</button>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.module.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // ─────────────────────────────────────
+        // DOM refs
+        // ─────────────────────────────────────
+        const canvas = document.getElementById('gameCanvas');
+        const scoreValueEl = document.getElementById('scoreValue');
+        const comboDisplay = document.getElementById('comboDisplay');
+        const livesPanel = document.getElementById('livesPanel');
+        const messageText = document.getElementById('messageText');
+        const gameOverPanel = document.getElementById('gameOverPanel');
+        const gameOverScore = document.getElementById('gameOverScore');
+        const restartBtn = document.getElementById('restartBtn');
+
+        // ─────────────────────────────────────
+        // Audio
+        // ─────────────────────────────────────
+        let audioCtx = null;
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new(window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
+
+        function playTone(freq, duration, type = 'sine', vol = 0.15) {
+            if (!audioCtx) return;
+            try {
+                const t = audioCtx.currentTime;
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, t);
+                gain.gain.setValueAtTime(vol, t);
+                gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(t);
+                osc.stop(t + duration);
+            } catch (e) { /* ignore */ }
+        }
+
+        function sfxPass() {
+            playTone(600, 0.1, 'sine', 0.12);
+            setTimeout(() => playTone(900, 0.12, 'sine', 0.1), 60);
+            setTimeout(() => playTone(1200, 0.15, 'sine', 0.08), 120);
+        }
+
+        function sfxMiss() {
+            playTone(150, 0.25, 'triangle', 0.15);
+            setTimeout(() => playTone(100, 0.3, 'triangle', 0.12), 100);
+        }
+
+        function sfxGameOver() {
+            playTone(300, 0.2, 'sawtooth', 0.1);
+            setTimeout(() => playTone(200, 0.25, 'sawtooth', 0.1), 180);
+            setTimeout(() => playTone(100, 0.5, 'sawtooth', 0.12), 350);
+        }
+
+        function sfxCombo() {
+            playTone(1000, 0.08, 'sine', 0.1);
+            setTimeout(() => playTone(1400, 0.1, 'sine', 0.08), 50);
+        }
+
+        // ─────────────────────────────────────
+        // Three.js setup
+        // ─────────────────────────────────────
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = false;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.1;
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x7ec8e3);
+        scene.fog = new THREE.Fog(0x9dd5ea, 80, 500);
+
+        const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 1, 600);
+        camera.position.set(0, 9, 15);
+        camera.lookAt(0, 4, -20);
+
+        // ─────────────────────────────────────
+        // Lighting
+        // ─────────────────────────────────────
+        const ambientLight = new THREE.AmbientLight(0x8899bb, 1.2);
+        scene.add(ambientLight);
+
+        const sunLight = new THREE.DirectionalLight(0xfff5e8, 3.5);
+        sunLight.position.set(50, 80, 30);
+        scene.add(sunLight);
+
+        const fillLight = new THREE.DirectionalLight(0xaaccff, 0.8);
+        fillLight.position.set(-20, 10, -30);
+        scene.add(fillLight);
+
+        // ─────────────────────────────────────
+        // Ground
+        // ─────────────────────────────────────
+        const groundGeo = new THREE.PlaneGeometry(600, 600);
+        const groundMat = new THREE.MeshPhongMaterial({
+            color: 0x5a8c3e,
+            specular: 0x111111,
+            shininess: 2,
+        });
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        ground.rotation.x = -Math.PI / 2;
+        ground.position.y = -65;
+        ground.receiveShadow = false;
+        scene.add(ground);
+
+        // Add some ground texture variation with scattered darker patches
+        for (let i = 0; i < 40; i++) {
+            const patchGeo = new THREE.CircleGeometry(4 + Math.random() * 18, 8);
+            const patchMat = new THREE.MeshPhongMaterial({
+                color: new THREE.Color().setHSL(0.22 + Math.random() * 0.1, 0.5 + Math.random() * 0.3, 0.25 + Math
+                    .random() * 0.2),
+                specular: 0,
+                shininess: 0,
+            });
+            const patch = new THREE.Mesh(patchGeo, patchMat);
+            patch.rotation.x = -Math.PI / 2;
+            patch.position.set(
+                (Math.random() - 0.5) * 300,
+                -64.8,
+                (Math.random() - 0.5) * 300
+            );
+            patch.receiveShadow = false;
+            scene.add(patch);
+        }
+
+        // ─────────────────────────────────────
+        // Clouds
+        // ─────────────────────────────────────
+        const cloudGroups = [];
+
+        function createCloudCluster(x, y, z, scale = 1) {
+            const group = new THREE.Group();
+            const count = 4 + Math.floor(Math.random() * 7);
+            const cloudMat = new THREE.MeshPhongMaterial({
+                color: 0xffffff,
+                specular: 0x111111,
+                shininess: 5,
+                transparent: true,
+                opacity: 0.82,
+            });
+
+            for (let i = 0; i < count; i++) {
+                const r = (1.5 + Math.random() * 3.5) * scale;
+                const geo = new THREE.SphereGeometry(r, 10, 8);
+                const blob = new THREE.Mesh(geo, cloudMat);
+                blob.position.set(
+                    (Math.random() - 0.5) * 6 * scale,
+                    (Math.random() - 0.5) * 2.5 * scale,
+                    (Math.random() - 0.5) * 5 * scale
+                );
+                blob.scale.set(1, 0.5 + Math.random() * 0.5, 1);
+                group.add(blob);
+            }
+            group.position.set(x, y, z);
+            scene.add(group);
+            cloudGroups.push({ group, baseX: x, baseY: y, baseZ: z, scale });
+            return group;
+        }
+
+        // Generate clouds across the sky
+        for (let i = 0; i < 60; i++) {
+            const x = (Math.random() - 0.5) * 200;
+            const y = -15 + Math.random() * 55;
+            const z = 30 - Math.random() * 400;
+            const s = 0.6 + Math.random() * 2.2;
+            createCloudCluster(x, y, z, s);
+        }
+
+        // ─────────────────────────────────────
+        // Plane model
+        // ─────────────────────────────────────
+        const planeGroup = new THREE.Group();
+
+        // Fuselage
+        const bodyGeo = new THREE.CylinderGeometry(0.22, 0.28, 2.0, 12, 4);
+        bodyGeo.rotateX(Math.PI / 2);
+        const bodyMat = new THREE.MeshPhongMaterial({ color: 0xf5f5f5, specular: 0x444444, shininess: 60 });
+        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        body.position.z = 0;
+        planeGroup.add(body);
+
+        // Nose cone
+        const noseGeo = new THREE.ConeGeometry(0.28, 0.7, 12, 8);
+        noseGeo.rotateX(-Math.PI / 2);
+        const noseMat = new THREE.MeshPhongMaterial({ color: 0xe63946, specular: 0x662222, shininess: 80 });
+        const nose = new THREE.Mesh(noseGeo, noseMat);
+        nose.position.z = -1.35;
+        planeGroup.add(nose);
+
+        // Cockpit window
+        const cockpitGeo = new THREE.SphereGeometry(0.2, 8, 6, 0, Math.PI * 2, 0, Math.PI / 2);
+        const cockpitMat = new THREE.MeshPhongMaterial({ color: 0x334466, specular: 0x8899cc, shininess: 120,
+            emissive: 0x111122, emissiveIntensity: 0.3 });
+        const cockpit = new THREE.Mesh(cockpitGeo, cockpitMat);
+        cockpit.position.set(0, 0.2, -0.55);
+        cockpit.rotation.x = -0.3;
+        planeGroup.add(cockpit);
+
+        // Main wings
+        const wingGeo = new THREE.BoxGeometry(3.2, 0.06, 0.55);
+        const wingMat = new THREE.MeshPhongMaterial({ color: 0xf0f0f0, specular: 0x333333, shininess: 50 });
+        const wings = new THREE.Mesh(wingGeo, wingMat);
+        wings.position.set(0, -0.08, 0.15);
+        planeGroup.add(wings);
+
+        // Wingtips (red)
+        const tipGeo = new THREE.BoxGeometry(0.3, 0.08, 0.55);
+        const tipMat = new THREE.MeshPhongMaterial({ color: 0xe63946, specular: 0x662222, shininess: 80 });
+        const tipL = new THREE.Mesh(tipGeo, tipMat);
+        tipL.position.set(-1.6, -0.08, 0.15);
+        planeGroup.add(tipL);
+        const tipR = new THREE.Mesh(tipGeo, tipMat);
+        tipR.position.set(1.6, -0.08, 0.15);
+        planeGroup.add(tipR);
+
+        // Tail vertical stabilizer
+        const tailVGeo = new THREE.BoxGeometry(0.07, 0.5, 0.45);
+        const tailV = new THREE.Mesh(tailVGeo, wingMat);
+        tailV.position.set(0, 0.28, 0.85);
+        planeGroup.add(tailV);
+
+        // Tail horizontal stabilizer
+        const tailHGeo = new THREE.BoxGeometry(1.4, 0.05, 0.35);
+        const tailH = new THREE.Mesh(tailHGeo, wingMat);
+        tailH.position.set(0, 0.02, 0.9);
+        planeGroup.add(tailH);
+
+        // Engine / propeller hub
+        const propHubGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.1, 8);
+        propHubGeo.rotateX(Math.PI / 2);
+        const propHubMat = new THREE.MeshPhongMaterial({ color: 0x333333, specular: 0x666666, shininess: 90 });
+        const propHub = new THREE.Mesh(propHubGeo, propHubMat);
+        propHub.position.z = -1.65;
+        planeGroup.add(propHub);
+
+        // Propeller blades
+        const propGroup = new THREE.Group();
+        const bladeGeo = new THREE.BoxGeometry(0.45, 0.04, 0.12);
+        const bladeMat = new THREE.MeshPhongMaterial({ color: 0x222222, specular: 0x555555, shininess: 80 });
+        const blade1 = new THREE.Mesh(bladeGeo, bladeMat);
+        propGroup.add(blade1);
+        const blade2 = new THREE.Mesh(bladeGeo.clone(), bladeMat);
+        blade2.rotation.z = Math.PI / 2;
+        propGroup.add(blade2);
+        propGroup.position.z = -1.68;
+        planeGroup.add(propGroup);
+
+        scene.add(planeGroup);
+        planeGroup.position.set(0, 5, 0);
+
+        // ─────────────────────────────────────
+        // Ring system
+        // ─────────────────────────────────────
+        const rings = [];
+        const ringPool = [];
+        const RING_SPACING = 90;
+        const NUM_RINGS_AHEAD = 6;
+
+        function createRingMesh(radius, tubeRadius = 0.35) {
+            const geo = new THREE.TorusGeometry(radius, tubeRadius, 20, 48);
+            const mat = new THREE.MeshPhongMaterial({
+                color: 0xffaa00,
+                emissive: 0xff6600,
+                emissiveIntensity: 0.55,
+                specular: 0xffffff,
+                shininess: 100,
+                side: THREE.DoubleSide,
+            });
+            const mesh = new THREE.Mesh(geo, mat);
+            // Ring lies in X-Y plane; plane flies along Z through the hole
+            return mesh;
+        }
+
+        function spawnRing(z, difficulty) {
+            const maxOffset = 8 + difficulty * 1.8;
+            const radius = Math.max(4.5, 10 - difficulty * 0.7);
+            const x = (Math.random() - 0.5) * 2 * maxOffset;
+            const y = 5 + (Math.random() - 0.5) * 2 * maxOffset * 0.75;
+            const mesh = createRingMesh(radius);
+            mesh.position.set(x, y, z);
+            scene.add(mesh);
+
+            const ringData = {
+                mesh,
+                x,
+                y,
+                z,
+                radius,
+                checked: false,
+            };
+            rings.push(ringData);
+            return ringData;
+        }
+
+        function clearAllRings() {
+            for (const r of rings) {
+                scene.remove(r.mesh);
+                if (r.mesh.geometry) r.mesh.geometry.dispose();
+                if (r.mesh.material) r.mesh.material.dispose();
+            }
+            rings.length = 0;
+        }
+
+        function initRings(difficulty) {
+            clearAllRings();
+            const startZ = planeGroup.position.z - RING_SPACING;
+            for (let i = 0; i < NUM_RINGS_AHEAD; i++) {
+                const z = startZ - i * RING_SPACING;
+                const d = i === 0 ? 0 : difficulty; // first ring easy
+                const rd = spawnRing(z, d);
+                if (i === 0) {
+                    // First ring is always easy
+                    rd.mesh.position.x = 0;
+                    rd.mesh.position.y = 5;
+                    rd.x = 0;
+                    rd.y = 5;
+                    rd.radius = 10;
+                    // Rebuild mesh with correct radius
+                    scene.remove(rd.mesh);
+                    rd.mesh.geometry.dispose();
+                    rd.mesh.material.dispose();
+                    rd.mesh = createRingMesh(10);
+                    rd.mesh.position.set(0, 5, z);
+                    rd.radius = 10;
+                    scene.add(rd.mesh);
+                }
+            }
+        }
+
+        // ─────────────────────────────────────
+        // Particle burst effect
+        // ─────────────────────────────────────
+        const particles = [];
+
+        function spawnBurst(x, y, z, color = 0xffcc00, count = 25) {
+            for (let i = 0; i < count; i++) {
+                const geo = new THREE.SphereGeometry(0.15 + Math.random() * 0.3, 4, 4);
+                const mat = new THREE.MeshPhongMaterial({
+                    color,
+                    emissive: color,
+                    emissiveIntensity: 0.8,
+                    specular: 0xffffff,
+                    shininess: 40,
+                });
+                const particle = new THREE.Mesh(geo, mat);
+                particle.position.set(x, y, z);
+                particle.userData = {
+                    velX: (Math.random() - 0.5) * 12,
+                    velY: (Math.random() - 0.5) * 12,
+                    velZ: (Math.random() - 0.5) * 8,
+                    life: 0.7 + Math.random() * 0.8,
+                    age: 0,
+                };
+                scene.add(particle);
+                particles.push(particle);
+            }
+        }
+
+        function updateParticles(delta) {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.userData.age += delta;
+                const prog = p.userData.age / p.userData.life;
+                if (prog >= 1) {
+                    scene.remove(p);
+                    p.geometry.dispose();
+                    p.material.dispose();
+                    particles.splice(i, 1);
+                } else {
+                    p.position.x += p.userData.velX * delta;
+                    p.position.y += p.userData.velY * delta;
+                    p.position.z += p.userData.velZ * delta;
+                    p.userData.velY += 3 * delta; // gravity
+                    p.material.opacity = 1 - prog;
+                    p.material.transparent = true;
+                    p.scale.setScalar(1 - prog * 0.7);
+                }
+            }
+        }
+
+        function clearAllParticles() {
+            for (const p of particles) {
+                scene.remove(p);
+                p.geometry.dispose();
+                p.material.dispose();
+            }
+            particles.length = 0;
+        }
+
+        // ─────────────────────────────────────
+        // Game state
+        // ─────────────────────────────────────
+        const STATE = { PLAYING: 'playing', GAMEOVER: 'gameover' };
+        let gameState = STATE.PLAYING;
+        let score = 0;
+        let lives = 5;
+        let combo = 0;
+        let maxCombo = 0;
+        let difficulty = 0;
+        let planeSpeed = 42;
+        let messageTimer = 0;
+        let ringFlashTimers = [];
+
+        // Plane motion
+        let targetX = 0;
+        let targetY = 5;
+        let mouseNormX = 0;
+        let mouseNormY = 0;
+        let prevPlaneX = 0;
+        let prevPlaneY = 5;
+        let velocityX = 0;
+        let velocityY = 0;
+
+        // ─────────────────────────────────────
+        // HUD
+        // ─────────────────────────────────────
+        function updateHUD() {
+            scoreValueEl.textContent = score.toLocaleString();
+
+            if (combo > 1) {
+                comboDisplay.textContent = `COMBO x${combo}`;
+                comboDisplay.classList.add('active');
+            } else {
+                comboDisplay.classList.remove('active');
+            }
+
+            // Lives
+            let html = '';
+            for (let i = 0; i < 5; i++) {
+                html += `<div class="lifeIcon${i >= lives ? ' lost' : ''}"></div>`;
+            }
+            livesPanel.innerHTML = html;
+        }
+
+        function showMessage(msg) {
+            messageText.textContent = msg;
+            messageText.classList.remove('show');
+            void messageText.offsetWidth;
+            messageText.classList.add('show');
+            messageTimer = 1.2;
+        }
+
+        function showGameOver() {
+            gameState = STATE.GAMEOVER;
+            gameOverPanel.classList.add('active');
+            gameOverScore.textContent = `Final Score: ${score.toLocaleString()}`;
+            sfxGameOver();
+        }
+
+        function hideGameOver() {
+            gameOverPanel.classList.remove('active');
+        }
+
+        // ─────────────────────────────────────
+        // Restart
+        // ─────────────────────────────────────
+        function restartGame() {
+            initAudio();
+            score = 0;
+            lives = 5;
+            combo = 0;
+            maxCombo = 0;
+            difficulty = 0;
+            planeSpeed = 42;
+            messageTimer = 0;
+            ringFlashTimers = [];
+            targetX = 0;
+            targetY = 5;
+            mouseNormX = 0;
+            mouseNormY = 0;
+            prevPlaneX = 0;
+            prevPlaneY = 5;
+            velocityX = 0;
+            velocityY = 0;
+            planeGroup.position.set(0, 5, 0);
+            planeGroup.rotation.set(0, 0, 0);
+            clearAllRings();
+            clearAllParticles();
+            initRings(0);
+            updateHUD();
+            hideGameOver();
+            gameState = STATE.PLAYING;
+            camera.position.set(0, 9, 15);
+            camera.lookAt(0, 4, -20);
+        }
+
+        restartBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            restartGame();
+        });
+
+        window.addEventListener('click', (e) => {
+            if (gameState === STATE.GAMEOVER && e.target !== restartBtn) {
+                restartGame();
+            }
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && gameState === STATE.GAMEOVER) {
+                e.preventDefault();
+                restartGame();
+            }
+            if (e.code === 'Space' && gameState === STATE.PLAYING) {
+                e.preventDefault();
+                initAudio();
+            }
+        });
+
+        // ─────────────────────────────────────
+        // Input
+        // ─────────────────────────────────────
+        function updateMouseNorm(clientX, clientY) {
+            mouseNormX = (clientX / window.innerWidth) * 2 - 1;
+            mouseNormY = -(clientY / window.innerHeight) * 2 + 1;
+            mouseNormX = Math.max(-1, Math.min(1, mouseNormX));
+            mouseNormY = Math.max(-1, Math.min(1, mouseNormY));
+            initAudio();
+        }
+
+        window.addEventListener('mousemove', (e) => {
+            updateMouseNorm(e.clientX, e.clientY);
+        });
+
+        window.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (e.touches.length > 0) {
+                updateMouseNorm(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        }, { passive: false });
+
+        window.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            initAudio();
+            if (e.touches.length > 0) {
+                updateMouseNorm(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        }, { passive: false });
+
+        window.addEventListener('touchend', () => {
+            // Keep last position, gently return toward center
+        });
+
+        // ─────────────────────────────────────
+        // Resize
+        // ─────────────────────────────────────
+        window.addEventListener('resize', () => {
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+        });
+
+        // ─────────────────────────────────────
+        // Game loop
+        // ─────────────────────────────────────
+        const clock = new THREE.Clock();
+        let lastRingZ = 0;
+
+        function update(delta) {
+            if (gameState !== STATE.PLAYING) {
+                // Still rotate propeller
+                propGroup.rotation.z += delta * 35;
+                updateParticles(delta);
+                renderer.render(scene, camera);
+                return;
+            }
+
+            // Clamp delta
+            const dt = Math.min(delta, 0.1);
+
+            // Update difficulty based on score
+            difficulty = Math.floor(score / 400);
+            planeSpeed = 42 + difficulty * 2.5;
+
+            // Update target position from mouse
+            const maxOffsetX = 18 + difficulty * 1.2;
+            const maxOffsetY = 13 + difficulty * 1.0;
+            targetX = mouseNormX * maxOffsetX;
+            targetY = 5 + mouseNormY * maxOffsetY;
+
+            // Smooth plane movement
+            const responsiveness = 5.5;
+            const smoothing = 1 - Math.exp(-responsiveness * dt);
+            const px = planeGroup.position.x;
+            const py = planeGroup.position.y;
+            planeGroup.position.x += (targetX - px) * smoothing;
+            planeGroup.position.y += (targetY - py) * smoothing;
+
+            // Move plane forward
+            planeGroup.position.z -= planeSpeed * dt;
+
+            // Compute velocity for rotation
+            velocityX = (planeGroup.position.x - prevPlaneX) / Math.max(dt, 0.001);
+            velocityY = (planeGroup.position.y - prevPlaneY) / Math.max(dt, 0.001);
+            prevPlaneX = planeGroup.position.x;
+            prevPlaneY = planeGroup.position.y;
+
+            // Apply plane rotation (banking)
+            const targetRoll = -velocityX * 0.06;
+            const targetPitch = velocityY * 0.03;
+            const targetYaw = velocityX * 0.025;
+            planeGroup.rotation.z += (targetRoll - planeGroup.rotation.z) * smoothing;
+            planeGroup.rotation.x += (targetPitch - planeGroup.rotation.x) * smoothing;
+            planeGroup.rotation.y += (targetYaw - planeGroup.rotation.y) * smoothing;
+
+            // Clamp rotations
+            planeGroup.rotation.z = Math.max(-1.2, Math.min(1.2, planeGroup.rotation.z));
+            planeGroup.rotation.x = Math.max(-0.7, Math.min(0.7, planeGroup.rotation.x));
+            planeGroup.rotation.y = Math.max(-0.5, Math.min(0.5, planeGroup.rotation.y));
+
+            // Propeller spin
+            propGroup.rotation.z += dt * (40 + planeSpeed * 0.8);
+
+            // Check ring passes
+            const pz = planeGroup.position.z;
+            const px2 = planeGroup.position.x;
+            const py2 = planeGroup.position.y;
+
+            for (const ring of rings) {
+                if (ring.checked) continue;
+                if (pz <= ring.z) {
+                    ring.checked = true;
+                    const distXY = Math.sqrt((px2 - ring.x) ** 2 + (py2 - ring.y) ** 2);
+                    const passZone = ring.radius * 0.85;
+
+                    if (distXY < passZone) {
+                        // Passed!
+                        combo++;
+                        if (combo > maxCombo) maxCombo = combo;
+                        const comboMult = Math.min(combo, 10);
+                        const points = Math.round(100 * comboMult);
+                        score += points;
+
+                        spawnBurst(ring.x, ring.y, ring.z, 0xffdd00, 30);
+                        sfxPass();
+                        if (combo > 1 && combo % 3 === 0) sfxCombo();
+
+                        // Flash ring green
+                        ring.mesh.material.emissive.set(0x00ff44);
+                        ring.mesh.material.emissiveIntensity = 1.5;
+                        ringFlashTimers.push({ ring, timer: 0.4 });
+
+                        if (combo >= 5) showMessage('PERFECT!');
+                        else if (combo >= 3) showMessage('GREAT!');
+                    } else {
+                        // Missed
+                        combo = 0;
+                        lives--;
+                        spawnBurst(ring.x, ring.y, ring.z, 0xff3333, 20);
+                        sfxMiss();
+
+                        // Flash ring red
+                        ring.mesh.material.emissive.set(0xff0000);
+                        ring.mesh.material.emissiveIntensity = 1.5;
+                        ringFlashTimers.push({ ring, timer: 0.5 });
+
+                        if (lives <= 0) {
+                            showGameOver();
+                            ring.mesh.material.emissive.set(0xff0000);
+                            ring.mesh.material.emissiveIntensity = 2;
+                            return;
+                        }
+                        showMessage('MISS!');
+                    }
+                }
+            }
+
+            // Clean up passed rings behind the plane
+            for (let i = rings.length - 1; i >= 0; i--) {
+                const ring = rings[i];
+                if (ring.checked && ring.z > pz + 30) {
+                    scene.remove(ring.mesh);
+                    ring.mesh.geometry.dispose();
+                    ring.mesh.material.dispose();
+                    rings.splice(i, 1);
+                }
+            }
+
+            // Spawn new rings ahead
+            while (rings.length < NUM_RINGS_AHEAD) {
+                const furthestZ = rings.length > 0 ?
+                    Math.min(...rings.map(r => r.z)) :
+                    pz - RING_SPACING;
+                spawnRing(furthestZ - RING_SPACING, difficulty);
+            }
+
+            // Update ring flash timers
+            for (let i = ringFlashTimers.length - 1; i >= 0; i--) {
+                ringFlashTimers[i].timer -= dt;
+                if (ringFlashTimers[i].timer <= 0) {
+                    const r = ringFlashTimers[i].ring;
+                    r.mesh.material.emissive.set(0xff6600);
+                    r.mesh.material.emissiveIntensity = 0.55;
+                    ringFlashTimers.splice(i, 1);
+                }
+            }
+
+            // Message timer
+            if (messageTimer > 0) {
+                messageTimer -= dt;
+                if (messageTimer <= 0) {
+                    messageText.classList.remove('show');
+                }
+            }
+
+            // Update camera
+            const camTargetX = planeGroup.position.x;
+            const camTargetY = planeGroup.position.y + 3.5;
+            const camTargetZ = planeGroup.position.z + 12;
+            const camSmooth = 1 - Math.exp(-4 * dt);
+            camera.position.x += (camTargetX - camera.position.x) * camSmooth;
+            camera.position.y += (camTargetY - camera.position.y) * camSmooth;
+            camera.position.z += (camTargetZ - camera.position.z) * camSmooth;
+            camera.lookAt(
+                planeGroup.position.x,
+                planeGroup.position.y + 0.5,
+                planeGroup.position.z - 8
+            );
+
+            // Update particles
+            updateParticles(dt);
+
+            // Update HUD
+            updateHUD();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            update(delta);
+            renderer.render(scene, camera);
+        }
+
+        // ─────────────────────────────────────
+        // Initialize and start
+        // ─────────────────────────────────────
+        function init() {
+            initRings(0);
+            updateHUD();
+            hideGameOver();
+            // Initial camera position
+            camera.position.set(0, 9, 15);
+            camera.lookAt(0, 4, -20);
+        }
+
+        init();
+        animate();
+
+        console.log('🛩️ Sky Rings Flight Simulator ready!');
+        console.log('   Move your mouse to steer the plane.');
+        console.log('   Fly through the golden rings!');
+        console.log('   Avoid missing rings — you have 5 lives.');
+    </script>
+</body>
+</html>
