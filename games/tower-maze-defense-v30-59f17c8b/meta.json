@@ -1,0 +1,11 @@
+{
+  "game_id": "59f17c8b320a4490bd99632712e5728d",
+  "parent_game_id": "fa2df30739234868bf5d88aabd18164a",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v30)",
+  "description": "A tower defense game with procedurally generated mazes featuring loops and splits. Place attack, buff, and economy towers to defend against waves of enemies.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-21T05:39:16.256729Z",
+  "version": 1,
+  "prompt": "remove the loop and split indicator off the menu on the right as its not needed."
+}
