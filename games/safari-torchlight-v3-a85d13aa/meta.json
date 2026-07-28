@@ -1,0 +1,11 @@
+{
+  "game_id": "a85d13aa845a4a8381e6d89f08abd83a",
+  "parent_game_id": "c2e8b2bf7ead403c93f11ab7f297232c",
+  "root_game_id": "7efb6baa274c4a8e90e184d21b56a5dc",
+  "title": "Safari Torchlight (v3)",
+  "description": "A roguelike safari survival game: collect torch parts, light the big torch, and survive monsters in the dark.",
+  "requested_by": "web:85267fc8cbc2",
+  "created_at": "2026-07-28T04:36:04.169342Z",
+  "version": 3,
+  "prompt": "make the square around the player go darker the further it is away from the player and brighter the closer it get's to the player. make 3* less trees on the map and to climb up a tree the make the imput is q"
+}
