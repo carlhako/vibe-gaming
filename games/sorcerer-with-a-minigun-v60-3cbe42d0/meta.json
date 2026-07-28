@@ -1,0 +1,12 @@
+{
+  "game_id": "3cbe42d0798c458990da9f57a3d76800",
+  "parent_game_id": "6e77e7d46eaf42fea9d343b132990300",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v60)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:85267fc8cbc2",
+  "created_at": "2026-07-28T08:29:35.067447Z",
+  "version": 19,
+  "prompt": "make the right click for the knight charecter have a slash that has a little green flame comes out of it. if that slash kills a enemy the enemy will turn into a zombie versoin of the enemy it just killed so for example if the player kills a earth shaker the earth shaker will turn into a zombie earth shaker. the zombie enemys won't fight you they will fight the enemys that are left on the map",
+  "format": "multi-file"
+}
