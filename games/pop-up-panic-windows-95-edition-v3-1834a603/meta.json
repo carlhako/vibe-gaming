@@ -1,0 +1,11 @@
+{
+  "game_id": "1834a60372da4d49855c4e8e528a7e58",
+  "parent_game_id": "f7a6634a430f439f8ade3448626a0599",
+  "root_game_id": "8e98ab04a3e243ffbdab6cb2e45d1363",
+  "title": "Pop-up Panic: Windows 95 Edition (v3)",
+  "description": "Close relentless Win95 pop-ups before they crash your desktop \u2014 now with a devilish boss popup that dodges your cursor!",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-28T03:06:27.042669Z",
+  "version": 2,
+  "prompt": "for each game after a random amount of closed windows around 20 spawn a boss popup that moves when you try to close it. dont make it impossible but make it hard to click on the x. Make the window red with a laughing devil face."
+}
