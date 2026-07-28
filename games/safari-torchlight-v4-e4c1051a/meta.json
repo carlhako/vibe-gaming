@@ -1,0 +1,11 @@
+{
+  "game_id": "e4c1051a74834147a0a513636def249b",
+  "parent_game_id": "a85d13aa845a4a8381e6d89f08abd83a",
+  "root_game_id": "7efb6baa274c4a8e90e184d21b56a5dc",
+  "title": "Safari Torchlight (v4)",
+  "description": "A roguelike safari game where a zebra with a mini torch collects parts to light a big torch while evading monsters in the dark.",
+  "requested_by": "web:85267fc8cbc2",
+  "created_at": "2026-07-28T05:01:32.871634Z",
+  "version": 4,
+  "prompt": "make the following changes.\r\n\r\n1. fix the lighting around the player. it is currently darker in the middle and brighter on the outside it's inverted.\r\n\r\n2. make it so the zebra hold's a mini torch\r\n\r\n3. make the all the monster's 3* bigger except the bush only make the bush 2* bigger\r\n\r\n4. make it so the player and monster's can walk through trees\r\n\r\n5. make it so if the giraffe is chasing you and you go in a tree the giraffe keep's chasing you and if the giraffe has already spotted you before you are in the tree the giraffe can still kill the player\r\n\r\n6. make it so you ca have multiple of the same enemy"
+}

@@ -1,0 +1,1636 @@
+<![CDATA[<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Safari Torchlight - Roguelike</title>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #0a0a05;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+            touch-action: manipulation;
+            font-family: 'Press Start 2P', monospace;
+        }
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+        #container {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <canvas id="game"></canvas>
+    </div>
+    <script>
+        (function() {
+            const displayCanvas = document.getElementById('game');
+            const displayCtx = displayCanvas.getContext('2d');
+
+            const VW = 320;
+            const VH = 240;
+            const TILE = 16;
+
+            const offCanvas = document.createElement('canvas');
+            offCanvas.width = VW;
+            offCanvas.height = VH;
+            const offCtx = offCanvas.getContext('2d');
+            offCtx.imageSmoothingEnabled = false;
+
+            // ── Game State ────────────────────────────
+            let gameState = 'playing';
+            let round = 1;
+            let mapW, mapH;
+            let torchPartsNeeded, torchPartsCollected;
+            let bigTorchActive = false;
+            let bigTorchLit = false;
+            let bigTorchX, bigTorchY;
+            let trees = [];
+            let torchParts = [];
+            let monsters = [];
+            let selectionOptions = [];
+            let score = 0;
+            let deathMessage = '';
+            let stunTimer = 0;
+            let onTree = false;
+            let treeCooldown = 0;
+            let gameOverTimer = 0;
+            let shakeTimer = 0;
+            let shakeIntensity = 0;
+
+            const allMonsterDefs = [
+                { id: 'giraffe', name: 'Giraffe', desc: 'Lurks then chases', iconColor: '#e8b830' },
+                { id: 'bird', name: 'Bird', desc: 'Slows you nearby', iconColor: '#60b0e0' },
+                { id: 'frog', name: 'Frog', desc: 'Bounces & shockwaves', iconColor: '#50c050' },
+                { id: 'lion', name: 'Lion', desc: 'Pounces after delay', iconColor: '#d09030' },
+                { id: 'wolf', name: 'Wolf', desc: 'Sleeps till parts done', iconColor: '#9090a0' },
+                { id: 'bush', name: 'Bush', desc: 'Moves off-screen', iconColor: '#308030' },
+            ];
+
+            // ── Input ──────────────────────────────────
+            const keys = {};
+            let mouseX = 0,
+                mouseY = 0;
+            let mouseClicked = false;
+            let touchActive = false;
+            let touchDir = { x: 0, y: 0 };
+            let touchId = null;
+
+            function getInputDir() {
+                let dx = 0,
+                    dy = 0;
+                if (keys['KeyW'] || keys['ArrowUp']) dy -= 1;
+                if (keys['KeyS'] || keys['ArrowDown']) dy += 1;
+                if (keys['KeyA'] || keys['ArrowLeft']) dx -= 1;
+                if (keys['KeyD'] || keys['ArrowRight']) dx += 1;
+                if (touchActive) { dx += touchDir.x;
+                    dy += touchDir.y; }
+                const len = Math.sqrt(dx * dx + dy * dy);
+                if (len > 1) { dx /= len;
+                    dy /= len; }
+                return { x: dx, y: dy };
+            }
+
+            function getInteractionPressed() {
+                return keys['KeyE'] || keys['Space'] || keys['KeyF'];
+            }
+            function getTreeInteractionPressed() {
+                return keys['KeyQ'];
+            }
+            let interactJustPressed = false;
+            let prevInteract = false;
+            let prevTreeInteract = false;
+
+            window.addEventListener('keydown', e => { keys[e.code] = true;
+                e.preventDefault(); });
+            window.addEventListener('keyup', e => { keys[e.code] = false;
+                e.preventDefault(); });
+            window.addEventListener('mousemove', e => {
+                const rect = displayCanvas.getBoundingClientRect();
+                const scaleX = VW / rect.width;
+                const scaleY = VH / rect.height;
+                mouseX = (e.clientX - rect.left) * scaleX;
+                mouseY = (e.clientY - rect.top) * scaleY;
+            });
+            window.addEventListener('click', e => {
+                mouseClicked = true;
+                const rect = displayCanvas.getBoundingClientRect();
+                const scaleX = VW / rect.width;
+                const scaleY = VH / rect.height;
+                mouseX = (e.clientX - rect.left) * scaleX;
+                mouseY = (e.clientY - rect.top) * scaleY;
+            });
+            window.addEventListener('touchstart', e => {
+                e.preventDefault();
+                if (e.touches.length === 1) {
+                    touchId = e.touches[0].identifier;
+                    touchActive = true;
+                    const rect = displayCanvas.getBoundingClientRect();
+                    const sx = VW / rect.width;
+                    const sy = VH / rect.height;
+                    mouseX = (e.touches[0].clientX - rect.left) * sx;
+                    mouseY = (e.touches[0].clientY - rect.top) * sy;
+                    mouseClicked = true;
+                    updateTouchDir(e.touches[0], rect, sx, sy);
+                }
+            }, { passive: false });
+            window.addEventListener('touchmove', e => {
+                e.preventDefault();
+                for (let i = 0; i < e.touches.length; i++) {
+                    if (e.touches[i].identifier === touchId) {
+                        const rect = displayCanvas.getBoundingClientRect();
+                        const sx = VW / rect.width;
+                        const sy = VH / rect.height;
+                        mouseX = (e.touches[i].clientX - rect.left) * sx;
+                        mouseY = (e.touches[i].clientY - rect.top) * sy;
+                        updateTouchDir(e.touches[i], rect, sx, sy);
+                        break;
+                    }
+                }
+            }, { passive: false });
+            window.addEventListener('touchend', e => {
+                for (let i = 0; i < e.touches.length; i++) {
+                    if (e.touches[i].identifier === touchId) return;
+                }
+                touchActive = false;
+                touchDir = { x: 0, y: 0 };
+                touchId = null;
+            });
+
+            function updateTouchDir(touch, rect, sx, sy) {
+                const tx = (touch.clientX - rect.left) * sx;
+                const ty = (touch.clientY - rect.top) * sy;
+                const cx = VW / 2;
+                const cy = VH * 0.7;
+                const dx = tx - cx;
+                const dy = ty - cy;
+                const len = Math.sqrt(dx * dx + dy * dy);
+                if (len < 20) { touchDir = { x: 0, y: 0 }; return; }
+                touchDir = { x: dx / len, y: dy / len };
+            }
+
+            // ── Player ─────────────────────────────────
+            const player = {
+                x: 0,
+                y: 0,
+                speed: 55,
+                animTimer: 0,
+                animFrame: 0,
+                facing: 0,
+                stunned: false,
+                stunnedTimer: 0,
+                beingSucked: false,
+                suckTarget: null,
+                suckTimer: 0,
+            };
+
+            function resetPlayer() {
+                player.x = TILE * 2 + Math.random() * (mapW * TILE - TILE * 4);
+                player.y = TILE * 2 + Math.random() * (mapH * TILE - TILE * 4);
+                player.stunned = false;
+                player.stunnedTimer = 0;
+                player.beingSucked = false;
+                player.suckTarget = null;
+                player.suckTimer = 0;
+                player.animTimer = 0;
+                player.animFrame = 0;
+                onTree = false;
+                treeCooldown = 0;
+            }
+
+            // ── Helper Functions ──────────────────────
+            function dist(a, b) { return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2); }
+
+            function tileAt(wx, wy) {
+                const tx = Math.floor(wx / TILE);
+                const ty = Math.floor(wy / TILE);
+                if (tx < 0 || ty < 0 || tx >= mapW || ty >= mapH) return 'wall';
+                for (const t of trees) { if (t.tx === tx && t.ty === ty) return 'tree'; }
+                return 'grass';
+            }
+
+            function isTreeAt(tx, ty) {
+                for (const t of trees) { if (t.tx === tx && t.ty === ty) return t; }
+                return null;
+            }
+
+            function randomMapPos(margin) {
+                const m = margin || 2;
+                return {
+                    x: (m + Math.random() * (mapW - m * 2)) * TILE,
+                    y: (m + Math.random() * (mapH - m * 2)) * TILE,
+                    tx: 0,
+                    ty: 0
+                };
+            }
+
+            function posToTile(p) { return { tx: Math.floor(p.x / TILE), ty: Math.floor(p.y / TILE) }; }
+
+            function randomNearTree() {
+                const t = trees[Math.floor(Math.random() * trees.length)];
+                return { x: (t.tx + 0.5) * TILE, y: (t.ty + 0.5) * TILE };
+            }
+
+            // ── Map Generation ────────────────────────
+            function generateMap() {
+                mapW = 28 + round * 4;
+                mapH = 20 + round * 3;
+                torchPartsNeeded = 3 + round;
+                torchPartsCollected = 0;
+                bigTorchActive = false;
+                bigTorchLit = false;
+                bigTorchX = Math.floor(mapW / 2) * TILE + TILE / 2;
+                bigTorchY = Math.floor(mapH / 2) * TILE + TILE / 2;
+                trees = [];
+                torchParts = [];
+                const numTrees = Math.floor(mapW * mapH / 42);
+                const attempts = numTrees * 8;
+                for (let i = 0; i < attempts && trees.length < numTrees; i++) {
+                    const tx = 2 + Math.floor(Math.random() * (mapW - 4));
+                    const ty = 2 + Math.floor(Math.random() * (mapH - 4));
+                    if (isTreeAt(tx, ty)) continue;
+                    const cx = Math.floor(mapW / 2);
+                    const cy = Math.floor(mapH / 2);
+                    if (Math.abs(tx - cx) < 2 && Math.abs(ty - cy) < 2) continue;
+                    let tooClose = false;
+                    for (const t of trees) {
+                        if (Math.abs(t.tx - tx) < 2 && Math.abs(t.ty - ty) < 2) { tooClose = true; break; }
+                    }
+                    if (!tooClose) trees.push({ tx, ty });
+                }
+                resetPlayer();
+                for (let i = 0; i < torchPartsNeeded; i++) {
+                    let pos;
+                    let ok = false;
+                    let tries = 0;
+                    while (!ok && tries < 200) {
+                        pos = randomMapPos(3);
+                        const pt = posToTile(pos);
+                        if (isTreeAt(pt.tx, pt.ty)) { tries++; continue; }
+                        if (dist(pos, player) < TILE * 5) { tries++; continue; }
+                        if (dist(pos, { x: bigTorchX, y: bigTorchY }) < TILE * 3) { tries++; continue; }
+                        ok = true;
+                    }
+                    if (ok) torchParts.push({ x: pos.x, y: pos.y, collected: false, glow: 0 });
+                }
+                for (const m of monsters) {
+                    if (m.type === 'wolf' && m.state === 'sleeping') {
+                        const p = randomMapPos(3);
+                        m.x = p.x;
+                        m.y = p.y;
+                    }
+                }
+            }
+
+            function resetAllMonsters() {
+                for (const m of monsters) {
+                    m.state = m.type === 'wolf' ? 'sleeping' : (m.type === 'bush' ? 'hidden' : 'lurking');
+                    m.cooldown = 0;
+                    m.alerted = false;
+                    m.dashDir = null;
+                    const p = randomMapPos(3);
+                    m.x = p.x;
+                    m.y = p.y;
+                    if (m.type === 'bush') {
+                        m.placedBushes = [];
+                        m.moveTimer = 10 + Math.random() * 20;
+                    }
+                    if (m.type === 'bird') { m.wanderAngle = Math.random() * Math.PI * 2;
+                        m.wanderTimer = 0; }
+                    if (m.type === 'frog') {
+                        m.bounceTimer = 1 + Math.random() * 3;
+                        m.airborne = false;
+                        m.shockwave = null;
+                        m.sucking = false;
+                        m.suckTimer = 0;
+                        m.landX = m.x;
+                        m.landY = m.y;
+                    }
+                    if (m.type === 'lion') { m.dashCooldown = 1 + Math.random() * 3;
+                        m.telegraphTimer = 0;
+                        m.dashVector = null; }
+                    if (m.type === 'giraffe') { m.wanderAngle = Math.random() * Math.PI * 2;
+                        m.wanderTimer = 0; }
+                }
+            }
+
+            function spawnMonster(typeId) {
+                const def = allMonsterDefs.find(d => d.id === typeId);
+                if (!def) return;
+                const m = {
+                    type: typeId,
+                    name: def.name,
+                    x: 0,
+                    y: 0,
+                    state: typeId === 'wolf' ? 'sleeping' : (typeId === 'bush' ? 'hidden' : 'lurking'),
+                    cooldown: 0,
+                    alerted: false,
+                    animTimer: 0,
+                    animFrame: 0,
+                    facing: 0,
+                    wanderAngle: Math.random() * Math.PI * 2,
+                    wanderTimer: 0,
+                    speed: 0,
+                    detectionRange: 0,
+                    dashDir: null,
+                    dashCooldown: 0,
+                    telegraphTimer: 0,
+                    dashVector: null,
+                    bounceTimer: 1 + Math.random() * 3,
+                    airborne: false,
+                    airProgress: 0,
+                    bounceFromX: 0,
+                    bounceFromY: 0,
+                    bounceToX: 0,
+                    bounceToY: 0,
+                    shockwave: null,
+                    sucking: false,
+                    suckTimer: 0,
+                    landX: 0,
+                    landY: 0,
+                    moveTimer: 10 + Math.random() * 20,
+                    placedBushes: [],
+                    lastBushPlace: 0,
+                };
+                const p = randomMapPos(3);
+                m.x = p.x;
+                m.y = p.y;
+                m.landX = m.x;
+                m.landY = m.y;
+                if (typeId === 'wolf') { m.detectionRange = 140;
+                    m.speed = player.speed; }
+                if (typeId === 'giraffe') { m.detectionRange = 130;
+                    m.speed = player.speed * 0.85; }
+                if (typeId === 'bird') { m.speed = 25;
+                    m.detectionRange = 0; }
+                if (typeId === 'frog') { m.speed = 0;
+                    m.detectionRange = 0;
+                    m.bounceTimer = 1 + Math.random() * 3;
+                    m.landX = m.x;
+                    m.landY = m.y; }
+                if (typeId === 'lion') { m.detectionRange = 120;
+                    m.speed = 30;
+                    m.dashCooldown = 2 + Math.random() * 4; }
+                if (typeId === 'bush') { m.speed = 0;
+                    m.moveTimer = 15 + Math.random() * 25;
+                    m.lastBushPlace = 0; }
+                monsters.push(m);
+            }
+
+            // ── Initialize Round ──────────────────────
+            function initRound() {
+                generateMap();
+                resetAllMonsters();
+                player.stunned = false;
+                player.stunnedTimer = 0;
+                player.beingSucked = false;
+                player.suckTarget = null;
+                onTree = false;
+                treeCooldown = 0;
+                gameState = 'playing';
+                bigTorchActive = false;
+                bigTorchLit = false;
+            }
+
+            function startGame() {
+                round = 1;
+                score = 0;
+                monsters = [];
+                initRound();
+            }
+
+            // ── Camera ────────────────────────────────
+            function getCamera() {
+                let cx = player.x - VW / 2;
+                let cy = player.y - VH / 2;
+                cx = Math.max(0, Math.min(cx, mapW * TILE - VW));
+                cy = Math.max(0, Math.min(cy, mapH * TILE - VH));
+                if (mapW * TILE <= VW) cx = -(VW - mapW * TILE) / 2;
+                if (mapH * TILE <= VH) cy = -(VH - mapH * TILE) / 2;
+                return { x: cx, y: cy };
+            }
+
+            function worldToScreen(wx, wy, cam) {
+                return { x: wx - cam.x, y: wy - cam.y };
+            }
+
+            function isOnScreen(wx, wy, cam) {
+                const s = worldToScreen(wx, wy, cam);
+                return s.x >= -TILE && s.y >= -TILE && s.x <= VW + TILE && s.y <= VH + TILE;
+            }
+
+            // ── Drawing Functions (on offscreen canvas) ──
+            function drawPixelChar(ctx, x, y, w, h, pixels, scale) {
+                const s = scale || 1;
+                for (let py = 0; py < h; py++) {
+                    for (let px = 0; px < w; px++) {
+                        const color = pixels[py * w + px];
+                        if (color && color !== 'transparent') {
+                            ctx.fillStyle = color;
+                            ctx.fillRect(Math.floor(x + px * s), Math.floor(y + py * s), s, s);
+                        }
+                    }
+                }
+            }
+
+            function drawZebra(ctx, x, y, frame, facing) {
+                const s = 2;
+                const w = 5;
+                const h = 8;
+                const body = [
+                    'transparent', '#ffffff', '#ffffff', '#ffffff', 'transparent',
+                    '#ffffff', '#000000', '#ffffff', '#000000', '#ffffff',
+                    '#ffffff', '#ffffff', '#000000', '#ffffff', '#ffffff',
+                    '#ffffff', '#000000', '#ffffff', '#000000', '#ffffff',
+                    '#ffffff', '#ffffff', '#ffffff', '#ffffff', '#ffffff',
+                    'transparent', '#ffffff', '#ffffff', '#ffffff', 'transparent',
+                    'transparent', '#000000', 'transparent', '#000000', 'transparent',
+                    'transparent', '#000000', 'transparent', '#000000', 'transparent',
+                ];
+                const legOffset = frame === 0 ? 0 : 1;
+                const pixels = [...body];
+                if (legOffset > 0 && frame === 1) {
+                    pixels[30] = 'transparent';
+                    pixels[31] = '#000000';
+                    pixels[32] = '#000000';
+                    pixels[33] = 'transparent';
+                    pixels[34] = 'transparent';
+                    pixels[35] = 'transparent';
+                    pixels[36] = '#000000';
+                    pixels[37] = '#000000';
+                    pixels[38] = 'transparent';
+                    pixels[39] = 'transparent';
+                }
+                drawPixelChar(ctx, x - w * s / 2, y - h * s, w, h, pixels, s);
+                if (facing < 0) {
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(Math.floor(x + 4), Math.floor(y - h * s + 2), 1, 2);
+                } else if (facing > 0) {
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(Math.floor(x - 5), Math.floor(y - h * s + 2), 1, 2);
+                }
+            }
+
+            function drawGiraffe(ctx, x, y, frame, facing) {
+                const s = 6;  // 3x bigger (was 2)
+                const w = 6;
+                const h = 14;
+                const body = [
+                    'transparent', 'transparent', '#e8b830', '#e8b830', 'transparent', 'transparent',
+                    'transparent', 'transparent', '#e8b830', '#e8b830', 'transparent', 'transparent',
+                    'transparent', '#e8b830', '#d09020', '#d09020', '#e8b830', 'transparent',
+                    'transparent', '#e8b830', '#d09020', '#d09020', '#e8b830', 'transparent',
+                    '#e8b830', '#e8b830', '#e8b830', '#e8b830', '#e8b830', '#e8b830',
+                    '#e8b830', '#c08020', '#e8b830', '#e8b830', '#c08020', '#e8b830',
+                    '#e8b830', '#e8b830', '#e8b830', '#e8b830', '#e8b830', '#e8b830',
+                    '#e8b830', '#e8b830', '#e8b830', '#e8b830', '#e8b830', '#e8b830',
+                    'transparent', '#e8b830', '#e8b830', '#e8b830', '#e8b830', 'transparent',
+                    'transparent', '#e8b830', '#e8b830', '#e8b830', '#e8b830', 'transparent',
+                    'transparent', '#c08020', 'transparent', 'transparent', '#c08020', 'transparent',
+                    'transparent', '#c08020', 'transparent', 'transparent', '#c08020', 'transparent',
+                    'transparent', '#c08020', 'transparent', 'transparent', '#c08020', 'transparent',
+                    'transparent', '#c08020', 'transparent', 'transparent', '#c08020', 'transparent',
+                ];
+                const off = frame === 0 ? 0 : 1;
+                const pxs = [...body];
+                if (off > 0) {
+                    for (let i = 11 * w; i < 14 * w; i++) {
+                        if (pxs[i] === '#c08020' && i % 2 === 0) pxs[i] = 'transparent';
+                    }
+                }
+                drawPixelChar(ctx, x - w * s / 2, y - h * s, w, h, pxs, s);
+                ctx.fillStyle = '#000';
+                ctx.fillRect(Math.floor(x - 3), Math.floor(y - h * s + 9), 2, 2);
+                ctx.fillRect(Math.floor(x + 3), Math.floor(y - h * s + 9), 2, 2);
+            }
+
+            function drawBird(ctx, x, y, frame, facing) {
+                const s = 6;  // 3x bigger (was 2)
+                const w = 5;
+                const h = 5;
+                const body = [
+                    'transparent', '#60b0e0', '#60b0e0', '#60b0e0', 'transparent',
+                    '#60b0e0', '#80d0ff', '#80d0ff', '#80d0ff', '#60b0e0',
+                    '#60b0e0', '#80d0ff', '#ffffff', '#80d0ff', '#60b0e0',
+                    'transparent', '#f0a040', '#f0a040', 'transparent', 'transparent',
+                    'transparent', '#e08030', '#e08030', 'transparent', 'transparent',
+                ];
+                const pxs = [...body];
+                if (frame === 1) { pxs[1] = '#80d0ff';
+                    pxs[3] = '#80d0ff'; } else { pxs[1] = '#60b0e0';
+                    pxs[3] = '#60b0e0'; }
+                drawPixelChar(ctx, x - w * s / 2, y - h * s, w, h, pxs, s);
+                ctx.fillStyle = '#000';
+                ctx.fillRect(Math.floor(x - 3), Math.floor(y - h * s + 9), 2, 2);
+                ctx.fillRect(Math.floor(x + 3), Math.floor(y - h * s + 9), 2, 2);
+            }
+
+            function drawFrog(ctx, x, y, frame, airborne) {
+                const s = 6;  // 3x bigger (was 2)
+                const w = 8;
+                const h = 7;
+                const scaleY = airborne ? 0.6 : 1.0;
+                const body = [
+                    'transparent', '#309030', '#50c050', '#50c050', '#50c050', '#50c050', '#309030',
+                    'transparent',
+                    '#309030', '#50c050', '#70e070', '#70e070', '#70e070', '#70e070', '#50c050', '#309030',
+                    '#309030', '#50c050', '#ffffff', '#70e070', '#70e070', '#ffffff', '#50c050', '#309030',
+                    '#309030', '#50c050', '#50c050', '#50c050', '#50c050', '#50c050', '#50c050', '#309030',
+                    '#309030', '#50c050', '#50c050', '#50c050', '#50c050', '#50c050', '#50c050', '#309030',
+                    'transparent', '#309030', '#309030', 'transparent', 'transparent', '#309030', '#309030',
+                    'transparent',
+                    'transparent', '#206020', '#206020', 'transparent', 'transparent', '#206020', '#206020',
+                    'transparent',
+                ];
+                const cy = y - h * s * scaleY;
+                drawPixelChar(ctx, x - w * s / 2, cy, w, h, body, s);
+                ctx.fillStyle = '#000';
+                const eyeY = cy + 2 * s;
+                ctx.fillRect(Math.floor(x - 6), Math.floor(eyeY), 3, 3);
+                ctx.fillRect(Math.floor(x + 9), Math.floor(eyeY), 3, 3);
+            }
+
+            function drawLion(ctx, x, y, frame, facing) {
+                const s = 6;  // 3x bigger (was 2)
+                const w = 7;
+                const h = 7;
+                const body = [
+                    'transparent', '#d09030', '#d09030', '#d09030', '#d09030', '#d09030', 'transparent',
+                    '#d09030', '#f0c040', '#f0c040', '#f0c040', '#f0c040', '#f0c040', '#d09030',
+                    '#d09030', '#f0c040', '#e0a030', '#e0a030', '#e0a030', '#f0c040', '#d09030',
+                    '#d09030', '#e0a030', '#e0a030', '#fff8e0', '#e0a030', '#e0a030', '#d09030',
+                    'transparent', '#d09030', '#e0a030', '#e0a030', '#e0a030', '#d09030', 'transparent',
+                    'transparent', '#d09030', 'transparent', '#d09030', 'transparent', '#d09030',
+                    'transparent',
+                    'transparent', '#b07020', 'transparent', 'transparent', 'transparent', '#b07020',
+                    'transparent',
+                ];
+                drawPixelChar(ctx, x - w * s / 2, y - h * s, w, h, body, s);
+                ctx.fillStyle = '#000';
+                ctx.fillRect(Math.floor(x - 6), Math.floor(y - h * s + 9), 3, 3);
+                ctx.fillRect(Math.floor(x + 6), Math.floor(y - h * s + 9), 3, 3);
+            }
+
+            function drawWolf(ctx, x, y, frame, state) {
+                const s = 6;  // 3x bigger (was 2)
+                const w = 7;
+                const h = 6;
+                if (state === 'sleeping') {
+                    const body = [
+                        'transparent', '#808090', '#808090', '#808090', '#808090', '#808090', 'transparent',
+                        '#808090', '#a0a0b0', '#a0a0b0', '#a0a0b0', '#a0a0b0', '#a0a0b0', '#808090',
+                        '#808090', '#a0a0b0', '#c0c0d0', '#c0c0d0', '#c0c0d0', '#a0a0b0', '#808090',
+                        'transparent', 'transparent', 'transparent', '#a0a0b0', '#a0a0b0', 'transparent',
+                        'transparent',
+                        'transparent', 'transparent', '#808090', '#808090', '#808090', 'transparent',
+                        'transparent',
+                        'transparent', '#606070', '#606070', 'transparent', 'transparent', 'transparent',
+                        'transparent',
+                    ];
+                    drawPixelChar(ctx, x - w * s / 2, y - h * s, w, h, body, s);
+                } else {
+                    const body = [
+                        'transparent', '#808090', '#808090', '#808090', '#808090', '#808090', 'transparent',
+                        '#808090', '#a0a0b0', '#a0a0b0', '#a0a0b0', '#a0a0b0', '#a0a0b0', '#808090',
+                        '#808090', '#a0a0b0', '#c0c0d0', '#ffffff', '#c0c0d0', '#a0a0b0', '#808090',
+                        '#808090', '#a0a0b0', '#a0a0b0', '#a0a0b0', '#a0a0b0', '#a0a0b0', '#808090',
+                        'transparent', '#808090', '#808090', '#808090', '#808090', '#808090', 'transparent',
+                        'transparent', '#606070', 'transparent', '#606070', 'transparent', '#606070',
+                        'transparent',
+                    ];
+                    drawPixelChar(ctx, x - w * s / 2, y - h * s, w, h, body, s);
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(Math.floor(x - 6), Math.floor(y - h * s + 6), 3, 3);
+                    ctx.fillRect(Math.floor(x + 6), Math.floor(y - h * s + 6), 3, 3);
+                }
+            }
+
+            function drawBush(ctx, x, y) {
+                const s = 4;  // 2x bigger (was 2)
+                const w = 6;
+                const h = 5;
+                const body = [
+                    'transparent', '#206020', '#308030', '#308030', '#206020', 'transparent',
+                    '#206020', '#40a040', '#50b050', '#50b050', '#40a040', '#206020',
+                    '#308030', '#50b050', '#ffffff', '#ffffff', '#50b050', '#308030',
+                    '#206020', '#40a040', '#308030', '#308030', '#40a040', '#206020',
+                    'transparent', '#206020', '#206020', '#206020', '#206020', 'transparent',
+                ];
+                drawPixelChar(ctx, x - w * s / 2, y - h * s, w, h, body, s);
+                ctx.fillStyle = '#000';
+                ctx.fillRect(Math.floor(x - 4), Math.floor(y - h * s + 4 * s), 2, 2);
+                ctx.fillRect(Math.floor(x + 4), Math.floor(y - h * s + 4 * s), 2, 2);
+            }
+
+            function drawSmallBush(ctx, x, y) {
+                const s = 2;  // 2x bigger (was 1)
+                const w = 4;
+                const h = 3;
+                const body = [
+                    'transparent', '#308030', '#308030', 'transparent',
+                    '#308030', '#50b050', '#50b050', '#308030',
+                    '#206020', '#308030', '#308030', '#206020',
+                ];
+                drawPixelChar(ctx, x - w * s / 2, y - h * s, w, h, body, s);
+            }
+
+            function drawTorchPart(ctx, x, y, t) {
+                const s = 2;
+                const glow = 0.5 + 0.5 * Math.sin(t * 3);
+                ctx.fillStyle = `rgba(255,180,40,${0.6+glow*0.4})`;
+                ctx.fillRect(Math.floor(x - 4), Math.floor(y - 4), 8, 8);
+                ctx.fillStyle = '#ffaa20';
+                ctx.fillRect(Math.floor(x - 2), Math.floor(y - 5), 4, 10);
+                ctx.fillStyle = '#ffdd60';
+                ctx.fillRect(Math.floor(x - 1), Math.floor(y - 6), 2, 3);
+            }
+
+            function drawBigTorch(ctx, x, y, t, lit) {
+                if (lit) {
+                    const glow = 0.5 + 0.5 * Math.sin(t * 3);
+                    ctx.fillStyle = `rgba(255,150,20,${0.5+glow*0.35})`;
+                    ctx.beginPath();
+                    ctx.arc(x, y - 4, 20, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.fillStyle = '#886644';
+                    ctx.fillRect(Math.floor(x - 5), Math.floor(y - 12), 10, 28);
+                    ctx.fillStyle = '#aa8855';
+                    ctx.fillRect(Math.floor(x - 4), Math.floor(y - 12), 8, 26);
+                    ctx.fillStyle = '#ffcc40';
+                    ctx.fillRect(Math.floor(x - 3), Math.floor(y - 18), 6, 10);
+                    ctx.fillStyle = '#ffee80';
+                    ctx.fillRect(Math.floor(x - 2), Math.floor(y - 22), 4, 8);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(Math.floor(x - 1), Math.floor(y - 25), 2, 5);
+                } else {
+                    ctx.fillStyle = 'rgba(255,150,20,0.2)';
+                    ctx.beginPath();
+                    ctx.arc(x, y - 4, 18, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.fillStyle = '#886644';
+                    ctx.fillRect(Math.floor(x - 5), Math.floor(y - 12), 10, 28);
+                    ctx.fillStyle = '#aa8855';
+                    ctx.fillRect(Math.floor(x - 4), Math.floor(y - 12), 8, 26);
+                    ctx.fillStyle = '#776644';
+                    ctx.fillRect(Math.floor(x - 3), Math.floor(y - 14), 6, 4);
+                    ctx.fillStyle = '#998866';
+                    ctx.fillRect(Math.floor(x - 2), Math.floor(y - 16), 4, 3);
+                }
+            }
+
+            function drawMiniTorch(ctx, x, y, t, facing) {
+                const tx = facing > 0 ? Math.floor(x + 3) : Math.floor(x - 10);
+                const ty = Math.floor(y - 16);
+                const flicker = Math.sin(t * 22 + x * 0.3) * 1.5;
+                // Outer glow
+                ctx.fillStyle = 'rgba(255,150,20,0.5)';
+                ctx.fillRect(tx - 2, ty + Math.floor(flicker) - 2, 8, 9);
+                // Flame body
+                ctx.fillStyle = '#ff6600';
+                ctx.fillRect(tx, ty + Math.floor(flicker), 4, 6);
+                ctx.fillStyle = '#ffaa00';
+                ctx.fillRect(tx + 1, ty - 1 + Math.floor(flicker), 2, 4);
+                ctx.fillStyle = '#ffff88';
+                ctx.fillRect(tx + 1, ty - 3 + Math.floor(flicker), 2, 3);
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(tx + 2, ty - 4 + Math.floor(flicker), 1, 2);
+            }
+
+            function drawTree(ctx, x, y, t) {
+                const sway = Math.sin(t * 0.8 + x * 0.05) * 1;
+                ctx.fillStyle = '#3d2817';
+                ctx.fillRect(Math.floor(x - 2 + sway), Math.floor(y - 4), 4, 16);
+                ctx.fillStyle = '#1a5c1a';
+                ctx.beginPath();
+                ctx.arc(x + sway, y - 6, 8, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#1f6e1f';
+                ctx.beginPath();
+                ctx.arc(x + sway - 2, y - 9, 6, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#248024';
+                ctx.beginPath();
+                ctx.arc(x + sway + 2, y - 8, 5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // ── Render ──────────────────────────────────
+            function render(time) {
+                const t = time / 1000;
+                offCtx.clearRect(0, 0, VW, VH);
+                const cam = getCamera();
+                const shakeX = shakeTimer > 0 ? (Math.random() - 0.5) * shakeIntensity * 6 : 0;
+                const shakeY = shakeTimer > 0 ? (Math.random() - 0.5) * shakeIntensity * 6 : 0;
+                const cx = cam.x + shakeX;
+                const cy = cam.y + shakeY;
+
+                // Ground
+                offCtx.fillStyle = '#1a2a10';
+                offCtx.fillRect(0, 0, VW, VH);
+                const startTX = Math.floor(cx / TILE);
+                const startTY = Math.floor(cy / TILE);
+                const endTX = Math.ceil((cx + VW) / TILE);
+                const endTY = Math.ceil((cy + VH) / TILE);
+                for (let ty = startTY; ty <= endTY; ty++) {
+                    for (let tx = startTX; tx <= endTX; tx++) {
+                        if (tx < 0 || ty < 0 || tx >= mapW || ty >= mapH) continue;
+                        const sx = tx * TILE - cx;
+                        const sy = ty * TILE - cy;
+                        const grassShade = ((tx + ty) % 2 === 0) ? '#1f3015' : '#1a2a10';
+                        offCtx.fillStyle = grassShade;
+                        offCtx.fillRect(Math.floor(sx), Math.floor(sy), TILE, TILE);
+                        if ((tx + ty * 7) % 13 === 0) {
+                            offCtx.fillStyle = '#253818';
+                            offCtx.fillRect(Math.floor(sx + 5), Math.floor(sy + 5), 3, 3);
+                        }
+                    }
+                }
+
+                // Trees
+                for (const tree of trees) {
+                    const sx = tree.tx * TILE + TILE / 2 - cx;
+                    const sy = tree.ty * TILE + TILE / 2 - cy;
+                    if (sx > -TILE && sx < VW + TILE && sy > -TILE && sy < VH + TILE) {
+                        drawTree(offCtx, sx, sy, t);
+                    }
+                }
+
+                // Small bushes (traps)
+                for (const m of monsters) {
+                    if (m.type === 'bush' && m.placedBushes) {
+                        for (const pb of m.placedBushes) {
+                            const sx = pb.x - cx;
+                            const sy = pb.y - cy;
+                            if (sx > -20 && sx < VW + 20 && sy > -20 && sy < VH + 20) {
+                                drawSmallBush(offCtx, sx, sy);
+                            }
+                        }
+                    }
+                }
+
+                // Torch parts
+                for (const tp of torchParts) {
+                    if (tp.collected) continue;
+                    const sx = tp.x - cx;
+                    const sy = tp.y - cy;
+                    if (sx > -10 && sx < VW + 10 && sy > -10 && sy < VH + 10) {
+                        drawTorchPart(offCtx, sx, sy, t);
+                    }
+                }
+
+                // Big torch
+                if (bigTorchActive) {
+                    const sx = bigTorchX - cx;
+                    const sy = bigTorchY - cy;
+                    drawBigTorch(offCtx, sx, sy, t, bigTorchLit);
+                    if (!bigTorchLit) {
+                        offCtx.fillStyle = '#ffdd80';
+                        offCtx.font = '5px "Press Start 2P"';
+                        offCtx.textAlign = 'center';
+                        const bob = Math.sin(t * 3) * 2;
+                        offCtx.fillText('PRESS E', Math.floor(sx), Math.floor(sy - 26 + bob));
+                    }
+                }
+
+                // Monsters
+                for (const m of monsters) {
+                    const sx = m.x - cx;
+                    const sy = m.y - cy;
+                    if (sx > -60 && sx < VW + 60 && sy > -60 && sy < VH + 60) {
+                        const facing = m.facing || 0;
+                        if (m.type === 'giraffe') drawGiraffe(offCtx, sx, sy, m.animFrame, facing);
+                        if (m.type === 'bird') drawBird(offCtx, sx, sy, m.animFrame, facing);
+                        if (m.type === 'frog') drawFrog(offCtx, sx, sy, m.animFrame, m.airborne);
+                        if (m.type === 'lion') drawLion(offCtx, sx, sy, m.animFrame, facing);
+                        if (m.type === 'wolf') drawWolf(offCtx, sx, sy, m.animFrame, m.state);
+                        if (m.type === 'bush') drawBush(offCtx, sx, sy);
+
+                        // Telegraph indicator for lion
+                        if (m.type === 'lion' && m.telegraphTimer > 0) {
+                            offCtx.fillStyle = 'rgba(255,60,60,0.6)';
+                            offCtx.fillRect(Math.floor(sx - 16), Math.floor(sy - 36), 32, 6);
+                            offCtx.fillStyle = '#ff0000';
+                            const barW = (m.telegraphTimer / 0.3) * 28;
+                            offCtx.fillRect(Math.floor(sx - 14), Math.floor(sy - 34), Math.floor(barW), 3);
+                        }
+
+                        // Shockwave
+                        if (m.type === 'frog' && m.shockwave) {
+                            const sw = m.shockwave;
+                            offCtx.strokeStyle = `rgba(200,255,200,${1-sw.progress})`;
+                            offCtx.lineWidth = 4;
+                            offCtx.beginPath();
+                            offCtx.arc(sx, sy, sw.radius, 0, Math.PI * 2);
+                            offCtx.stroke();
+                            offCtx.lineWidth = 1;
+                        }
+
+                        // Frog sucking indicator
+                        if (m.type === 'frog' && m.sucking) {
+                            offCtx.fillStyle = 'rgba(255,255,200,0.3)';
+                            offCtx.beginPath();
+                            offCtx.arc(sx, sy, 80, 0, Math.PI * 2);
+                            offCtx.fill();
+                            offCtx.fillStyle = '#000';
+                            offCtx.fillRect(Math.floor(sx - 9), Math.floor(sy - 24), 18, 18);
+                            offCtx.fillStyle = '#ff4040';
+                            offCtx.fillRect(Math.floor(sx - 6), Math.floor(sy - 21), 12, 12);
+                        }
+                    }
+                }
+
+                // Player
+                const psx = player.x - cx;
+                const psy = player.y - cy;
+                if (onTree) {
+                    const treeHere = isTreeAt(Math.floor(player.x / TILE), Math.floor(player.y / TILE));
+                    const ty = treeHere ? treeHere.ty * TILE + TILE / 2 - cy : psy;
+                    const tx = treeHere ? treeHere.tx * TILE + TILE / 2 - cx : psx;
+                    drawZebra(offCtx, tx, ty - 12, player.animFrame, player.facing);
+                    drawMiniTorch(offCtx, tx, ty - 12, t, player.facing);
+                } else {
+                    drawZebra(offCtx, psx, psy, player.animFrame, player.facing);
+                    drawMiniTorch(offCtx, psx, psy, t, player.facing);
+                }
+                if (player.stunned) {
+                    offCtx.fillStyle = '#ffff00';
+                    offCtx.font = '6px "Press Start 2P"';
+                    offCtx.textAlign = 'center';
+                    offCtx.fillText('STUN', Math.floor(psx), Math.floor(psy - 18));
+                }
+
+                // ── Enhanced Darkness Overlay ──────────
+                // Gradual radial darkness: brighter near player, darker further away
+                const darkCanvas = document.createElement('canvas');
+                darkCanvas.width = VW;
+                darkCanvas.height = VH;
+                const darkCtx = darkCanvas.getContext('2d');
+
+                // Base darkness
+                darkCtx.fillStyle = 'rgba(5,8,3,0.94)';
+                darkCtx.fillRect(0, 0, VW, VH);
+
+                // cutLight: creates a radial gradient bright in center, dark at edges
+                function cutLight(dctx, lx, ly, radius, alpha) {
+                    const grad = dctx.createRadialGradient(lx, ly, 0, lx, ly, radius);
+                    // Center: opaque (erases darkness fully) → Edge: transparent (preserves darkness)
+                    grad.addColorStop(0, `rgba(0,0,0,${alpha})`);
+                    grad.addColorStop(0.3, `rgba(0,0,0,${alpha * 0.75})`);
+                    grad.addColorStop(0.6, `rgba(0,0,0,${alpha * 0.35})`);
+                    grad.addColorStop(0.85, `rgba(0,0,0,${alpha * 0.08})`);
+                    grad.addColorStop(1, 'rgba(0,0,0,0)');
+                    dctx.fillStyle = grad;
+                    dctx.globalCompositeOperation = 'destination-out';
+                    dctx.fillRect(lx - radius, ly - radius, radius * 2, radius * 2);
+                    dctx.globalCompositeOperation = 'source-over';
+                }
+
+                // Player torchlight
+                cutLight(darkCtx, psx, psy, 78, 0.94);
+
+                // Torch parts glow
+                for (const tp of torchParts) {
+                    if (tp.collected) continue;
+                    const sx = tp.x - cx;
+                    const sy = tp.y - cy;
+                    if (sx > -20 && sx < VW + 20 && sy > -20 && sy < VH + 20) {
+                        cutLight(darkCtx, sx, sy, 28, 0.7);
+                    }
+                }
+
+                // Big torch glow
+                if (bigTorchActive && bigTorchLit) {
+                    const sx = bigTorchX - cx;
+                    const sy = bigTorchY - cy;
+                    cutLight(darkCtx, sx, sy, 80, 0.92);
+                } else if (bigTorchActive && !bigTorchLit) {
+                    const sx = bigTorchX - cx;
+                    const sy = bigTorchY - cy;
+                    cutLight(darkCtx, sx, sy, 30, 0.5);
+                }
+
+                offCtx.drawImage(darkCanvas, 0, 0);
+
+                // HUD
+                offCtx.fillStyle = '#ffdd80';
+                offCtx.font = '5px "Press Start 2P"';
+                offCtx.textAlign = 'left';
+                offCtx.fillText(`ROUND ${round}`, 4, 10);
+                offCtx.fillText(`PARTS: ${torchPartsCollected}/${torchPartsNeeded}`, 4, 18);
+                offCtx.textAlign = 'right';
+                offCtx.fillText(`SCORE: ${score}`, VW - 4, 10);
+
+                // Tree prompt — Q key
+                if (!onTree && treeCooldown <= 0) {
+                    const ptx = Math.floor(player.x / TILE);
+                    const pty = Math.floor(player.y / TILE);
+                    let nearTree = false;
+                    for (let dy = -1; dy <= 1; dy++) {
+                        for (let dx = -1; dx <= 1; dx++) {
+                            if (isTreeAt(ptx + dx, pty + dy)) { nearTree = true; break; }
+                        }
+                        if (nearTree) break;
+                    }
+                    if (nearTree) {
+                        offCtx.fillStyle = '#ffffff';
+                        offCtx.font = '4px "Press Start 2P"';
+                        offCtx.textAlign = 'center';
+                        offCtx.fillText('Q:CLIMB', Math.floor(psx), Math.floor(psy - 18));
+                    }
+                }
+                if (onTree) {
+                    offCtx.fillStyle = '#ffffff';
+                    offCtx.font = '4px "Press Start 2P"';
+                    offCtx.textAlign = 'center';
+                    offCtx.fillText('Q:DOWN', Math.floor(psx), Math.floor(psy - 22));
+                }
+
+                // Big torch interaction prompt — E key
+                if (bigTorchActive && !bigTorchLit && dist(player, { x: bigTorchX, y: bigTorchY }) < TILE * 2.5 && !onTree) {
+                    offCtx.fillStyle = '#ffdd80';
+                    offCtx.font = '5px "Press Start 2P"';
+                    offCtx.textAlign = 'center';
+                    const btx = bigTorchX - cx;
+                    const bty = bigTorchY - cy;
+                    offCtx.fillText('PRESS E TO', Math.floor(btx), Math.floor(bty - 30));
+                    offCtx.fillText('LIGHT TORCH', Math.floor(btx), Math.floor(bty - 24));
+                }
+
+                // Scale to display
+                displayCtx.clearRect(0, 0, displayCanvas.width, displayCanvas.height);
+                displayCtx.imageSmoothingEnabled = false;
+                const scale = Math.min(displayCanvas.width / VW, displayCanvas.height / VH);
+                const drawW = VW * scale;
+                const drawH = VH * scale;
+                const drawX = (displayCanvas.width - drawW) / 2;
+                const drawY = (displayCanvas.height - drawH) / 2;
+                displayCtx.fillStyle = '#000';
+                displayCtx.fillRect(0, 0, displayCanvas.width, displayCanvas.height);
+                displayCtx.drawImage(offCanvas, drawX, drawY, drawW, drawH);
+
+                // Monster selection overlay
+                if (gameState === 'monsterSelect') {
+                    displayCtx.fillStyle = 'rgba(0,0,0,0.75)';
+                    displayCtx.fillRect(0, 0, displayCanvas.width, displayCanvas.height);
+                    displayCtx.fillStyle = '#ffcc40';
+                    displayCtx.font = `${Math.floor(scale*5.5)}px "Press Start 2P"`;
+                    displayCtx.textAlign = 'center';
+                    displayCtx.fillText('CHOOSE A MONSTER', displayCanvas.width / 2, drawY + scale * 25);
+                    displayCtx.fillText('TO UNLEASH', displayCanvas.width / 2, drawY + scale * 34);
+
+                    const cardW = scale * 70;
+                    const cardH = scale * 80;
+                    const gap = scale * 8;
+                    const totalW = 2 * cardW + gap;
+                    const totalH = 2 * cardH + gap;
+                    const startX = (displayCanvas.width - totalW) / 2;
+                    const startY = drawY + scale * 45;
+
+                    for (let i = 0; i < selectionOptions.length; i++) {
+                        const col = i % 2;
+                        const row = Math.floor(i / 2);
+                        const cx2 = startX + col * (cardW + gap);
+                        const cy2 = startY + row * (cardH + gap);
+
+                        displayCtx.fillStyle = '#2a1a08';
+                        displayCtx.fillRect(cx2, cy2, cardW, cardH);
+                        displayCtx.fillStyle = '#5a3a18';
+                        displayCtx.fillRect(cx2 + 2, cy2 + 2, cardW - 4, cardH - 4);
+                        displayCtx.fillStyle = '#3a2a10';
+                        displayCtx.fillRect(cx2 + 4, cy2 + 4, cardW - 8, cardH - 8);
+
+                        const opt = selectionOptions[i];
+                        displayCtx.fillStyle = opt.iconColor;
+                        displayCtx.fillRect(cx2 + cardW / 2 - scale * 10, cy2 + scale * 12, scale * 20, scale *
+                            20);
+                        displayCtx.fillStyle = '#fff';
+                        displayCtx.font = `${Math.floor(scale*4)}px "Press Start 2P"`;
+                        displayCtx.textAlign = 'center';
+                        displayCtx.fillText(opt.name, cx2 + cardW / 2, cy2 + scale * 44);
+                        displayCtx.fillStyle = '#ccc';
+                        displayCtx.font = `${Math.floor(scale*3)}px "Press Start 2P"`;
+                        displayCtx.fillText(opt.desc, cx2 + cardW / 2, cy2 + scale * 56);
+                    }
+                }
+
+                // Game Over overlay
+                if (gameState === 'gameOver') {
+                    displayCtx.fillStyle = 'rgba(0,0,0,0.8)';
+                    displayCtx.fillRect(0, 0, displayCanvas.width, displayCanvas.height);
+                    displayCtx.fillStyle = '#ff4444';
+                    displayCtx.font = `${Math.floor(scale*7)}px "Press Start 2P"`;
+                    displayCtx.textAlign = 'center';
+                    displayCtx.fillText('GAME OVER', displayCanvas.width / 2, displayCanvas.height / 2 - scale * 20);
+                    displayCtx.fillStyle = '#ffdd80';
+                    displayCtx.font = `${Math.floor(scale*5)}px "Press Start 2P"`;
+                    displayCtx.fillText(deathMessage, displayCanvas.width / 2, displayCanvas.height / 2 + scale * 10);
+                    displayCtx.fillText(`ROUND ${round}`, displayCanvas.width / 2, displayCanvas.height / 2 + scale *
+                        25);
+                    displayCtx.fillText(`SCORE: ${score}`, displayCanvas.width / 2, displayCanvas.height / 2 + scale *
+                        38);
+                    displayCtx.fillStyle = '#fff';
+                    displayCtx.font = `${Math.floor(scale*4)}px "Press Start 2P"`;
+                    const alpha2 = 0.5 + 0.5 * Math.sin(time / 400);
+                    displayCtx.fillStyle = `rgba(255,255,255,${alpha2})`;
+                    displayCtx.fillText('CLICK TO RESTART', displayCanvas.width / 2, displayCanvas.height / 2 + scale *
+                        60);
+                }
+
+                // Mobile D-pad hint
+                if (touchActive || ('ontouchstart' in window)) {
+                    const dpadCX = drawX + scale * 30;
+                    const dpadCY = drawY + drawH - scale * 35;
+                    displayCtx.fillStyle = 'rgba(255,255,255,0.2)';
+                    displayCtx.beginPath();
+                    displayCtx.arc(dpadCX, dpadCY, scale * 22, 0, Math.PI * 2);
+                    displayCtx.fill();
+                    displayCtx.fillStyle = 'rgba(255,255,255,0.4)';
+                    displayCtx.beginPath();
+                    displayCtx.arc(dpadCX + touchDir.x * scale * 10, dpadCY + touchDir.y * scale * 10, scale * 8, 0, Math
+                        .PI * 2);
+                    displayCtx.fill();
+                }
+            }
+
+            // ── Update ──────────────────────────────────
+            function update(dt) {
+                if (gameState !== 'playing') return;
+                if (gameOverTimer > 0) { gameOverTimer -= dt; if (gameOverTimer <= 0) { gameState = 'gameOver'; } return; }
+
+                const realDt = Math.min(dt, 0.1);
+
+                if (shakeTimer > 0) shakeTimer -= realDt;
+                if (treeCooldown > 0) treeCooldown -= realDt;
+
+                // Stun
+                if (player.stunned) {
+                    player.stunnedTimer -= realDt;
+                    if (player.stunnedTimer <= 0) {
+                        player.stunned = false;
+                        player.stunnedTimer = 0;
+                    }
+                }
+
+                // Suck mechanic
+                if (player.beingSucked && player.suckTarget && !onTree) {
+                    player.suckTimer -= realDt;
+                    if (player.suckTimer <= 0 || !player.suckTarget.sucking) {
+                        player.beingSucked = false;
+                        player.suckTarget = null;
+                    } else {
+                        const dx = player.suckTarget.x - player.x;
+                        const dy = player.suckTarget.y - player.y;
+                        const d = Math.sqrt(dx * dx + dy * dy) || 1;
+                        const suckSpeed = 90;
+                        player.x += (dx / d) * suckSpeed * realDt;
+                        player.y += (dy / d) * suckSpeed * realDt;
+                        if (d < 8) {
+                            killPlayer('Sucked in by Frog!');
+                            return;
+                        }
+                    }
+                }
+
+                // Player movement — trees are passable
+                if (!player.stunned && !player.beingSucked) {
+                    let speedMult = 1.0;
+                    if (!onTree) {
+                        for (const m of monsters) {
+                            if (m.type === 'bird' && dist(player, m) < 55) {
+                                speedMult = 0.6;
+                                break;
+                            }
+                        }
+                    }
+                    const input = getInputDir();
+                    let moveX = input.x * player.speed * speedMult * realDt;
+                    let moveY = input.y * player.speed * speedMult * realDt;
+
+                    if (moveX !== 0 || moveY !== 0) {
+                        player.animTimer += realDt;
+                        if (player.animTimer > 0.15) { player.animTimer = 0;
+                            player.animFrame = 1 - player.animFrame; }
+                        if (input.x !== 0) player.facing = input.x > 0 ? 1 : -1;
+                    } else {
+                        player.animFrame = 0;
+                        player.animTimer = 0;
+                    }
+
+                    // Trees are passable — no collision checks
+                    let newX = player.x + moveX;
+                    let newY = player.y + moveY;
+                    newX = Math.max(TILE / 2, Math.min(mapW * TILE - TILE / 2, newX));
+                    newY = Math.max(TILE / 2, Math.min(mapH * TILE - TILE / 2, newY));
+                    player.x = newX;
+                    player.y = newY;
+                } else if (player.stunned) {
+                    player.animFrame = 0;
+                }
+
+                // ── Interaction handling ────────
+                const interactNow = getInteractionPressed();
+                const treeInteractNow = getTreeInteractionPressed();
+                let interactConsumed = false;
+                let treeInteractConsumed = false;
+
+                // 1. Big torch lighting — E / Space / F
+                if (interactNow && !prevInteract && bigTorchActive && !bigTorchLit &&
+                    dist(player, { x: bigTorchX, y: bigTorchY }) < TILE * 2.5 && !onTree && !player.stunned) {
+                    bigTorchLit = true;
+                    interactConsumed = true;
+                    // Wake up wolves
+                    for (const m of monsters) {
+                        if (m.type === 'wolf' && m.state === 'sleeping') {
+                            m.state = 'lurking';
+                            m.speed = player.speed;
+                        }
+                    }
+                    // Open monster selection
+                    openMonsterSelection();
+                    prevInteract = interactNow;
+                    prevTreeInteract = treeInteractNow;
+                    return;
+                }
+
+                // 2. Tree interaction — Q key
+                if (treeInteractNow && !prevTreeInteract && !treeInteractConsumed && treeCooldown <= 0 && !player.stunned) {
+                    if (onTree) {
+                        onTree = false;
+                        treeCooldown = 0.3;
+                        treeInteractConsumed = true;
+                    } else {
+                        const ptx = Math.floor(player.x / TILE);
+                        const pty = Math.floor(player.y / TILE);
+                        let foundTree = false;
+                        for (let dy = -1; dy <= 1; dy++) {
+                            for (let dx = -1; dx <= 1; dx++) {
+                                if (isTreeAt(ptx + dx, pty + dy)) {
+                                    player.x = (ptx + dx) * TILE + TILE / 2;
+                                    player.y = (pty + dy) * TILE + TILE / 2;
+                                    foundTree = true;
+                                    break;
+                                }
+                            }
+                            if (foundTree) break;
+                        }
+                        if (foundTree) {
+                            onTree = true;
+                            treeCooldown = 0.3;
+                            player.beingSucked = false;
+                            player.suckTarget = null;
+                            player.stunned = false;
+                            treeInteractConsumed = true;
+                        }
+                    }
+                }
+                prevInteract = interactNow;
+                prevTreeInteract = treeInteractNow;
+
+                // Collect torch parts
+                if (!onTree) {
+                    for (const tp of torchParts) {
+                        if (tp.collected) continue;
+                        if (dist(player, tp) < TILE * 0.8) {
+                            tp.collected = true;
+                            torchPartsCollected++;
+                            score += 10;
+                        }
+                    }
+                }
+
+                // Activate big torch (make it appear) when all parts collected
+                if (torchPartsCollected >= torchPartsNeeded && !bigTorchActive) {
+                    bigTorchActive = true;
+                    bigTorchLit = false;
+                }
+
+                // Check small bush traps
+                if (!onTree && !player.stunned) {
+                    for (const m of monsters) {
+                        if (m.type === 'bush' && m.placedBushes) {
+                            for (const pb of m.placedBushes) {
+                                if (dist(player, pb) < TILE * 1.4) {
+                                    player.stunned = true;
+                                    player.stunnedTimer = 2.3;
+                                    player.beingSucked = false;
+                                    player.suckTarget = null;
+                                    m.placedBushes = m.placedBushes.filter(b => b !== pb);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Update monsters
+                const cam = getCamera();
+                for (const m of monsters) {
+                    updateMonster(m, realDt, cam);
+                }
+
+                // Check monster collisions
+                if (!player.stunned && gameOverTimer <= 0) {
+                    for (const m of monsters) {
+                        if (m.type === 'bird') continue;
+                        if (m.type === 'bush') continue;
+                        if (m.type === 'frog' && m.airborne) continue;
+                        if (m.type === 'wolf' && m.state === 'sleeping') continue;
+                        if (m.type === 'frog' && m.sucking) continue;
+
+                        // Giraffe: can kill player even on tree if already chasing
+                        if (m.type === 'giraffe' && m.state === 'chasing') {
+                            const d = dist(player, m);
+                            if (d < 25) {
+                                killPlayer('Caught by Giraffe!');
+                                return;
+                            }
+                            continue;
+                        }
+
+                        // Other monsters: only hit if player not on tree
+                        if (onTree) continue;
+
+                        const d = dist(player, m);
+                        const hitDist = m.type === 'frog' ? 30 : m.type === 'giraffe' ? 25 : m.type === 'lion' ? 25 :
+                            m.type === 'wolf' ? 25 : 20;
+                        if (d < hitDist) {
+                            if (m.type === 'lion' && m.state === 'dashing') {
+                                killPlayer('Pounced by Lion!');
+                                return;
+                            }
+                            if (m.type === 'giraffe') { killPlayer('Caught by Giraffe!'); return; }
+                            if (m.type === 'wolf' && m.state === 'chasing') { killPlayer('Caught by Wolf!'); return; }
+                            if (m.type === 'wolf' && m.state === 'lurking' && m.alerted) { killPlayer(
+                                    'Caught by Wolf!'); return; }
+                        }
+                    }
+                }
+            }
+
+            function killPlayer(msg) {
+                deathMessage = msg;
+                gameOverTimer = 0.6;
+                shakeTimer = 0.5;
+                shakeIntensity = 1;
+                player.stunned = true;
+                player.stunnedTimer = 1;
+            }
+
+            function openMonsterSelection() {
+                // Pick 4 random monsters from all types — allow duplicates
+                const shuffled = [...allMonsterDefs].sort(() => Math.random() - 0.5);
+                const picks = shuffled.slice(0, Math.min(4, shuffled.length));
+                selectionOptions = picks.map(d => ({ id: d.id, name: d.name, desc: d.desc, iconColor: d.iconColor }));
+                if (selectionOptions.length === 0) {
+                    selectionOptions = allMonsterDefs.slice(0, 4).map(d => ({ id: d.id, name: d.name, desc: d.desc,
+                        iconColor: d.iconColor }));
+                }
+                gameState = 'monsterSelect';
+            }
+
+            function selectMonster(index) {
+                if (index < 0 || index >= selectionOptions.length) return;
+                const chosen = selectionOptions[index];
+                spawnMonster(chosen.id);
+                round++;
+                score += 25;
+                initRound();
+            }
+
+            function updateMonster(m, dt, cam) {
+                m.animTimer += dt;
+                if (m.animTimer > 0.2) { m.animTimer = 0;
+                    m.animFrame = 1 - m.animFrame; }
+                const dToPlayer = dist(m, player);
+                const onScreen = isOnScreen(m.x, m.y, cam);
+
+                if (m.type === 'giraffe') {
+                    if (m.state === 'lurking') {
+                        if (dToPlayer < m.detectionRange && !onTree) {
+                            m.state = 'chasing';
+                            m.alerted = true;
+                        } else {
+                            m.wanderTimer -= dt;
+                            if (m.wanderTimer <= 0) {
+                                m.wanderAngle += (Math.random() - 0.5) * 1.5;
+                                m.wanderTimer = 1 + Math.random() * 2;
+                            }
+                            const ws = m.speed * 0.5;
+                            const wx = Math.cos(m.wanderAngle) * ws * dt;
+                            const wy = Math.sin(m.wanderAngle) * ws * dt;
+                            moveMonster(m, wx, wy);
+                        }
+                    }
+                    if (m.state === 'chasing') {
+                        // Giraffe keeps chasing even if player is in tree; only stops if too far
+                        if (dToPlayer > m.detectionRange * 1.6) {
+                            m.state = 'lurking';
+                            m.alerted = false;
+                        } else {
+                            const dx = player.x - m.x;
+                            const dy = player.y - m.y;
+                            const d = Math.sqrt(dx * dx + dy * dy) || 1;
+                            m.facing = dx > 0 ? 1 : -1;
+                            const mx = (dx / d) * m.speed * dt;
+                            const my = (dy / d) * m.speed * dt;
+                            moveMonster(m, mx, my);
+                        }
+                    }
+                }
+
+                if (m.type === 'bird') {
+                    m.wanderTimer -= dt;
+                    if (m.wanderTimer <= 0) {
+                        m.wanderAngle += (Math.random() - 0.5) * 2;
+                        m.wanderTimer = 1.5 + Math.random() * 3;
+                    }
+                    const ws = m.speed;
+                    const wx = Math.cos(m.wanderAngle) * ws * dt;
+                    const wy = Math.sin(m.wanderAngle) * ws * dt;
+                    moveMonster(m, wx, wy);
+                    m.facing = wx > 0 ? 1 : wx < 0 ? -1 : m.facing;
+                }
+
+                if (m.type === 'frog') {
+                    if (!m.airborne && !m.sucking) {
+                        m.bounceTimer -= dt;
+                        if (m.bounceTimer <= 0) {
+                            const angle = Math.random() * Math.PI * 2;
+                            const bdist = 40 + Math.random() * 70;
+                            m.bounceFromX = m.x;
+                            m.bounceFromY = m.y;
+                            m.bounceToX = m.x + Math.cos(angle) * bdist;
+                            m.bounceToY = m.y + Math.sin(angle) * bdist;
+                            m.bounceToX = Math.max(TILE, Math.min(mapW * TILE - TILE, m.bounceToX));
+                            m.bounceToY = Math.max(TILE, Math.min(mapH * TILE - TILE, m.bounceToY));
+                            m.airborne = true;
+                            m.airProgress = 0;
+                            m.bounceTimer = 0;
+                        }
+                    }
+                    if (m.airborne) {
+                        m.airProgress += dt / 0.5;
+                        if (m.airProgress >= 1) {
+                            m.x = m.bounceToX;
+                            m.y = m.bounceToY;
+                            m.landX = m.x;
+                            m.landY = m.y;
+                            m.airborne = false;
+                            m.bounceTimer = 2 + Math.random() * 4;
+                            if (!onTree && dist(player, m) < 35) {
+                                killPlayer('Crushed by Frog!');
+                                return;
+                            }
+                            m.shockwave = { radius: 0, progress: 0, maxRadius: 90 };
+                            shakeTimer = 0.2;
+                            shakeIntensity = 0.5;
+                        } else {
+                            const t2 = m.airProgress;
+                            m.x = m.bounceFromX + (m.bounceToX - m.bounceFromX) * t2;
+                            m.y = m.bounceFromY + (m.bounceToY - m.bounceFromY) * t2 - Math.sin(t2 * Math.PI) * 35;
+                        }
+                    }
+                    if (m.shockwave) {
+                        m.shockwave.radius += 80 * dt;
+                        m.shockwave.progress = m.shockwave.radius / m.shockwave.maxRadius;
+                        if (m.shockwave.radius >= m.shockwave.maxRadius) {
+                            m.shockwave = null;
+                        } else if (!onTree && !m.sucking) {
+                            const dSw = dist(player, m);
+                            if (dSw < m.shockwave.radius && dSw > 5) {
+                                m.sucking = true;
+                                m.suckTimer = 1.8;
+                                player.beingSucked = true;
+                                player.suckTarget = m;
+                                player.suckTimer = 1.8;
+                                player.stunned = false;
+                            }
+                        }
+                    }
+                    if (m.sucking) {
+                        m.suckTimer -= dt;
+                        if (m.suckTimer <= 0) {
+                            m.sucking = false;
+                            if (player.beingSucked && player.suckTarget === m) {
+                                player.beingSucked = false;
+                                player.suckTarget = null;
+                            }
+                        }
+                    }
+                }
+
+                if (m.type === 'lion') {
+                    if (m.state === 'lurking') {
+                        m.dashCooldown -= dt;
+                        if (dToPlayer < m.detectionRange && !onTree && m.dashCooldown <= 0) {
+                            m.state = 'telegraphing';
+                            m.telegraphTimer = 0.3;
+                            const dx = player.x - m.x;
+                            const dy = player.y - m.y;
+                            const d = Math.sqrt(dx * dx + dy * dy) || 1;
+                            m.dashVector = { x: dx / d, y: dy / d };
+                            m.facing = m.dashVector.x > 0 ? 1 : -1;
+                        } else {
+                            m.wanderTimer -= dt;
+                            if (m.wanderTimer <= 0) {
+                                m.wanderAngle += (Math.random() - 0.5) * 1.5;
+                                m.wanderTimer = 1 + Math.random() * 2;
+                            }
+                            const ws = m.speed;
+                            const wx = Math.cos(m.wanderAngle) * ws * dt;
+                            const wy = Math.sin(m.wanderAngle) * ws * dt;
+                            moveMonster(m, wx, wy);
+                        }
+                    }
+                    if (m.state === 'telegraphing') {
+                        m.telegraphTimer -= dt;
+                        if (m.telegraphTimer <= 0) {
+                            m.state = 'dashing';
+                            m.dashTimer = 0.25;
+                        }
+                    }
+                    if (m.state === 'dashing') {
+                        m.dashTimer -= dt;
+                        if (m.dashTimer <= 0) {
+                            m.state = 'lurking';
+                            m.dashCooldown = 3 + Math.random() * 5;
+                            m.dashVector = null;
+                        } else if (m.dashVector) {
+                            const dashSpeed = 280;
+                            const mx = m.dashVector.x * dashSpeed * dt;
+                            const my = m.dashVector.y * dashSpeed * dt;
+                            moveMonster(m, mx, my);
+                        }
+                    }
+                }
+
+                if (m.type === 'wolf') {
+                    if (m.state === 'sleeping') {
+                        if (bigTorchActive && bigTorchLit && torchPartsCollected >= torchPartsNeeded) {
+                            m.state = 'lurking';
+                            m.speed = player.speed;
+                        }
+                    }
+                    if (m.state === 'lurking') {
+                        if (dToPlayer < m.detectionRange && !onTree) {
+                            m.state = 'chasing';
+                            m.alerted = true;
+                            m.speed = player.speed * 2;
+                        } else {
+                            m.wanderTimer -= dt;
+                            if (m.wanderTimer <= 0) {
+                                m.wanderAngle += (Math.random() - 0.5) * 1.5;
+                                m.wanderTimer = 1 + Math.random() * 2;
+                            }
+                            const ws = m.speed * 0.5;
+                            const wx = Math.cos(m.wanderAngle) * ws * dt;
+                            const wy = Math.sin(m.wanderAngle) * ws * dt;
+                            moveMonster(m, wx, wy);
+                        }
+                    }
+                    if (m.state === 'chasing') {
+                        if (onTree || dToPlayer > m.detectionRange * 2) {
+                            m.state = 'lurking';
+                            m.alerted = false;
+                            m.speed = player.speed;
+                        } else {
+                            const dx = player.x - m.x;
+                            const dy = player.y - m.y;
+                            const d = Math.sqrt(dx * dx + dy * dy) || 1;
+                            m.facing = dx > 0 ? 1 : -1;
+                            const mx = (dx / d) * m.speed * dt;
+                            const my = (dy / d) * m.speed * dt;
+                            moveMonster(m, mx, my);
+                        }
+                    }
+                }
+
+                if (m.type === 'bush') {
+                    if (onScreen) {} else {
+                        m.moveTimer -= dt;
+                        if (m.moveTimer <= 0) {
+                            m.moveTimer = 30 + Math.random() * 20;
+                            const newPos = randomMapPos(3);
+                            m.x = newPos.x;
+                            m.y = newPos.y;
+                            const sb = { x: m.x + (Math.random() - 0.5) * TILE * 3, y: m.y + (Math.random() - 0.5) *
+                                    TILE * 3 };
+                            if (sb.x > TILE && sb.x < mapW * TILE - TILE && sb.y > TILE && sb.y < mapH * TILE - TILE) {
+                                m.placedBushes.push(sb);
+                                if (m.placedBushes.length > 6) m.placedBushes.shift();
+                            }
+                        }
+                    }
+                }
+
+                m.x = Math.max(TILE / 2, Math.min(mapW * TILE - TILE / 2, m.x));
+                m.y = Math.max(TILE / 2, Math.min(mapH * TILE - TILE / 2, m.y));
+            }
+
+            // Trees are passable — no collision
+            function moveMonster(m, dx, dy) {
+                m.x = m.x + dx;
+                m.y = m.y + dy;
+            }
+
+            // ── Handle Clicks for Monster Selection ────
+            function handleClick() {
+                if (gameState === 'gameOver' && gameOverTimer <= 0) {
+                    startGame();
+                    return;
+                }
+                if (gameState !== 'monsterSelect') return;
+
+                const scale = Math.min(displayCanvas.width / VW, displayCanvas.height / VH);
+                const drawW = VW * scale;
+                const drawH = VH * scale;
+                const drawX = (displayCanvas.width - drawW) / 2;
+                const drawY = (displayCanvas.height - drawH) / 2;
+
+                const cardW = scale * 70;
+                const cardH = scale * 80;
+                const gap = scale * 8;
+                const totalW = 2 * cardW + gap;
+                const totalH = 2 * cardH + gap;
+                const startX = (displayCanvas.width - totalW) / 2;
+                const startY = drawY + scale * 45;
+
+                const mx = mouseX / VW * displayCanvas.width;
+                const my = mouseY / VH * displayCanvas.height;
+
+                for (let i = 0; i < selectionOptions.length; i++) {
+                    const col = i % 2;
+                    const row = Math.floor(i / 2);
+                    const cx2 = startX + col * (cardW + gap);
+                    const cy2 = startY + row * (cardH + gap);
+                    if (mx >= cx2 && mx <= cx2 + cardW && my >= cy2 && my <= cy2 + cardH) {
+                        selectMonster(i);
+                        return;
+                    }
+                }
+            }
+
+            // ── Resize ──────────────────────────────────
+            function resize() {
+                displayCanvas.width = window.innerWidth;
+                displayCanvas.height = window.innerHeight;
+            }
+            window.addEventListener('resize', resize);
+            resize();
+
+            // ── Game Loop ──────────────────────────────
+            let lastTime = performance.now();
+
+            function gameLoop(time) {
+                const dt = (time - lastTime) / 1000;
+                lastTime = time;
+
+                if (mouseClicked) {
+                    handleClick();
+                    mouseClicked = false;
+                }
+
+                if (gameState === 'playing') {
+                    update(dt);
+                }
+
+                if (gameOverTimer <= 0 && gameState === 'playing' && deathMessage) {
+                    gameState = 'gameOver';
+                }
+
+                render(time);
+                requestAnimationFrame(gameLoop);
+            }
+
+            // ── Start ──────────────────────────────────
+            startGame();
+            lastTime = performance.now();
+            requestAnimationFrame(gameLoop);
+
+            console.log('🦓 Safari Torchlight ready!');
+            console.log('WASD/Arrows: Move | Q: Climb tree | E/Space: Light big torch');
+            console.log('Collect all torch parts → Big torch appears → Press E to light it → Pick a monster');
+            console.log('Rounds get harder! Survive as long as you can.');
+        })();
+    </script>
+</body>
+</html>]]>
