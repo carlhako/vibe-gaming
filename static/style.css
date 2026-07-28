@@ -2365,6 +2365,29 @@ body {
   justify-content: flex-end;
 }
 
+.modal-action-btn {
+  background: none;
+  border: 1px solid var(--accent2);
+  border-radius: 4px;
+  color: var(--accent2);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.modal-action-btn:hover {
+  background: var(--accent2);
+  color: var(--panel);
+}
+
+.modal-action-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+  background: none;
+  color: var(--accent2);
+}
+
 /* ---- Ask AI about this game ---- */
 
 .modal-ask-ai {

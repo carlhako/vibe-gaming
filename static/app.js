@@ -286,6 +286,12 @@ async function openInfoModal(gameId) {
     document.getElementById("info-modal-prompt").textContent =
       data.prompt || "(no prompt recorded)";
 
+    // Unhide before any makeCollapsible() calls below: they measure
+    // scrollHeight/clientHeight, which are both 0 on a display:none
+    // element, so measuring while still hidden makes every section look
+    // like it doesn't overflow and strips its expand toggle.
+    infoBackdrop.hidden = false;
+
     renderUsageTable(data.usage);
 
     const promptWrap = document.getElementById("info-modal-prompt-wrap");
@@ -350,7 +356,6 @@ async function openInfoModal(gameId) {
 
     populateAskAiHistory(data.ai_questions || []);
 
-    infoBackdrop.hidden = false;
     document.getElementById("info-modal-close").focus();
   } catch (err) {
     // network error - no modal opens
