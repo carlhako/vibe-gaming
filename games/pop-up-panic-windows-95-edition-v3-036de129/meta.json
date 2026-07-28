@@ -1,0 +1,12 @@
+{
+  "game_id": "036de129e97644fa8d438cdbceca3c1b",
+  "parent_game_id": "1834a60372da4d49855c4e8e528a7e58",
+  "root_game_id": "8e98ab04a3e243ffbdab6cb2e45d1363",
+  "title": "Pop-up Panic: Windows 95 Edition (v3)",
+  "description": "Close relentless Win95 pop-ups before they crash your desktop \u2014 now with a devilish boss popup that dodges your cursor!",
+  "requested_by": "admin",
+  "created_at": "2026-07-28T03:36:38.252661Z",
+  "version": 3,
+  "prompt": "explode: split single-file game into multi-file modules (behavior-preserving)",
+  "format": "multi-file"
+}

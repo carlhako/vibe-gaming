@@ -1,0 +1,634 @@
+:root {
+    --desktop-bg: #008080;
+    --win-gray: #c0c0c0;
+    --win-dark: #808080;
+    --win-black: #000000;
+    --win-white: #ffffff;
+    --win-light: #dfdfdf;
+    --title-active-top: #000080;
+    --title-active-bottom: #1084d0;
+    --boss-red-dark: #8B0000;
+    --boss-red: #CC0000;
+    --boss-red-light: #FF4444;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    overflow: hidden;
+    font-family: 'MS Sans Serif', 'Microsoft Sans Serif', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    background: #000;
+    height: 100vh;
+    height: 100dvh;
+    width: 100vw;
+    cursor: default;
+}
+
+#screen {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    background: var(--desktop-bg);
+}
+
+#desktop {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 38px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, 80px);
+    grid-template-rows: repeat(auto-fill, 90px);
+    gap: 6px 4px;
+    padding: 12px;
+    align-content: start;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.desktop-icon {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    width: 76px;
+    height: 86px;
+    cursor: default;
+    pointer-events: auto;
+    padding: 4px;
+    border-radius: 0;
+    border: 1px solid transparent;
+}
+.desktop-icon:hover {
+    border: 1px dotted #fff;
+    background: rgba(0, 0, 128, 0.15);
+}
+.desktop-icon:active {
+    border: 1px dotted #000;
+    background: rgba(0, 0, 128, 0.3);
+}
+.desktop-icon .icon-img {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 38px;
+    line-height: 1;
+    margin-bottom: 2px;
+    filter: drop-shadow(1px 1px 0 rgba(255,255,255,0.5));
+}
+.desktop-icon .icon-label {
+    color: #fff;
+    font-size: 11px;
+    text-align: center;
+    line-height: 1.2;
+    word-wrap: break-word;
+    max-width: 72px;
+    text-shadow: 1px 1px 1px rgba(0,0,0,0.8);
+    letter-spacing: 0.2px;
+}
+
+#popup-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 38px;
+    z-index: 10;
+    pointer-events: none;
+}
+
+.popup-window {
+    position: absolute;
+    pointer-events: auto;
+    background: var(--win-gray);
+    box-shadow:
+        inset -1px -1px 0 #000,
+        inset 1px 1px 0 #fff,
+        inset -2px -2px 0 var(--win-dark),
+        inset 2px 2px 0 var(--win-light);
+    padding: 2px;
+    min-width: 180px;
+    animation: popupAppear 0.15s ease-out;
+    z-index: 1;
+    cursor: default;
+}
+@keyframes popupAppear {
+    0% { transform: scale(0.7); opacity: 0; }
+    60% { transform: scale(1.05); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+.popup-window.dragging {
+    z-index: 9999 !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* ── BOSS POPUP STYLING ── */
+.popup-window.boss {
+    background: #300000;
+    box-shadow:
+        inset -1px -1px 0 #600,
+        inset 1px 1px 0 #f66,
+        inset -2px -2px 0 #400,
+        inset 2px 2px 0 #c44,
+        0 0 12px rgba(255,0,0,0.45),
+        0 0 28px rgba(255,0,0,0.25);
+    animation: popupAppear 0.2s ease-out, bossPulse 0.7s ease-in-out infinite;
+}
+@keyframes bossPulse {
+    0%, 100% { box-shadow: inset -1px -1px 0 #600, inset 1px 1px 0 #f66, inset -2px -2px 0 #400, inset 2px 2px 0 #c44, 0 0 12px rgba(255,0,0,0.45), 0 0 28px rgba(255,0,0,0.25); }
+    50% { box-shadow: inset -1px -1px 0 #600, inset 1px 1px 0 #f66, inset -2px -2px 0 #400, inset 2px 2px 0 #c44, 0 0 22px rgba(255,0,0,0.7), 0 0 40px rgba(255,0,0,0.4); }
+}
+.popup-window.boss .popup-titlebar {
+    background: linear-gradient(90deg, #6B0000, #CC0000, #FF2222);
+}
+.popup-window.boss .popup-titlebar .title-text {
+    color: #FFD700;
+    text-shadow: 0 0 6px rgba(255,0,0,0.8);
+    letter-spacing: 0.5px;
+}
+.popup-window.boss .popup-content {
+    background: #1A0000;
+    border-color: #600;
+    color: #FFAAAA;
+}
+.popup-window.boss .popup-content .ad-emoji {
+    font-size: 44px;
+    animation: bossEmojiShake 0.25s ease-in-out infinite;
+}
+@keyframes bossEmojiShake {
+    0%, 100% { transform: translateX(0) rotate(0deg); }
+    25% { transform: translateX(-3px) rotate(-3deg); }
+    75% { transform: translateX(3px) rotate(3deg); }
+}
+.popup-window.boss .popup-content .ad-title {
+    color: #FF4444;
+    font-size: 14px;
+    text-shadow: 0 0 8px rgba(255,0,0,0.6);
+}
+.popup-window.boss .popup-content .ad-body {
+    color: #FF9999;
+}
+.popup-window.boss .popup-content .marquee {
+    color: #FF6666;
+}
+.popup-window.boss .popup-content .fake-btn {
+    background: #600;
+    color: #FFAAAA;
+    box-shadow:
+        inset -1px -1px 0 #300,
+        inset 1px 1px 0 #c44,
+        inset -2px -2px 0 #400,
+        inset 2px 2px 0 #f66;
+}
+.popup-window.boss .popup-titlebar .close-btn {
+    background: #900;
+    color: #fff;
+    box-shadow:
+        inset -1px -1px 0 #400,
+        inset 1px 1px 0 #c44,
+        inset -2px -2px 0 #300,
+        inset 2px 2px 0 #f66;
+}
+.popup-window.boss .popup-titlebar .close-btn:hover {
+    background: #b00;
+}
+.popup-window.boss .popup-titlebar .close-btn:active {
+    background: #700;
+    box-shadow:
+        inset 1px 1px 0 #300,
+        inset -1px -1px 0 #c44,
+        inset 2px 2px 0 #400,
+        inset -2px -2px 0 #f66;
+}
+.popup-window.boss.dodging {
+    transition: left 0.18s cubic-bezier(0.25, 0.1, 0.25, 1.4), top 0.18s cubic-bezier(0.25, 0.1, 0.25, 1.4);
+}
+.popup-window.boss.dodging .popup-content .ad-emoji {
+    animation: bossEmojiShake 0.12s ease-in-out infinite;
+}
+
+.popup-titlebar {
+    display: flex;
+    align-items: center;
+    height: 22px;
+    background: linear-gradient(90deg, var(--title-active-top), var(--title-active-bottom));
+    padding: 0 2px;
+    cursor: default;
+    gap: 0;
+    position: relative;
+}
+.popup-titlebar .title-icon {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    margin-right: 2px;
+}
+.popup-titlebar .title-text {
+    flex: 1;
+    color: #fff;
+    font-size: 12px;
+    font-weight: bold;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    letter-spacing: 0.3px;
+    min-width: 0;
+    line-height: 1;
+}
+.popup-titlebar .close-btn {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    background: var(--win-gray);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: bold;
+    color: #000;
+    line-height: 1;
+    box-shadow:
+        inset -1px -1px 0 #000,
+        inset 1px 1px 0 #fff,
+        inset -2px -2px 0 var(--win-dark),
+        inset 2px 2px 0 var(--win-light);
+    padding: 0;
+    font-family: 'MS Sans Serif', 'Microsoft Sans Serif', 'Segoe UI', Tahoma, sans-serif;
+    transition: none;
+}
+.popup-titlebar .close-btn:hover {
+    background: #d0d0d0;
+}
+.popup-titlebar .close-btn:active {
+    box-shadow:
+        inset 1px 1px 0 #000,
+        inset -1px -1px 0 #fff,
+        inset 2px 2px 0 var(--win-dark),
+        inset -2px -2px 0 var(--win-light);
+    color: #000;
+}
+
+.popup-content {
+    background: #fff;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.4;
+    min-height: 60px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 8px;
+    border: 1px solid var(--win-dark);
+    border-top: none;
+    color: #000;
+}
+.popup-content .ad-emoji {
+    font-size: 36px;
+    line-height: 1;
+    animation: adPulse 0.8s ease-in-out infinite;
+}
+@keyframes adPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.2); }
+}
+.popup-content .ad-title {
+    font-weight: bold;
+    font-size: 13px;
+    color: #cc0000;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    line-height: 1.2;
+}
+.popup-content .ad-body {
+    font-size: 11px;
+    color: #333;
+    line-height: 1.3;
+}
+.popup-content .fake-btn {
+    display: inline-block;
+    background: var(--win-gray);
+    padding: 5px 16px;
+    font-size: 11px;
+    font-weight: bold;
+    cursor: default;
+    box-shadow:
+        inset -1px -1px 0 #000,
+        inset 1px 1px 0 #fff,
+        inset -2px -2px 0 var(--win-dark),
+        inset 2px 2px 0 var(--win-light);
+    color: #000;
+    text-decoration: none;
+    letter-spacing: 0.2px;
+}
+.popup-content .marquee {
+    color: #ff0000;
+    font-weight: bold;
+    font-size: 11px;
+    animation: marqueeBlink 0.5s step-end infinite;
+}
+@keyframes marqueeBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
+#taskbar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 38px;
+    background: var(--win-gray);
+    box-shadow:
+        inset 0 1px 0 #fff,
+        inset 0 2px 0 var(--win-light);
+    display: flex;
+    align-items: center;
+    padding: 3px 3px;
+    gap: 4px;
+    z-index: 100;
+    border-top: 1px solid #fff;
+}
+#start-btn {
+    height: 28px;
+    padding: 2px 8px;
+    font-weight: bold;
+    font-size: 13px;
+    background: var(--win-gray);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+    box-shadow:
+        inset -1px -1px 0 #000,
+        inset 1px 1px 0 #fff,
+        inset -2px -2px 0 var(--win-dark),
+        inset 2px 2px 0 var(--win-light);
+    font-family: 'MS Sans Serif', 'Microsoft Sans Serif', 'Segoe UI', Tahoma, sans-serif;
+    letter-spacing: 0.3px;
+    transition: none;
+    flex-shrink: 0;
+}
+#start-btn:active,
+#start-btn.active {
+    box-shadow:
+        inset 1px 1px 0 #000,
+        inset -1px -1px 0 #fff,
+        inset 2px 2px 0 var(--win-dark),
+        inset -2px -2px 0 var(--win-light);
+    background: #b0b0b0;
+}
+#start-btn .start-logo {
+    font-size: 16px;
+    line-height: 1;
+}
+.taskbar-separator {
+    width: 2px;
+    height: 26px;
+    background: var(--win-dark);
+    box-shadow: 1px 0 0 #fff;
+    flex-shrink: 0;
+}
+#taskbar-score {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 10px;
+    font-size: 12px;
+    font-weight: bold;
+    color: #000;
+    min-width: 0;
+    overflow: hidden;
+}
+#taskbar-score span {
+    white-space: nowrap;
+}
+.score-label {
+    color: #444;
+    font-weight: normal;
+    font-size: 11px;
+}
+.score-value {
+    color: #000080;
+    font-size: 13px;
+}
+#taskbar-clock {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    font-size: 12px;
+    background: var(--win-gray);
+    box-shadow:
+        inset 1px 1px 0 #000,
+        inset -1px -1px 0 #fff,
+        inset 2px 2px 0 var(--win-dark),
+        inset -2px -2px 0 var(--win-light);
+    color: #000;
+    letter-spacing: 0.5px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+}
+
+#start-menu {
+    position: absolute;
+    bottom: 40px;
+    left: 3px;
+    background: var(--win-gray);
+    box-shadow:
+        inset -1px -1px 0 #000,
+        inset 1px 1px 0 #fff,
+        inset -2px -2px 0 var(--win-dark),
+        inset 2px 2px 0 var(--win-light);
+    padding: 2px;
+    z-index: 200;
+    display: none;
+    min-width: 180px;
+}
+#start-menu.show {
+    display: block;
+}
+.start-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    font-size: 12px;
+    cursor: pointer;
+    color: #000;
+    white-space: nowrap;
+    font-family: 'MS Sans Serif', 'Microsoft Sans Serif', 'Segoe UI', Tahoma, sans-serif;
+}
+.start-menu-item:hover {
+    background: #000080;
+    color: #fff;
+}
+.start-menu-item .menu-icon {
+    width: 20px;
+    text-align: center;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+.start-menu-divider {
+    height: 2px;
+    background: var(--win-dark);
+    box-shadow: 0 1px 0 #fff;
+    margin: 2px 4px;
+}
+
+#bsod {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: #0000aa;
+    z-index: 9999;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-family: 'Courier New', 'Lucida Console', monospace;
+    padding: 30px;
+    cursor: pointer;
+}
+#bsod.show {
+    display: flex;
+}
+#bsod .bsod-header {
+    background: #aaaaaa;
+    color: #0000aa;
+    padding: 4px 16px;
+    font-weight: bold;
+    font-size: 16px;
+    letter-spacing: 2px;
+    margin-bottom: 20px;
+    text-align: center;
+}
+#bsod .bsod-content {
+    font-size: 14px;
+    line-height: 1.8;
+    max-width: 650px;
+    text-align: left;
+    white-space: pre-line;
+}
+#bsod .bsod-content .highlight {
+    background: #fff;
+    color: #0000aa;
+    padding: 0 4px;
+}
+#bsod .bsod-restart {
+    margin-top: 30px;
+    font-size: 16px;
+    animation: bsodBlink 1s step-end infinite;
+    text-align: center;
+}
+@keyframes bsodBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+#bsod .bsod-score {
+    margin-top: 16px;
+    font-size: 13px;
+    color: #aaaaff;
+    text-align: center;
+}
+
+@media (max-width: 600px) {
+    #desktop {
+        grid-template-columns: repeat(auto-fill, 64px);
+        grid-template-rows: repeat(auto-fill, 74px);
+        gap: 4px 2px;
+        padding: 8px;
+    }
+    .desktop-icon {
+        width: 60px;
+        height: 70px;
+        padding: 2px;
+    }
+    .desktop-icon .icon-img {
+        width: 36px;
+        height: 36px;
+        font-size: 28px;
+    }
+    .desktop-icon .icon-label {
+        font-size: 9px;
+        max-width: 56px;
+    }
+    .popup-window {
+        min-width: 140px;
+        max-width: 85vw;
+    }
+    .popup-titlebar {
+        height: 20px;
+    }
+    .popup-titlebar .title-text {
+        font-size: 10px;
+    }
+    .popup-titlebar .close-btn {
+        width: 20px;
+        height: 20px;
+        font-size: 14px;
+    }
+    .popup-content {
+        font-size: 10px;
+        padding: 8px 10px;
+        min-height: 50px;
+    }
+    .popup-content .ad-emoji {
+        font-size: 28px;
+    }
+    .popup-content .ad-title {
+        font-size: 11px;
+    }
+    .popup-content .ad-body {
+        font-size: 10px;
+    }
+    .popup-window.boss .popup-content .ad-emoji {
+        font-size: 34px;
+    }
+    #taskbar {
+        height: 34px;
+    }
+    #start-btn {
+        font-size: 11px;
+        height: 24px;
+        padding: 2px 6px;
+    }
+    #taskbar-clock {
+        font-size: 10px;
+        height: 24px;
+        padding: 4px 6px;
+    }
+    #taskbar-score {
+        font-size: 10px;
+        gap: 4px;
+    }
+    #bsod .bsod-content {
+        font-size: 11px;
+    }
+}

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pop-up Panic: Windows 95 Edition</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="screen">
+        <div id="desktop">
+            <div class="desktop-icon"><div class="icon-img">🖥️</div><div class="icon-label">My Computer</div></div>
+            <div class="desktop-icon"><div class="icon-img">🗑️</div><div class="icon-label">Recycle Bin</div></div>
+            <div class="desktop-icon"><div class="icon-img">🌐</div><div class="icon-label">Internet<br>Explorer</div></div>
+            <div class="desktop-icon"><div class="icon-img">⛵</div><div class="icon-label">Netscape<br>Navigator</div></div>
+            <div class="desktop-icon"><div class="icon-img">📨</div><div class="icon-label">AOL 4.0</div></div>
+            <div class="desktop-icon"><div class="icon-img">🎵</div><div class="icon-label">Winamp</div></div>
+            <div class="desktop-icon"><div class="icon-img">📁</div><div class="icon-label">My Documents</div></div>
+            <div class="desktop-icon"><div class="icon-img">🍋</div><div class="icon-label">LimeWire</div></div>
+            <div class="desktop-icon"><div class="icon-img">💿</div><div class="icon-label">Kazaa</div></div>
+            <div class="desktop-icon"><div class="icon-img">🦍</div><div class="icon-label">BonziBuddy</div></div>
+        </div>
+
+        <div id="popup-container"></div>
+
+        <div id="taskbar">
+            <button id="start-btn" title="Start"><span class="start-logo">🪟</span> Start</button>
+            <div class="taskbar-separator"></div>
+            <div id="taskbar-score">
+                <span class="score-label">Closed:</span>
+                <span class="score-value" id="score-num">0</span>
+                <span class="score-label">| Active:</span>
+                <span class="score-value" id="active-num">0</span>
+                <span class="score-label">| Max:</span>
+                <span class="score-value" id="max-num">20</span>
+                <span class="score-label">| Boss:</span>
+                <span class="score-value" id="boss-indicator" style="color:#cc0000;">—</span>
+            </div>
+            <div id="taskbar-clock"></div>
+        </div>
+
+        <div id="start-menu">
+            <div class="start-menu-item" data-do="restart"><span class="menu-icon">🔄</span> Restart Game</div>
+            <div class="start-menu-divider"></div>
+            <div class="start-menu-item" data-do="programs"><span class="menu-icon">📂</span> Programs ▶</div>
+            <div class="start-menu-item" data-do="docs"><span class="menu-icon">📄</span> Documents</div>
+            <div class="start-menu-item" data-do="settings"><span class="menu-icon">⚙️</span> Settings</div>
+            <div class="start-menu-divider"></div>
+            <div class="start-menu-item" data-do="shutdown"><span class="menu-icon">⏻</span> Shut Down…</div>
+        </div>
+
+        <div id="bsod">
+            <div class="bsod-header">Windows</div>
+            <div class="bsod-content">
+                A fatal exception <span class="highlight">0E</span> has occurred at <span class="highlight">0028:C0011E36</span> in VXD <span class="highlight">POPUP(01)</span> + 00000E36.
+
+                The current application will be terminated.
+
+                * The desktop has been completely overrun by pop-up advertisements.
+                * Too many pop-up windows were left unclosed.
+                * Press RESTART below or press any key to reboot the system.
+                * You will lose your current browsing session.
+
+                <span style="color:#ffff00;">Technical Information:</span>
+                *** STOP: 0x000000POP (0xADWARE, 0xSPYWARE, 0xMALWARE, 0xTOOLBAR)
+                *** POPUP.SYS - Address C0011E36 base at C0000000
+
+                Error code: <span class="highlight">SCREEN_FULL</span>
+                Active pop-ups exceeded maximum threshold.
+                System halted to prevent further embarrassment.
+            </div>
+            <div class="bsod-score" id="bsod-final-score"></div>
+            <div class="bsod-restart">▶ CLICK HERE OR PRESS ANY KEY TO RESTART ◀</div>
+        </div>
+    </div>
+
+    <script src="config.js"></script>
+    <script src="popups.js"></script>
+    <script src="boss.js"></script>
+    <script src="input.js"></script>
+    <script src="game.js"></script>
+</body>
+</html>
