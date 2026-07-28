@@ -1,0 +1,11 @@
+{
+  "game_id": "0f800c65a36f4619a6ca63a4d04fae05",
+  "parent_game_id": null,
+  "root_game_id": "0f800c65a36f4619a6ca63a4d04fae05",
+  "title": "Lava Climb",
+  "description": "A vertical platformer where a little robot jumps up endless procedural platforms while glowing lava rises from below. Collect coins, climb higher, and beat your best height.",
+  "requested_by": "web:8f9376e8d7b6",
+  "created_at": "2026-07-28T01:25:27.461242Z",
+  "version": 1,
+  "prompt": "A simple one-screen vertical platformer called Lava Climb. You control a little robot that jumps up an endless series of procedurally placed platforms while glowing lava rises from below. Arrow keys or A/D to move, space/up to jump, with forgiving coyote-time jumping. Collect coins for points, and the lava rises faster the higher you climb. Show current height and best height. Game over when the lava touches you, with an instant restart button. Bright cartoon colors, simple shapes, juicy particle effects when collecting coins or when the lava catches you."
+}
