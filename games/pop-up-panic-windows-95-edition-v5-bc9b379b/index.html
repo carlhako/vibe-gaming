@@ -1,0 +1,1332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pop-up Panic: Windows 95 Edition</title>
+    <style>:root {
+    --desktop-bg: #008080;
+    --win-gray: #c0c0c0;
+    --win-dark: #808080;
+    --win-black: #000000;
+    --win-white: #ffffff;
+    --win-light: #dfdfdf;
+    --title-active-top: #000080;
+    --title-active-bottom: #1084d0;
+    --boss-red-dark: #8B0000;
+    --boss-red: #CC0000;
+    --boss-red-light: #FF4444;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    overflow: hidden;
+    font-family: 'MS Sans Serif', 'Microsoft Sans Serif', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    background: #000;
+    height: 100vh;
+    height: 100dvh;
+    width: 100vw;
+    cursor: default;
+}
+
+#screen {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    background: var(--desktop-bg);
+}
+
+#desktop {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 38px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, 80px);
+    grid-template-rows: repeat(auto-fill, 90px);
+    gap: 6px 4px;
+    padding: 12px;
+    align-content: start;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.desktop-icon {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    width: 76px;
+    height: 86px;
+    cursor: default;
+    pointer-events: auto;
+    padding: 4px;
+    border-radius: 0;
+    border: 1px solid transparent;
+}
+.desktop-icon:hover {
+    border: 1px dotted #fff;
+    background: rgba(0, 0, 128, 0.15);
+}
+.desktop-icon:active {
+    border: 1px dotted #000;
+    background: rgba(0, 0, 128, 0.3);
+}
+.desktop-icon .icon-img {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 38px;
+    line-height: 1;
+    margin-bottom: 2px;
+    filter: drop-shadow(1px 1px 0 rgba(255,255,255,0.5));
+}
+.desktop-icon .icon-label {
+    color: #fff;
+    font-size: 11px;
+    text-align: center;
+    line-height: 1.2;
+    word-wrap: break-word;
+    max-width: 72px;
+    text-shadow: 1px 1px 1px rgba(0,0,0,0.8);
+    letter-spacing: 0.2px;
+}
+
+#popup-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 38px;
+    z-index: 10;
+    pointer-events: none;
+}
+
+.popup-window {
+    position: absolute;
+    pointer-events: auto;
+    background: var(--win-gray);
+    box-shadow:
+        inset -1px -1px 0 #000,
+        inset 1px 1px 0 #fff,
+        inset -2px -2px 0 var(--win-dark),
+        inset 2px 2px 0 var(--win-light);
+    padding: 2px;
+    min-width: 180px;
+    animation: popupAppear 0.15s ease-out;
+    z-index: 1;
+    cursor: default;
+}
+@keyframes popupAppear {
+    0% { transform: scale(0.7); opacity: 0; }
+    60% { transform: scale(1.05); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+.popup-window.dragging {
+    z-index: 9999 !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* ── BOSS POPUP STYLING ── */
+.popup-window.boss {
+    background: #300000;
+    box-shadow:
+        inset -1px -1px 0 #600,
+        inset 1px 1px 0 #f66,
+        inset -2px -2px 0 #400,
+        inset 2px 2px 0 #c44,
+        0 0 12px rgba(255,0,0,0.45),
+        0 0 28px rgba(255,0,0,0.25);
+    animation: popupAppear 0.2s ease-out, bossPulse 0.7s ease-in-out infinite;
+}
+@keyframes bossPulse {
+    0%, 100% { box-shadow: inset -1px -1px 0 #600, inset 1px 1px 0 #f66, inset -2px -2px 0 #400, inset 2px 2px 0 #c44, 0 0 12px rgba(255,0,0,0.45), 0 0 28px rgba(255,0,0,0.25); }
+    50% { box-shadow: inset -1px -1px 0 #600, inset 1px 1px 0 #f66, inset -2px -2px 0 #400, inset 2px 2px 0 #c44, 0 0 22px rgba(255,0,0,0.7), 0 0 40px rgba(255,0,0,0.4); }
+}
+.popup-window.boss .popup-titlebar {
+    background: linear-gradient(90deg, #6B0000, #CC0000, #FF2222);
+}
+.popup-window.boss .popup-titlebar .title-text {
+    color: #FFD700;
+    text-shadow: 0 0 6px rgba(255,0,0,0.8);
+    letter-spacing: 0.5px;
+}
+.popup-window.boss .popup-content {
+    background: #1A0000;
+    border-color: #600;
+    color: #FFAAAA;
+}
+.popup-window.boss .popup-content .ad-emoji {
+    font-size: 44px;
+    animation: bossEmojiShake 0.25s ease-in-out infinite;
+}
+@keyframes bossEmojiShake {
+    0%, 100% { transform: translateX(0) rotate(0deg); }
+    25% { transform: translateX(-3px) rotate(-3deg); }
+    75% { transform: translateX(3px) rotate(3deg); }
+}
+.popup-window.boss .popup-content .ad-title {
+    color: #FF4444;
+    font-size: 14px;
+    text-shadow: 0 0 8px rgba(255,0,0,0.6);
+}
+.popup-window.boss .popup-content .ad-body {
+    color: #FF9999;
+}
+.popup-window.boss .popup-content .marquee {
+    color: #FF6666;
+}
+.popup-window.boss .popup-content .fake-btn {
+    background: #600;
+    color: #FFAAAA;
+    box-shadow:
+        inset -1px -1px 0 #300,
+        inset 1px 1px 0 #c44,
+        inset -2px -2px 0 #400,
+        inset 2px 2px 0 #f66;
+}
+.popup-window.boss .popup-titlebar .close-btn {
+    background: #900;
+    color: #fff;
+    box-shadow:
+        inset -1px -1px 0 #400,
+        inset 1px 1px 0 #c44,
+        inset -2px -2px 0 #300,
+        inset 2px 2px 0 #f66;
+}
+.popup-window.boss .popup-titlebar .close-btn:hover {
+    background: #b00;
+}
+.popup-window.boss .popup-titlebar .close-btn:active {
+    background: #700;
+    box-shadow:
+        inset 1px 1px 0 #300,
+        inset -1px -1px 0 #c44,
+        inset 2px 2px 0 #400,
+        inset -2px -2px 0 #f66;
+}
+.popup-window.boss.dodging {
+    transition: left 0.18s cubic-bezier(0.25, 0.1, 0.25, 1.4), top 0.18s cubic-bezier(0.25, 0.1, 0.25, 1.4);
+}
+.popup-window.boss.dodging .popup-content .ad-emoji {
+    animation: bossEmojiShake 0.12s ease-in-out infinite;
+}
+
+.popup-titlebar {
+    display: flex;
+    align-items: center;
+    height: 22px;
+    background: linear-gradient(90deg, var(--title-active-top), var(--title-active-bottom));
+    padding: 0 2px;
+    cursor: default;
+    gap: 0;
+    position: relative;
+}
+.popup-titlebar .title-icon {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    margin-right: 2px;
+}
+.popup-titlebar .title-text {
+    flex: 1;
+    color: #fff;
+    font-size: 12px;
+    font-weight: bold;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    letter-spacing: 0.3px;
+    min-width: 0;
+    line-height: 1;
+}
+.popup-titlebar .close-btn {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    background: var(--win-gray);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: bold;
+    color: #000;
+    line-height: 1;
+    box-shadow:
+        inset -1px -1px 0 #000,
+        inset 1px 1px 0 #fff,
+        inset -2px -2px 0 var(--win-dark),
+        inset 2px 2px 0 var(--win-light);
+    padding: 0;
+    font-family: 'MS Sans Serif', 'Microsoft Sans Serif', 'Segoe UI', Tahoma, sans-serif;
+    transition: none;
+}
+.popup-titlebar .close-btn:hover {
+    background: #d0d0d0;
+}
+.popup-titlebar .close-btn:active {
+    box-shadow:
+        inset 1px 1px 0 #000,
+        inset -1px -1px 0 #fff,
+        inset 2px 2px 0 var(--win-dark),
+        inset -2px -2px 0 var(--win-light);
+    color: #000;
+}
+
+.popup-content {
+    background: #fff;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.4;
+    min-height: 60px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 8px;
+    border: 1px solid var(--win-dark);
+    border-top: none;
+    color: #000;
+}
+.popup-content .ad-emoji {
+    font-size: 36px;
+    line-height: 1;
+    animation: adPulse 0.8s ease-in-out infinite;
+}
+@keyframes adPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.2); }
+}
+.popup-content .ad-title {
+    font-weight: bold;
+    font-size: 13px;
+    color: #cc0000;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    line-height: 1.2;
+}
+.popup-content .ad-body {
+    font-size: 11px;
+    color: #333;
+    line-height: 1.3;
+}
+.popup-content .fake-btn {
+    display: inline-block;
+    background: var(--win-gray);
+    padding: 5px 16px;
+    font-size: 11px;
+    font-weight: bold;
+    cursor: default;
+    box-shadow:
+        inset -1px -1px 0 #000,
+        inset 1px 1px 0 #fff,
+        inset -2px -2px 0 var(--win-dark),
+        inset 2px 2px 0 var(--win-light);
+    color: #000;
+    text-decoration: none;
+    letter-spacing: 0.2px;
+}
+.popup-content .marquee {
+    color: #ff0000;
+    font-weight: bold;
+    font-size: 11px;
+    animation: marqueeBlink 0.5s step-end infinite;
+}
+@keyframes marqueeBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
+#taskbar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 38px;
+    background: var(--win-gray);
+    box-shadow:
+        inset 0 1px 0 #fff,
+        inset 0 2px 0 var(--win-light);
+    display: flex;
+    align-items: center;
+    padding: 3px 3px;
+    gap: 4px;
+    z-index: 100;
+    border-top: 1px solid #fff;
+}
+#start-btn {
+    height: 28px;
+    padding: 2px 8px;
+    font-weight: bold;
+    font-size: 13px;
+    background: var(--win-gray);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+    box-shadow:
+        inset -1px -1px 0 #000,
+        inset 1px 1px 0 #fff,
+        inset -2px -2px 0 var(--win-dark),
+        inset 2px 2px 0 var(--win-light);
+    font-family: 'MS Sans Serif', 'Microsoft Sans Serif', 'Segoe UI', Tahoma, sans-serif;
+    letter-spacing: 0.3px;
+    transition: none;
+    flex-shrink: 0;
+}
+#start-btn:active,
+#start-btn.active {
+    box-shadow:
+        inset 1px 1px 0 #000,
+        inset -1px -1px 0 #fff,
+        inset 2px 2px 0 var(--win-dark),
+        inset -2px -2px 0 var(--win-light);
+    background: #b0b0b0;
+}
+#start-btn .start-logo {
+    font-size: 16px;
+    line-height: 1;
+}
+.taskbar-separator {
+    width: 2px;
+    height: 26px;
+    background: var(--win-dark);
+    box-shadow: 1px 0 0 #fff;
+    flex-shrink: 0;
+}
+#taskbar-score {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 10px;
+    font-size: 12px;
+    font-weight: bold;
+    color: #000;
+    min-width: 0;
+    overflow: hidden;
+}
+#taskbar-score span {
+    white-space: nowrap;
+}
+.score-label {
+    color: #444;
+    font-weight: normal;
+    font-size: 11px;
+}
+.score-value {
+    color: #000080;
+    font-size: 13px;
+}
+#taskbar-clock {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    font-size: 12px;
+    background: var(--win-gray);
+    box-shadow:
+        inset 1px 1px 0 #000,
+        inset -1px -1px 0 #fff,
+        inset 2px 2px 0 var(--win-dark),
+        inset -2px -2px 0 var(--win-light);
+    color: #000;
+    letter-spacing: 0.5px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+}
+
+#start-menu {
+    position: absolute;
+    bottom: 40px;
+    left: 3px;
+    background: var(--win-gray);
+    box-shadow:
+        inset -1px -1px 0 #000,
+        inset 1px 1px 0 #fff,
+        inset -2px -2px 0 var(--win-dark),
+        inset 2px 2px 0 var(--win-light);
+    padding: 2px;
+    z-index: 200;
+    display: none;
+    min-width: 180px;
+}
+#start-menu.show {
+    display: block;
+}
+.start-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    font-size: 12px;
+    cursor: pointer;
+    color: #000;
+    white-space: nowrap;
+    font-family: 'MS Sans Serif', 'Microsoft Sans Serif', 'Segoe UI', Tahoma, sans-serif;
+}
+.start-menu-item:hover {
+    background: #000080;
+    color: #fff;
+}
+.start-menu-item .menu-icon {
+    width: 20px;
+    text-align: center;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+.start-menu-divider {
+    height: 2px;
+    background: var(--win-dark);
+    box-shadow: 0 1px 0 #fff;
+    margin: 2px 4px;
+}
+
+#bsod {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: #0000aa;
+    z-index: 9999;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-family: 'Courier New', 'Lucida Console', monospace;
+    padding: 30px;
+    cursor: pointer;
+}
+#bsod.show {
+    display: flex;
+}
+#bsod .bsod-header {
+    background: #aaaaaa;
+    color: #0000aa;
+    padding: 4px 16px;
+    font-weight: bold;
+    font-size: 16px;
+    letter-spacing: 2px;
+    margin-bottom: 20px;
+    text-align: center;
+}
+#bsod .bsod-content {
+    font-size: 14px;
+    line-height: 1.8;
+    max-width: 650px;
+    text-align: left;
+    white-space: pre-line;
+}
+#bsod .bsod-content .highlight {
+    background: #fff;
+    color: #0000aa;
+    padding: 0 4px;
+}
+#bsod .bsod-restart {
+    margin-top: 30px;
+    font-size: 16px;
+    animation: bsodBlink 1s step-end infinite;
+    text-align: center;
+}
+@keyframes bsodBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+#bsod .bsod-score {
+    margin-top: 16px;
+    font-size: 13px;
+    color: #aaaaff;
+    text-align: center;
+}
+
+@media (max-width: 600px) {
+    #desktop {
+        grid-template-columns: repeat(auto-fill, 64px);
+        grid-template-rows: repeat(auto-fill, 74px);
+        gap: 4px 2px;
+        padding: 8px;
+    }
+    .desktop-icon {
+        width: 60px;
+        height: 70px;
+        padding: 2px;
+    }
+    .desktop-icon .icon-img {
+        width: 36px;
+        height: 36px;
+        font-size: 28px;
+    }
+    .desktop-icon .icon-label {
+        font-size: 9px;
+        max-width: 56px;
+    }
+    .popup-window {
+        min-width: 140px;
+        max-width: 85vw;
+    }
+    .popup-titlebar {
+        height: 20px;
+    }
+    .popup-titlebar .title-text {
+        font-size: 10px;
+    }
+    .popup-titlebar .close-btn {
+        width: 20px;
+        height: 20px;
+        font-size: 14px;
+    }
+    .popup-content {
+        font-size: 10px;
+        padding: 8px 10px;
+        min-height: 50px;
+    }
+    .popup-content .ad-emoji {
+        font-size: 28px;
+    }
+    .popup-content .ad-title {
+        font-size: 11px;
+    }
+    .popup-content .ad-body {
+        font-size: 10px;
+    }
+    .popup-window.boss .popup-content .ad-emoji {
+        font-size: 34px;
+    }
+    #taskbar {
+        height: 34px;
+    }
+    #start-btn {
+        font-size: 11px;
+        height: 24px;
+        padding: 2px 6px;
+    }
+    #taskbar-clock {
+        font-size: 10px;
+        height: 24px;
+        padding: 4px 6px;
+    }
+    #taskbar-score {
+        font-size: 10px;
+        gap: 4px;
+    }
+    #bsod .bsod-content {
+        font-size: 11px;
+    }
+}
+</style>
+</head>
+<body>
+    <div id="screen">
+        <div id="desktop">
+            <div class="desktop-icon"><div class="icon-img">🖥️</div><div class="icon-label">My Computer</div></div>
+            <div class="desktop-icon"><div class="icon-img">🗑️</div><div class="icon-label">Recycle Bin</div></div>
+            <div class="desktop-icon"><div class="icon-img">🌐</div><div class="icon-label">Internet<br>Explorer</div></div>
+            <div class="desktop-icon"><div class="icon-img">⛵</div><div class="icon-label">Netscape<br>Navigator</div></div>
+            <div class="desktop-icon"><div class="icon-img">📨</div><div class="icon-label">AOL 4.0</div></div>
+            <div class="desktop-icon"><div class="icon-img">🎵</div><div class="icon-label">Winamp</div></div>
+            <div class="desktop-icon"><div class="icon-img">📁</div><div class="icon-label">My Documents</div></div>
+            <div class="desktop-icon"><div class="icon-img">🍋</div><div class="icon-label">LimeWire</div></div>
+            <div class="desktop-icon"><div class="icon-img">💿</div><div class="icon-label">Kazaa</div></div>
+            <div class="desktop-icon"><div class="icon-img">🦍</div><div class="icon-label">BonziBuddy</div></div>
+        </div>
+
+        <div id="popup-container"></div>
+
+        <div id="taskbar">
+            <button id="start-btn" title="Start"><span class="start-logo">🪟</span> Start</button>
+            <div class="taskbar-separator"></div>
+            <div id="taskbar-score">
+                <span class="score-label">Closed:</span>
+                <span class="score-value" id="score-num">0</span>
+                <span class="score-label">| Active:</span>
+                <span class="score-value" id="active-num">0</span>
+                <span class="score-label">| Max:</span>
+                <span class="score-value" id="max-num">20</span>
+                <span class="score-label">| Boss:</span>
+                <span class="score-value" id="boss-indicator" style="color:#cc0000;">—</span>
+            </div>
+            <div id="taskbar-clock"></div>
+        </div>
+
+        <div id="start-menu">
+            <div class="start-menu-item" data-do="restart"><span class="menu-icon">🔄</span> Restart Game</div>
+            <div class="start-menu-divider"></div>
+            <div class="start-menu-item" data-do="programs"><span class="menu-icon">📂</span> Programs ▶</div>
+            <div class="start-menu-item" data-do="docs"><span class="menu-icon">📄</span> Documents</div>
+            <div class="start-menu-item" data-do="settings"><span class="menu-icon">⚙️</span> Settings</div>
+            <div class="start-menu-divider"></div>
+            <div class="start-menu-item" data-do="shutdown"><span class="menu-icon">⏻</span> Shut Down…</div>
+        </div>
+
+        <div id="bsod">
+            <div class="bsod-header">Windows</div>
+            <div class="bsod-content">
+                A fatal exception <span class="highlight">0E</span> has occurred at <span class="highlight">0028:C0011E36</span> in VXD <span class="highlight">POPUP(01)</span> + 00000E36.
+
+                The current application will be terminated.
+
+                * The desktop has been completely overrun by pop-up advertisements.
+                * Too many pop-up windows were left unclosed.
+                * Press RESTART below or press any key to reboot the system.
+                * You will lose your current browsing session.
+
+                <span style="color:#ffff00;">Technical Information:</span>
+                *** STOP: 0x000000POP (0xADWARE, 0xSPYWARE, 0xMALWARE, 0xTOOLBAR)
+                *** POPUP.SYS - Address C0011E36 base at C0000000
+
+                Error code: <span class="highlight">SCREEN_FULL</span>
+                Active pop-ups exceeded maximum threshold.
+                System halted to prevent further embarrassment.
+            </div>
+            <div class="bsod-score" id="bsod-final-score"></div>
+            <div class="bsod-restart">▶ CLICK HERE OR PRESS ANY KEY TO RESTART ◀</div>
+        </div>
+    </div>
+
+    <script>// ── DOM REFS ──
+const screenEl = document.getElementById('screen');
+const desktop = document.getElementById('desktop');
+const popupContainer = document.getElementById('popup-container');
+const bsod = document.getElementById('bsod');
+const bsodScore = document.getElementById('bsod-final-score');
+const scoreNum = document.getElementById('score-num');
+const activeNum = document.getElementById('active-num');
+const maxNum = document.getElementById('max-num');
+const bossIndicator = document.getElementById('boss-indicator');
+const taskbarClock = document.getElementById('taskbar-clock');
+const startBtn = document.getElementById('start-btn');
+const startMenu = document.getElementById('start-menu');
+
+// ── AD CONTENT POOL ──
+const adPool = [
+    { emoji: '🎉', title: 'CONGRATULATIONS!', body: 'You are the 1,000,000th visitor! Claim your FREE prize now!', marquee: '★ CLICK HERE ★' },
+    { emoji: '⚠️', title: 'WARNING!', body: 'Your computer is INFECTED with 47 viruses! Download FREE scanner now!', marquee: 'SCAN NOW - FREE!' },
+    { emoji: '💘', title: 'HOT SINGLES!', body: 'Hot singles in YOUR area want to meet YOU right now!', marquee: 'CLICK TO MEET THEM!' },
+    { emoji: '💰', title: 'YOU WON!', body: 'You\'ve won a FREE iPod Nano! Enter your email to claim!', marquee: 'CLAIM YOUR iPOD!' },
+    { emoji: '😊', title: 'FREE SMILEYS!', body: 'Download 10,000 FREE smileys and cursors! Smiley Central\u2122', marquee: 'DOWNLOAD NOW!' },
+    { emoji: '🐒', title: 'PUNCH THE MONKEY!', body: 'Punch the monkey and WIN $20 cash instantly!', marquee: 'PUNCH TO WIN $20!' },
+    { emoji: '⚡', title: 'SPEED BOOST!', body: 'Increase your internet speed 300%! FREE download!', marquee: 'FASTER INTERNET!' },
+    { emoji: '🎰', title: 'FREE CRUISE!', body: 'You\'ve been selected for a FREE Bahamas cruise!', marquee: 'CLAIM YOUR TICKET!' },
+    { emoji: '🔔', title: 'SYSTEM ALERT!', body: 'Your computer is running slow! Click to FIX now!', marquee: 'FIX NOW!' },
+    { emoji: '🦍', title: 'BonziBuddy', body: 'BonziBuddy wants to be your friend! Install FREE toolbar!', marquee: 'INSTALL BONZI!' },
+    { emoji: '🏆', title: 'PRIZE WINNER!', body: 'CONGRATULATIONS! You just WON prize #28947!', marquee: 'COLLECT PRIZE!' },
+    { emoji: '💾', title: 'FREE SCREENSAVER!', body: 'Your FREE 3D flying toasters screensaver is ready!', marquee: 'DOWNLOAD NOW!' },
+    { emoji: '📧', title: 'EMAIL ENHANCER!', body: 'Supercharge your Outlook with FREE smiley toolbar!', marquee: 'ADD TO OUTLOOK!' },
+    { emoji: '💻', title: 'FREE LAPTOP!', body: 'You are today\'s lucky visitor! Win a FREE Dell laptop!', marquee: 'CLAIM LAPTOP!' },
+    { emoji: '🔍', title: 'SEARCH ASSISTANT', body: 'Install the WebSearch toolbar for better search results!', marquee: 'INSTALL TOOLBAR!' },
+    { emoji: '🎵', title: 'FREE MP3s!', body: 'Download FREE MP3 music! 100% legal! No viruses!', marquee: 'DOWNLOAD SONGS!' },
+    { emoji: '📺', title: 'FREE CURSORS!', body: 'Animated cursors! Spinning globes! Rainbow trails!', marquee: 'GET CURSORS!' },
+    { emoji: '💳', title: 'REFINANCE NOW!', body: 'Lowest mortgage rates in history! Refinance today!', marquee: 'LOW RATES!' }
+];
+
+// ── BOSS AD POOL ──
+const bossAdPool = [
+    { emoji: '😈', title: '😈 DEMON POPUP!', body: 'You cannot close me, mortal! MUAHAHAHA!', marquee: 'TRY TO CLICK THE X!' },
+    { emoji: '👹', title: '👹 HELL\'S ADWARE', body: 'I am the pop-up you will NEVER defeat!', marquee: 'JUST TRY IT!' },
+    { emoji: '💀', title: '💀 DOOM POPUP', body: 'Your clicks are WEAK! I consume your desktop!', marquee: 'YOU CAN\'T WIN!' },
+    { emoji: '🔥', title: '🔥 INFERNAL OFFER', body: 'Spawned from the depths of badware! I dodge all!', marquee: 'CATCH ME IF YOU CAN!' },
+    { emoji: '🦹', title: '🦹 SUPER VILLAIN AD', body: 'Ha! Your mouse is no match for my agility!', marquee: 'NICE TRY, HUMAN!' }
+];
+
+// ── HELPERS ──
+function getDesktopBounds() {
+    const th = document.getElementById('taskbar').offsetHeight;
+    return { x: 0, y: 0, width: screenEl.clientWidth, height: screenEl.clientHeight - th };
+}
+
+function clamp(val, min, max) { return Math.max(min, Math.min(max, val)); }
+
+function getPopupSize(isBoss) {
+    const bounds = getDesktopBounds();
+    const small = bounds.width < 600;
+    if (isBoss) {
+        return {
+            width: small ? Math.floor(Math.random() * 40 + 180) : Math.floor(Math.random() * 80 + 260),
+            height: small ? Math.floor(Math.random() * 40 + 160) : Math.floor(Math.random() * 60 + 190)
+        };
+    }
+    return {
+        width: small ? Math.floor(Math.random() * 60 + 150) : Math.floor(Math.random() * 100 + 200),
+        height: small ? Math.floor(Math.random() * 50 + 130) : Math.floor(Math.random() * 70 + 160)
+    };
+}
+
+function getRandomAd() { return adPool[Math.floor(Math.random() * adPool.length)]; }
+
+function getRandomBossAd() { return bossAdPool[Math.floor(Math.random() * bossAdPool.length)]; }
+
+function getSpawnDelay() {
+    const tier = Math.floor(totalSpawned / 6);
+    const delays = [2000, 1700, 1400, 1100, 850, 650, 500, 400];
+    return delays[Math.min(tier, delays.length - 1)];
+}
+
+function updateMaxPopups() {
+    const bounds = getDesktopBounds();
+    const avgArea = 220 * 170;
+    const desktopArea = bounds.width * bounds.height;
+    MAX_POPUPS = clamp(Math.floor(desktopArea / avgArea * 0.82), 12, 25);
+    maxNum.textContent = MAX_POPUPS;
+}
+
+function updateScoreDisplay() {
+    scoreNum.textContent = totalClosed;
+    activeNum.textContent = activePopups.length;
+    if (bossActive) {
+        bossIndicator.textContent = '😈' + bossDodgeCount;
+        bossIndicator.style.color = '#cc0000';
+    } else if (nextBossAt - totalClosed <= 5 && nextBossAt - totalClosed > 0) {
+        bossIndicator.textContent = 'in ' + (nextBossAt - totalClosed);
+        bossIndicator.style.color = '#cc6600';
+    } else {
+        bossIndicator.textContent = '—';
+        bossIndicator.style.color = '#888';
+    }
+}
+
+function updateClock() {
+    const now = new Date();
+    const h = now.getHours();
+    const m = now.getMinutes().toString().padStart(2, '0');
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 || 12;
+    taskbarClock.textContent = h12 + ':' + m + ' ' + ampm;
+}
+</script>
+    <script>// ── POPUP LIFECYCLE ──
+
+function createPopupElement(ad, isBoss) {
+    const size = getPopupSize(!!isBoss);
+    const bounds = getDesktopBounds();
+    const pid = ++popupIdCounter;
+
+    const maxX = Math.max(0, bounds.width - size.width * 0.6);
+    const maxY = Math.max(0, bounds.height - size.height * 0.6);
+    const x = Math.random() * maxX;
+    const y = Math.random() * maxY;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'popup-window' + (isBoss ? ' boss' : '');
+    wrapper.id = 'popup-' + pid;
+    wrapper.style.width = size.width + 'px';
+    wrapper.style.left = x + 'px';
+    wrapper.style.top = y + 'px';
+    wrapper.style.zIndex = 100 + pid;
+    wrapper.setAttribute('data-popup-id', pid);
+
+    wrapper.innerHTML =
+        '<div class="popup-titlebar" data-role="drag">' +
+        '<span class="title-icon">' + ad.emoji + '</span>' +
+        '<span class="title-text">' + ad.title + '</span>' +
+        '<button class="close-btn" data-role="close" title="Close">\u2715</button>' +
+        '</div>' +
+        '<div class="popup-content">' +
+        '<div class="ad-emoji">' + ad.emoji + '</div>' +
+        '<div class="ad-title">' + ad.title + '</div>' +
+        '<div class="ad-body">' + ad.body + '</div>' +
+        '<div class="marquee">' + ad.marquee + '</div>' +
+        '<span class="fake-btn">' + (isBoss ? 'NO' : 'OK') + '</span>' +
+        '</div>';
+
+    const closeBtn = wrapper.querySelector('.close-btn');
+    closeBtn.addEventListener('click', function(e) { e.stopPropagation(); e.preventDefault();
+        closePopup(pid); });
+    closeBtn.addEventListener('touchend', function(e) { e.stopPropagation(); e.preventDefault();
+        closePopup(pid); });
+
+    const titlebar = wrapper.querySelector('.popup-titlebar');
+    titlebar.addEventListener('mousedown', function(e) {
+        if (e.target.getAttribute('data-role') === 'close') return;
+        startDrag(pid, e.clientX, e.clientY, wrapper, e);
+    });
+    titlebar.addEventListener('touchstart', function(e) {
+        if (e.target.getAttribute('data-role') === 'close') return;
+        var t = e.touches[0];
+        startDrag(pid, t.clientX, t.clientY, wrapper, e);
+    }, { passive: false });
+
+    wrapper.addEventListener('mousedown', function(e) {
+        if (e.target.getAttribute('data-role') === 'close') return;
+        bringToFront(pid);
+    });
+
+    popupContainer.appendChild(wrapper);
+
+    var popupData = { id: pid, element: wrapper, x: x, y: y, width: size.width, height: size.height, isBoss: !!isBoss };
+    activePopups.push(popupData);
+
+    if (isBoss) {
+        bossPopupData = popupData;
+        bossActive = true;
+        bossDodgeCount = 0;
+        bossDetectionRadius = 75;
+        bossCanDodge = true;
+        bossDodgeCooldown = false;
+        attachBossListeners(popupData);
+    }
+
+    return popupData;
+}
+
+function closePopup(popupId) {
+    if (gameOver) return;
+    var idx = -1;
+    for (var i = 0; i < activePopups.length; i++) { if (activePopups[i].id === popupId) { idx = i; break; } }
+    if (idx === -1) return;
+    var popup = activePopups[idx];
+    var wasBoss = popup.isBoss;
+
+    if (wasBoss) {
+        detachBossListeners(popup);
+        if (popup.element) popup.element.classList.remove('dodging');
+    }
+
+    if (popup.element && popup.element.parentNode) {
+        popup.element.style.transition = 'transform 0.12s ease-in, opacity 0.12s ease-in';
+        popup.element.style.transform = 'scale(0.5)';
+        popup.element.style.opacity = '0';
+        (function(el) {
+            setTimeout(function() { if (el && el.parentNode) el.parentNode.removeChild(el); }, 120);
+        })(popup.element);
+    }
+    activePopups.splice(idx, 1);
+    totalClosed++;
+    updateScoreDisplay();
+
+    if (wasBoss) {
+        bossActive = false;
+        bossPopupData = null;
+        if (bossDodgeTimer) { clearTimeout(bossDodgeTimer);
+            bossDodgeTimer = null; }
+        bossDodgeCooldown = false;
+        bossDodgeCount = 0;
+        bossDetectionRadius = 75;
+        bossCanDodge = true;
+        nextBossAt = totalClosed + 15 + Math.floor(Math.random() * 11);
+        updateScoreDisplay();
+        // Spawn two quick popups as a "reward" for beating the boss
+        setTimeout(function() { if (!gameOver && activePopups.length < MAX_POPUPS) spawnPopup(); }, 200);
+        setTimeout(function() { if (!gameOver && activePopups.length < MAX_POPUPS) spawnPopup(); }, 450);
+    }
+
+    if (activePopups.length < MAX_POPUPS && gameOver === false && !spawnTimerId) {
+        scheduleNextSpawn();
+    }
+}
+
+function bringToFront(popupId) {
+    var popup = null;
+    for (var i = 0; i < activePopups.length; i++) { if (activePopups[i].id === popupId) { popup = activePopups[i]; break; } }
+    if (!popup || !popup.element) return;
+    var maxZ = 0;
+    for (var j = 0; j < activePopups.length; j++) { var z = parseInt(activePopups[j].element.style.zIndex) || 0; if (z > maxZ) maxZ = z; }
+    popup.element.style.zIndex = maxZ + 1;
+}
+
+function spawnPopup() {
+    if (gameOver) return;
+
+    // Check if it's boss time — guaranteed at threshold, or 10% random chance
+    if (!bossActive && (totalClosed >= nextBossAt || Math.random() < 0.10)) {
+        createPopupElement(getRandomBossAd(), true);
+        totalSpawned++;
+        currentSpawnDelay = getSpawnDelay();
+        updateScoreDisplay();
+        if (activePopups.length >= MAX_POPUPS) { triggerBSOD(); return; }
+        scheduleNextSpawn();
+        return;
+    }
+
+    createPopupElement(getRandomAd(), false);
+    totalSpawned++;
+    currentSpawnDelay = getSpawnDelay();
+    updateScoreDisplay();
+    if (activePopups.length >= MAX_POPUPS) { triggerBSOD(); return; }
+    scheduleNextSpawn();
+}
+
+function scheduleNextSpawn() {
+    if (spawnTimerId) { clearTimeout(spawnTimerId);
+        spawnTimerId = null; }
+    if (gameOver) return;
+    if (activePopups.length >= MAX_POPUPS) return;
+    spawnTimerId = setTimeout(function() { spawnTimerId = null;
+        spawnPopup(); }, currentSpawnDelay);
+}
+</script>
+    <script>// ── BOSS DODGE LOGIC ──
+function getCloseButtonCenter(popupData) {
+    const el = popupData.element;
+    if (!el) return null;
+    const titlebar = el.querySelector('.popup-titlebar');
+    const closeBtn = el.querySelector('.close-btn');
+    if (!titlebar || !closeBtn) return null;
+    const btnRect = closeBtn.getBoundingClientRect();
+    return {
+        x: btnRect.left + btnRect.width / 2,
+        y: btnRect.top + btnRect.height / 2
+    };
+}
+
+function distanceToCloseButton(clientX, clientY, popupData) {
+    const center = getCloseButtonCenter(popupData);
+    if (!center) return Infinity;
+    const dx = clientX - center.x;
+    const dy = clientY - center.y;
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
+function triggerBossDodge() {
+    if (!bossActive || !bossPopupData || !bossPopupData.element || gameOver) return;
+    if (bossDodgeCooldown) return;
+    if (draggingPopup === bossPopupData) return;
+
+    const bounds = getDesktopBounds();
+    const el = bossPopupData.element;
+    const currentLeft = parseFloat(el.style.left) || 0;
+    const currentTop = parseFloat(el.style.top) || 0;
+    const pw = bossPopupData.width;
+    const ph = bossPopupData.height;
+
+    // Pick a new position at least 120px away from current
+    let newX, newY;
+    let attempts = 0;
+    do {
+        newX = Math.random() * Math.max(0, bounds.width - pw * 0.6);
+        newY = Math.random() * Math.max(0, bounds.height - ph * 0.6);
+        attempts++;
+    } while (
+        attempts < 20 &&
+        Math.abs(newX - currentLeft) < 100 &&
+        Math.abs(newY - currentTop) < 80
+    );
+
+    bossPopupData.x = clamp(newX, -pw * 0.5, bounds.width - pw * 0.5);
+    bossPopupData.y = clamp(newY, -ph * 0.4, bounds.height - ph * 0.4);
+
+    // Apply dodge animation class
+    el.classList.add('dodging');
+    el.style.left = bossPopupData.x + 'px';
+    el.style.top = bossPopupData.y + 'px';
+
+    // Remove transition class after animation completes
+    if (bossDodgeTimer) clearTimeout(bossDodgeTimer);
+    bossDodgeTimer = setTimeout(function() {
+        if (el) el.classList.remove('dodging');
+        bossDodgeTimer = null;
+    }, 200);
+
+    // Update dodge state
+    bossDodgeCount++;
+    bossCanDodge = false;
+    bossDodgeCooldown = true;
+    bossDetectionRadius = Math.max(28, bossDetectionRadius - 5);
+
+    // Reset cooldown after delay
+    setTimeout(function() {
+        bossDodgeCooldown = false;
+    }, 320);
+
+    updateScoreDisplay();
+}
+
+function handleBossMouseMove(e) {
+    if (!bossActive || !bossPopupData || gameOver) return;
+    if (draggingPopup === bossPopupData) return;
+    const dist = distanceToCloseButton(e.clientX, e.clientY, bossPopupData);
+
+    if (dist > bossDetectionRadius + 15) {
+        // Cursor left the danger zone — reset can-dodge flag
+        bossCanDodge = true;
+    }
+
+    if (dist <= bossDetectionRadius && bossCanDodge && !bossDodgeCooldown) {
+        triggerBossDodge();
+    }
+}
+
+function handleBossTouchMove(e) {
+    if (!bossActive || !bossPopupData || gameOver) return;
+    if (draggingPopup === bossPopupData) return;
+    if (!e.touches || e.touches.length === 0) return;
+    const t = e.touches[0];
+    const dist = distanceToCloseButton(t.clientX, t.clientY, bossPopupData);
+
+    if (dist > bossDetectionRadius + 20) {
+        bossCanDodge = true;
+    }
+
+    if (dist <= bossDetectionRadius && bossCanDodge && !bossDodgeCooldown) {
+        triggerBossDodge();
+    }
+}
+
+function attachBossListeners(popupData) {
+    const el = popupData.element;
+    if (!el) return;
+    el.addEventListener('mousemove', handleBossMouseMove);
+    el.addEventListener('touchmove', handleBossTouchMove, { passive: false });
+}
+
+function detachBossListeners(popupData) {
+    const el = popupData.element;
+    if (!el) return;
+    el.removeEventListener('mousemove', handleBossMouseMove);
+    el.removeEventListener('touchmove', handleBossTouchMove);
+}
+
+function resetBossState() {
+    if (bossPopupData && bossPopupData.element) {
+        detachBossListeners(bossPopupData);
+        bossPopupData.element.classList.remove('dodging');
+    }
+    bossActive = false;
+    bossPopupData = null;
+    bossDodgeCooldown = false;
+    bossDodgeCount = 0;
+    bossDetectionRadius = 75;
+    bossCanDodge = true;
+    if (bossDodgeTimer) { clearTimeout(bossDodgeTimer);
+        bossDodgeTimer = null; }
+}
+</script>
+    <script>// ── DRAGGING ──
+function startDrag(popupId, clientX, clientY, element, originalEvent) {
+    if (gameOver) return;
+    bringToFront(popupId);
+    var popup = null;
+    for (var i = 0; i < activePopups.length; i++) {
+        if (activePopups[i].id === popupId) { popup = activePopups[i]; break; }
+    }
+    if (!popup) return;
+    draggingPopup = popup;
+    dragOffsetX = clientX - popup.x;
+    dragOffsetY = clientY - popup.y;
+    element.classList.add('dragging');
+    // Remove dodge transition during drag for boss
+    if (popup.isBoss) { element.classList.remove('dodging'); }
+    if (originalEvent) originalEvent.preventDefault();
+}
+
+function onMouseMove(e) {
+    if (!draggingPopup) return;
+    var bounds = getDesktopBounds();
+    draggingPopup.x = clamp(e.clientX - dragOffsetX, -draggingPopup.width * 0.5, bounds.width - draggingPopup.width * 0.5);
+    draggingPopup.y = clamp(e.clientY - dragOffsetY, -draggingPopup.height * 0.4, bounds.height - draggingPopup.height * 0.4);
+    draggingPopup.element.style.left = draggingPopup.x + 'px';
+    draggingPopup.element.style.top = draggingPopup.y + 'px';
+}
+
+function onTouchMove(e) {
+    if (!draggingPopup) return;
+    var t = e.touches[0];
+    var bounds = getDesktopBounds();
+    draggingPopup.x = clamp(t.clientX - dragOffsetX, -draggingPopup.width * 0.5, bounds.width - draggingPopup.width * 0.5);
+    draggingPopup.y = clamp(t.clientY - dragOffsetY, -draggingPopup.height * 0.4, bounds.height - draggingPopup.height * 0.4);
+    draggingPopup.element.style.left = draggingPopup.x + 'px';
+    draggingPopup.element.style.top = draggingPopup.y + 'px';
+}
+
+function endDrag() {
+    if (!draggingPopup) return;
+    draggingPopup.element.classList.remove('dragging');
+    draggingPopup = null;
+}
+
+document.addEventListener('mousemove', onMouseMove);
+document.addEventListener('mouseup', endDrag);
+document.addEventListener('touchmove', onTouchMove, { passive: false });
+document.addEventListener('touchend', endDrag);
+document.addEventListener('touchcancel', endDrag);
+
+// ── START MENU ──
+function toggleStartMenu() {
+    startMenuOpen = !startMenuOpen;
+    if (startMenuOpen) {
+        startMenu.classList.add('show');
+        startBtn.classList.add('active');
+    } else {
+        startMenu.classList.remove('show');
+        startBtn.classList.remove('active');
+    }
+}
+function closeStartMenu() {
+    startMenuOpen = false;
+    startMenu.classList.remove('show');
+    startBtn.classList.remove('active');
+}
+
+startBtn.addEventListener('click', function(e) { e.stopPropagation(); toggleStartMenu(); });
+startMenu.addEventListener('click', function(e) {
+    var item = e.target.closest('.start-menu-item');
+    if (!item) return;
+    var act = item.getAttribute('data-do');
+    if (act === 'restart') { closeStartMenu(); restartGame(); }
+    else if (act === 'shutdown') { closeStartMenu(); if (!gameOver) triggerBSOD(); }
+    else {
+        item.style.background = '#000080';
+        item.style.color = '#fff';
+        setTimeout(function() { item.style.background = ''; item.style.color = ''; }, 200);
+        closeStartMenu();
+    }
+});
+document.addEventListener('click', function(e) {
+    if (startMenuOpen && !startMenu.contains(e.target) && e.target !== startBtn) { closeStartMenu(); }
+});
+
+// ── DESKTOP ICON CLICKS ──
+desktop.addEventListener('click', function(e) {
+    var icon = e.target.closest('.desktop-icon');
+    if (!icon) return;
+    icon.style.background = 'rgba(0,0,128,0.4)';
+    icon.style.border = '1px dotted #fff';
+    setTimeout(function() { icon.style.background = ''; icon.style.border = '1px solid transparent'; }, 200);
+});
+
+// ── TOUCH SCROLL PREVENTION ──
+document.addEventListener('touchmove', function(e) { if (draggingPopup) e.preventDefault(); }, { passive: false });
+popupContainer.addEventListener('touchend', function(e) {
+    if (e.target.getAttribute('data-role') === 'close') e.preventDefault();
+});
+</script>
+    <script>// ── GAME STATE ──
+var activePopups = [];
+var totalClosed = 0;
+var totalSpawned = 0;
+var gameOver = false;
+var spawnTimerId = null;
+var popupIdCounter = 0;
+var MAX_POPUPS = 20;
+var currentSpawnDelay = 1800;
+var draggingPopup = null;
+var dragOffsetX = 0;
+var dragOffsetY = 0;
+var startMenuOpen = false;
+
+// ── BOSS STATE ──
+var bossActive = false;
+var nextBossAt = 15 + Math.floor(Math.random() * 11); // 15-25 closed popups until first boss
+var bossDodgeCooldown = false;
+var bossDodgeCount = 0;
+var bossDetectionRadius = 75; // px from X button center
+var bossCanDodge = true; // requires cursor to leave radius then re-enter
+var bossPopupData = null;
+var bossDodgeTimer = null;
+
+// ── BSOD ──
+function triggerBSOD() {
+    gameOver = true;
+    if (spawnTimerId) { clearTimeout(spawnTimerId);
+        spawnTimerId = null; }
+    for (var i = 0; i < activePopups.length; i++) {
+        if (activePopups[i].element) {
+            activePopups[i].element.style.animation = 'none';
+            activePopups[i].element.style.transition = 'none';
+            activePopups[i].element.classList.remove('dodging');
+        }
+    }
+    if (bossPopupData && bossPopupData.element) {
+        detachBossListeners(bossPopupData);
+    }
+    bsodScore.textContent = 'You closed ' + totalClosed + ' pop-up' + (totalClosed !== 1 ? 's' : '') +
+        ' before the system crashed. ' + activePopups.length + ' remained active.';
+    bsod.classList.add('show');
+    bsod.style.display = 'flex';
+    bsod.setAttribute('tabindex', '0');
+    bsod.focus();
+    updateScoreDisplay();
+}
+
+function restartGame() {
+    for (var i = 0; i < activePopups.length; i++) {
+        if (activePopups[i].element && activePopups[i].element.parentNode) {
+            detachBossListeners(activePopups[i]);
+            activePopups[i].element.parentNode.removeChild(activePopups[i].element);
+        }
+    }
+    activePopups = [];
+    totalClosed = 0;
+    totalSpawned = 0;
+    gameOver = false;
+    popupIdCounter = 0;
+    currentSpawnDelay = 1800;
+    draggingPopup = null;
+    dragOffsetX = 0;
+    dragOffsetY = 0;
+    resetBossState();
+    nextBossAt = 15 + Math.floor(Math.random() * 11);
+    bsod.classList.remove('show');
+    bsod.style.display = 'none';
+    bsod.removeAttribute('tabindex');
+    updateMaxPopups();
+    updateScoreDisplay();
+    updateClock();
+    spawnPopup();
+    setTimeout(function() { if (!gameOver) spawnPopup(); }, 400);
+    setTimeout(function() { if (!gameOver) spawnPopup(); }, 800);
+}
+
+// ── BSOD RESTART ──
+bsod.addEventListener('click', function(e) { if (gameOver) restartGame(); });
+bsod.addEventListener('touchend', function(e) { if (gameOver) { e.preventDefault();
+        restartGame(); } });
+document.addEventListener('keydown', function(e) {
+    if (gameOver) { e.preventDefault();
+        restartGame(); return; }
+});
+
+// ── RESIZE ──
+var resizeDebounce = null;
+window.addEventListener('resize', function() {
+    if (resizeDebounce) clearTimeout(resizeDebounce);
+    resizeDebounce = setTimeout(function() {
+        var bounds = getDesktopBounds();
+        updateMaxPopups();
+        updateScoreDisplay();
+        for (var i = 0; i < activePopups.length; i++) {
+            var p = activePopups[i];
+            if (!p.element) continue;
+            p.x = clamp(p.x, -p.width * 0.5, bounds.width - p.width * 0.5);
+            p.y = clamp(p.y, -p.height * 0.4, bounds.height - p.height * 0.4);
+            p.element.style.left = p.x + 'px';
+            p.element.style.top = p.y + 'px';
+        }
+    }, 200);
+});
+
+// ── INIT ──
+updateMaxPopups();
+updateScoreDisplay();
+updateClock();
+setInterval(updateClock, 30000);
+setTimeout(function() { if (!gameOver) spawnPopup(); }, 300);
+setTimeout(function() { if (!gameOver) spawnPopup(); }, 700);
+setTimeout(function() { if (!gameOver) spawnPopup(); }, 1200);
+</script>
+</body>
+</html>
