@@ -1,0 +1,12 @@
+{
+  "game_id": "3cf227e32f1a41cb91250888162ca7cb",
+  "parent_game_id": "3cbe42d0798c458990da9f57a3d76800",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v61)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:85267fc8cbc2",
+  "created_at": "2026-07-28T08:42:25.673422Z",
+  "version": 20,
+  "prompt": "make the knight's right click give you money when you kill a zombie. make the zombies do 2* more damage",
+  "format": "multi-file"
+}
