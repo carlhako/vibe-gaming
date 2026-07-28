@@ -1,0 +1,12 @@
+{
+  "game_id": "c12141ea41614a4fbf9df289114b1b75",
+  "parent_game_id": "3cf227e32f1a41cb91250888162ca7cb",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v62)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:85267fc8cbc2",
+  "created_at": "2026-07-28T09:08:23.540214Z",
+  "version": 21,
+  "prompt": "make the knight have a upgrade that costs 50 tokens and you have to have level 3 damage to buy the upgrade. make it a big black sword and when you slash it big air slashes come out of the sword instead of using a normal swing.",
+  "format": "multi-file"
+}
