@@ -49,6 +49,7 @@ import re
 import shutil
 import time
 from pathlib import Path
+from typing import Callable
 
 import ai_client as ai
 import content_moderation
@@ -69,6 +70,55 @@ _logger = logging.getLogger(__name__)
 class GameGenerationError(Exception):
     """Recoverable failure in the generation pipeline. str(exc) is fed back
     to the model as the tool-call result so the next submission can fix it."""
+
+
+# ---------------------------------------------------------------------------
+# Live agent-event emission (create jobs only — see run_generation_attempts'
+# `emit` param). Mirrors agent.py's _make_emitter/_safe_emit/_reasoning_content
+# exactly; duplicated rather than imported since agent.py imports this module,
+# and a reverse import would cycle.
+# ---------------------------------------------------------------------------
+
+# Same truncate-before-store rationale as agent.py's _THOUGHT_MAX_CHARS: the
+# transcript a requester watches live and the one replayed later are the same
+# bytes by construction, so trim before db.add_agent_event, not after.
+_THOUGHT_MAX_CHARS = 24000
+
+
+def _make_emitter(job_id: str | None, db_conn) -> Callable:
+    """Default emit callback: writes a db.add_agent_event row. A no-op when
+    there's no job_id to key events on (e.g. direct/test calls)."""
+    if job_id is None:
+        return lambda role, content=None, data=None: None
+    return lambda role, content=None, data=None: db.add_agent_event(
+        job_id, role, content=content, data=data, conn=db_conn
+    )
+
+
+def _safe_emit(emit: Callable | None, role: str, content: str | None = None, data: dict | None = None) -> None:
+    """Emitting must never fail the job — same swallow-and-log discipline as
+    run_moderation_pass below. A no-op when there's no emitter at all (e.g.
+    game_enhancer.enhance_game()'s legacy path never passes one)."""
+    if emit is None:
+        return
+    try:
+        emit(role, content, data)
+    except Exception:
+        _logger.exception("agent event emit failed (role=%s)", role)
+
+
+def _reasoning_content(ask_result: "ai.ToolAskResult") -> str | None:
+    """Thinking-mode chain-of-thought, when present, pulled from the raw
+    response — ai_client.ask_with_tools() strips reasoning_content from the
+    returned .message (DeepSeek rejects it echoed back), so the raw payload
+    is the only place left carrying it."""
+    try:
+        choices = ask_result.raw_response.get("choices") or []
+        message = choices[0].get("message") or {}
+    except (AttributeError, IndexError, TypeError):
+        return None
+    text = message.get("reasoning_content")
+    return text.strip() if isinstance(text, str) and text.strip() else None
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +407,8 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
                              parent_game_id: str | None = None,
                              root_game_id: str | None = None,
                              title_override: str | None = None,
-                             version_override: int = 1) -> dict:
+                             version_override: int = 1,
+                             emit: Callable | None = None) -> dict:
     """Drive the submit -> safety-scan -> mint id/slug -> write ->
     smoke-test loop shared by a brand-new game and an enhancement fork,
     as ONE multi-turn conversation: each rejected submit_game call gets
@@ -383,6 +434,12 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
 
     Returns a dict: success/game_id/slug/title/description/notes/attempts/
     tokens_used/model/effort/error.
+
+    `emit(role, content=None, data=None)` (optional), when given, is called
+    with the model's chain-of-thought after each successful ask_with_tools
+    call — see _reasoning_content/_safe_emit above. Only generate_game()
+    passes a real emitter; game_enhancer.enhance_game() leaves it None, so
+    legacy single-file enhance has no live transcript, unchanged.
     """
     max_attempts = cfg.get("max_attempts", 3)
     model = cfg.get("model", "")
@@ -458,6 +515,10 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
         last_effort = ask_result.effort
         redacted = _redact_raw_response(ask_result.raw_response)
         messages.append(ask_result.message)
+
+        thought = _reasoning_content(ask_result)
+        if thought:
+            _safe_emit(emit, "thought", thought[:_THOUGHT_MAX_CHARS])
 
         # finish_reason == "length": the reply hit the hard output-token
         # ceiling (ai.MAX_OUTPUT_TOKENS) and was cut off mid-stream, so the
@@ -617,12 +678,14 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
     games_dir = Path(games_dir) if games_dir is not None else GAMES_DIR
     cfg = config.get("newaiwebgame", {})
     system_prompt = _build_system_prompt()
+    emit = _make_emitter(job_id, db_conn)
 
     t0 = time.monotonic()
     outcome = run_generation_attempts(
         description=description, requested_by=requested_by, system_prompt=system_prompt,
         initial_user_prompt=_build_user_prompt(description),
         cfg=cfg, games_dir=games_dir, job_id=job_id, db_conn=db_conn,
+        emit=emit,
     )
     duration = time.monotonic() - t0
 
@@ -674,4 +737,8 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
         }
 
     result["message"] = format_report(result)
+    if result["success"]:
+        _safe_emit(emit, "final", result["notes"] or "New game ready.", {"url": result["url"]})
+    else:
+        _safe_emit(emit, "error", result["error"])
     return result

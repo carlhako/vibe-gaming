@@ -266,6 +266,7 @@
   let sawAnyEvent = false;
   let pollTimer = null;
   let consecutiveErrors = 0;
+  let kindApplied = false;
   const MAX_CONSECUTIVE_ERRORS = 10;
   // "cancelled" belongs here: without it a cancelled job kept polling this
   // endpoint once a second forever, successfully, so the consecutive-error
@@ -278,6 +279,15 @@
       if (!res.ok) throw new Error(`events ${res.status}`);
       consecutiveErrors = 0;
       const data = await res.json();
+      // A brand-new game request has no live tool-call/build steps like a
+      // multi-file enhance does — just the model's own thinking — so the
+      // generic "Waiting for the agent…" line gets a friendlier one-time
+      // rewrite once we know the job's kind, before any event replaces it.
+      if (!kindApplied && placeholder.isConnected && data.kind === "create") {
+        placeholder.textContent =
+          "We've sent your new game request over to our expert game-making agent — it's thinking it through now.";
+        kindApplied = true;
+      }
       for (const event of data.events) {
         appendEvent(event);
         lastSeq = Math.max(lastSeq, event.seq);
