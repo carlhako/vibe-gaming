@@ -1,0 +1,12 @@
+{
+  "game_id": "63af692a046343419233b604d1b06b61",
+  "parent_game_id": "c12141ea41614a4fbf9df289114b1b75",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v63)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:7fbda6b03e03",
+  "created_at": "2026-07-28T09:24:46.562593Z",
+  "version": 22,
+  "prompt": "make it so when you get a zombie from the secondary ability on the knight that the zombie will follow you if it cannot fight currently",
+  "format": "multi-file"
+}
