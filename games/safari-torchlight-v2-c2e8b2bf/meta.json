@@ -1,0 +1,11 @@
+{
+  "game_id": "c2e8b2bf7ead403c93f11ab7f297232c",
+  "parent_game_id": "7efb6baa274c4a8e90e184d21b56a5dc",
+  "root_game_id": "7efb6baa274c4a8e90e184d21b56a5dc",
+  "title": "Safari Torchlight (v2)",
+  "description": "A pixel-art roguelike where you collect torch parts to light a big torch, then choose a monster to unleash each round.",
+  "requested_by": "web:85267fc8cbc2",
+  "created_at": "2026-07-28T04:25:33.590782Z",
+  "version": 2,
+  "prompt": "when the big torch spawn's right now you can't light it up make it so when you press e when you are near the torch you turn it on"
+}
