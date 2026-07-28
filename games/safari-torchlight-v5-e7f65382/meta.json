@@ -1,0 +1,11 @@
+{
+  "game_id": "e7f65382651545cd860bd8987347cd8d",
+  "parent_game_id": "e4c1051a74834147a0a513636def249b",
+  "root_game_id": "7efb6baa274c4a8e90e184d21b56a5dc",
+  "title": "Safari Torchlight (v5)",
+  "description": "Roguelike survival where a zebra collects torch parts in a dark savanna filled with monsters. Climb trees, light the big torch, and choose which new monster to unleash each round.",
+  "requested_by": "web:85267fc8cbc2",
+  "created_at": "2026-07-28T05:28:33.515008Z",
+  "version": 5,
+  "prompt": "one of the monsters don't work and the monster is the wolf once you collect all the torch parts the wolf dosn't activate and make the wolf model look more like a wolf. a reminder if you forgot is that the wolf is a monster that is only activated once all torch parts have been collected the wolf lurks around at the players speed and once it spots the player it go 2* the players speed"
+}
