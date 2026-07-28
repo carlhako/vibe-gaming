@@ -1,0 +1,12 @@
+{
+  "game_id": "14961908332a4a91922be326c3366a98",
+  "parent_game_id": "63af692a046343419233b604d1b06b61",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v64)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:85267fc8cbc2",
+  "created_at": "2026-07-28T09:28:15.022866Z",
+  "version": 23,
+  "prompt": "make the knight's zombies do 1.5* more damage and make them 2* faster.",
+  "format": "multi-file"
+}
