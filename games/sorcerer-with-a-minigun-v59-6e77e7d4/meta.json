@@ -1,0 +1,12 @@
+{
+  "game_id": "6e77e7d46eaf42fea9d343b132990300",
+  "parent_game_id": "aec79c16ca85400198d97cf5cadec199",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v59)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:85267fc8cbc2",
+  "created_at": "2026-07-28T08:13:35.145034Z",
+  "version": 18,
+  "prompt": "bring back the knight character.",
+  "format": "multi-file"
+}
