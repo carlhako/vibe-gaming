@@ -673,6 +673,75 @@ which is why both the match count and the per-line length are capped.
 `_compact_write_calls` deliberately removes its own write calls from the
 conversation: that same job rewrote `config.js` five times for one feature.
 
+**A match the observation doesn't show is worse than no match at all.** That
+per-line cap used to take the line's **first** 200 characters, and on a
+minified-ish line that is nowhere near the match: job 837b2b8c (2026-07-27)
+spent 20 of its 60 turns — a third of the run — trying to edit one line of a
+`render.js` with 137 lines over 200 chars, longest 4,729. Every `search`
+answered `1 match(es)` and then showed text not containing the match, so the
+model could not build an `edit_file` `old_string`; it re-read the whole 96KB
+module three times (~36,700 fresh tokens each, 22% of the run's cost), began
+guessing the file held literal `\ud83c` escapes where it actually holds the
+emoji, and ran out of steps mid-change. Its own words at step 45: *"the entire
+line is a single very long line and search only reports the beginning."* This
+is the same shape as the two gates documented above that rejected their own
+remedies — `_edit_file`'s zero-match rejection tells the model to use `search`
+to find the text "as it is actually written", and `search` structurally could
+not do that. `_match_window` now centres the window on the match (cap raised
+to 400, worst case still 60 × 400 ≈ 24KB) and states its position,
+`…foo…  [chars 2818-3217 of 4729]`, so a model needing a different part of the
+line knows one exists and can slide the window with another pattern instead of
+re-reading. A line that already fits is returned byte-identical to before. The
+`…` is the one piece of scaffolding here the model could copy into an
+`old_string`, so the header says once that it isn't file content — in an
+observation, which is the category that has never caused an imitation bug,
+unlike an arguments slot (see `_compact_write_calls`).
+
+**Running out of steps is not the same failure as stalling, and the run now
+asks before it ships.** Both used to fall through to that same forced
+verification, which is right for a run that finished and forgot to call
+`finish`, and wrong for one still mid-change. Job 837b2b8c was executing
+`edit_file` on its 60th step, adding the last of three requested features; it
+shipped a half-applied change as a plain success with a 🎉, so the requester
+only found out by playing the game. The loop cannot judge which case it is in
+— "am I nearly done" is exactly the question this model answers badly — but a
+human reading the transcript can, in seconds. So at the ceiling the run emits
+an `approval_request` event and **blocks**, polling its own row the way the
+cancel checkpoint does, at the top of a turn where the conversation ends in a
+tool result and nothing is in flight. `POST /api/jobs/<job_id>/approve-steps`
+answers it (no auth — the 32-hex job id is the capability, same as cancel);
+the status page's transcript pane renders the buttons, and clamps the granted
+number server-side because that button is public. Asked **once** per run
+(`extra_steps_on_approval`, 40): a second prompt would mostly be asked of
+someone who has stopped watching, and the context guard is the backstop past
+that. A grant appends one user message — appended, never inserted, so the
+cached prefix survives — and re-arms `finish_nudge_at` and the budget nudges
+against the new ceiling, the same "a fresh budget earns a fresh warning"
+principle as the stall nudge being re-armed by a successful write.
+
+The wait is bounded (`step_approval_timeout_seconds`, 1800) for a reason worth
+knowing before changing it: `db.claim_next_queued_request` allows exactly one
+`generating` job site-wide, so **a paused run blocks the whole queue**. On
+timeout it does exactly what it did before this existed. It stays `generating`
+throughout rather than taking a sixth `status` value, which would ripple into
+`_already_cancelled`, `sweep_orphaned_requests`, the claim guard and the
+`TERMINAL_STATUSES`/`LABELS` tables in three JS files for no gain; the state
+lives in two nullable columns instead, written by direct `UPDATE`s that skip
+`update_generation_request` because it bumps `updated_at`, which
+`/api/status` serves as `generating_started_at` — routing an approval through
+it would restart the elapsed timer on the user's screen. `extra_steps_granted`
+is tri-state: NULL unanswered, 0 declined ("ship what you have"), >0 granted.
+A `job_id` with no row, or `extra_steps_on_approval: 0`, skips the prompt
+entirely rather than waiting out a timeout for an answer that cannot come.
+
+**A forced-verification ship now says so.** `_run_react_loop` returns
+`complete`, false whenever the last-ditch gate is what shipped the run, and
+the summary leads with *"⚠️ The agent ran out of turns before confirming it
+was done… the requested change may be only partly applied."* The `final`
+event carries `incomplete: true` and both chat panes drop the 🎉. Passing
+build → scan → smoke means the code *builds*, which was never the same claim
+as the request having been carried out.
+
 **The agent event stream + live chat UI.** Every think/act/observe/verify
 step is emitted through an `emit(role, content, data)` callback
 (`agent.py`'s default writes a `db.add_agent_event` row keyed by
@@ -799,6 +868,8 @@ app.py                 Flask site: menu, /games/new, /games/<id>/enhance,
                         /games/<id>/download, /status/<job_id>, /api/games
                         (sort), /api/games/<id>/info (prompt/model/tokens/
                         lineage), /api/jobs/<job_id>/events (agent transcript),
+                        /api/jobs/<job_id>/cancel, /api/jobs/<job_id>/approve-steps
+                        (grant a paused run more turns),
                         rate endpoint, report endpoint, /signup,
                         /u/<uid> (sign-in link), /signin, /account, /profile,
                         /leaderboard, access-log middleware, /admin/stats,
@@ -852,8 +923,9 @@ games/block-dodge/      bundled game (game_id committed in meta.json)
 games/connect-4-4/      bundled game (game_id committed in meta.json)
 tests/                  pytest suite: db.py, startup disk-sync, fork linkage, reports,
                         builder, agent (ReAct loop), explode/dual-format, job UI,
-                        admin explode control; agent_harness.py's scripted_asks
-                        asserts the append-only invariant on every agent test
+                        admin explode control, step-budget approval; agent_harness.py's
+                        scripted_asks asserts the append-only invariant on every
+                        agent test
 config.yaml.example     copy to config.yaml
 .env.example            copy to .env: DEEPSEEK_API_KEY, ADMIN_TOKEN
 ```

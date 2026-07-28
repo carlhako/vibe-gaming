@@ -102,6 +102,14 @@
           ? `Approx ${formatMinutes(job.eta_seconds)} until your turn.`
           : "We don't have a time estimate yet.";
         stopTicking();
+      } else if (job.awaiting_approval) {
+        // Still 'generating' as far as the job row is concerned — it just
+        // can't proceed until someone answers. The buttons live in the
+        // transcript pane, because the transcript is what the answer depends
+        // on; this pane's job is to make sure you notice.
+        detail.textContent = "Paused — the agent used all its turns and is waiting "
+          + "for you. Review the transcript on the right and choose whether to "
+          + "give it more.";
       } else {
         detail.textContent = "DeepSeek is writing the game and running the safety/smoke checks now.";
         const verb = KIND_VERB[job.kind] || "Jobs";

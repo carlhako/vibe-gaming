@@ -176,6 +176,36 @@ _MAX_NO_PROGRESS_STEPS = 5
 def _finish_nudge_threshold(max_steps: int) -> int:
     return max(5, max_steps // 4)
 
+# Running out of steps is not the same failure as stalling, and until now the
+# loop could not tell the difference — both fell through to the forced final
+# verification, which ships whatever passes build → scan → smoke. That is
+# right for a run that finished the work and merely forgot to call finish. It
+# is wrong for a run that was still mid-change: job 837b2b8c (2026-07-27) was
+# executing edit_file on its 60th step, adding the last of three requested
+# features, and shipped a half-applied change as a plain success. Nothing in
+# the transcript said so, so the requester had to notice the game was wrong
+# and enhance again.
+#
+# The loop cannot judge which case it is in — "am I nearly done" is exactly
+# the question this model answers badly — but a human reading the transcript
+# can, in seconds. So the run pauses once at the ceiling and asks.
+#
+# One shot, deliberately: a second prompt would mostly be asked of someone who
+# has already stopped watching, and the context guard is the backstop for a
+# run that genuinely needs more room than 100 turns. Both are CODE defaults
+# rather than config-only ones, for the DEFAULT_AGENT_MODEL reason —
+# config.yaml is gitignored, so a config-only default never reaches a fresh
+# clone or a deployment. Set extra_steps_on_approval to 0 to disable the
+# prompt entirely, which is what a headless deployment wants.
+DEFAULT_EXTRA_STEPS_ON_APPROVAL = 40
+# A paused run holds the single 'generating' slot that
+# db.claim_next_queued_request allows site-wide, so it blocks every other
+# queued job for as long as it waits. That is the whole reason this is bounded
+# rather than indefinite. On timeout the run behaves exactly as it did before
+# this feature existed.
+DEFAULT_STEP_APPROVAL_TIMEOUT_SECONDS = 1800
+_APPROVAL_POLL_SECONDS = 2
+
 # Marks every placeholder this module leaves in the conversation where real
 # material was pruned away (compacted write calls, dropped read results).
 # Two jobs: it makes those placeholders unmistakably bookkeeping rather than
@@ -783,9 +813,74 @@ def _read_file_nudge(path: str, written: set[str] | None,
 # point: an answer the model can still see is an answer it won't ask for
 # twice. Which only holds if the answer stays small, hence both caps. A
 # pattern broad enough to blow through them is a pattern that should have
-# been narrower, and the observation says so.
+# been narrower, and the observation says so. Worst case is 60 × 400 ≈ 24KB
+# of conversation, once, at the cached rate thereafter.
 _SEARCH_MAX_MATCHES = 60
-_SEARCH_MAX_LINE_CHARS = 200
+# 400, up from 200, and — the part that actually mattered — the window is
+# centred on the MATCH rather than taken from the start of the line (see
+# _match_window). Job 837b2b8c (2026-07-27) spent 20 of its 60 turns on one
+# line of a render.js with 137 lines over 200 chars, the longest 4,729: every
+# search reported `1 match(es)` and then showed the first 200 characters,
+# which did not contain the match. The model re-read the whole 96KB file three
+# times (~36,700 fresh tokens each, 22% of that run's total cost), never saw
+# the bytes it needed, started guessing that the file held literal `\ud83c`
+# escapes where it actually holds the emoji, and ran out of steps mid-change.
+# Its own reasoning at step 45: "the entire line is a single very long line
+# and search only reports the beginning."
+#
+# This is the failure class this file has already been bitten by twice (the
+# declaration-parity gate that rejected its own remedy; the module ceiling the
+# model dodged by deleting code): _edit_file's zero-match rejection tells the
+# model to use search to find the text "as it is actually written", and search
+# structurally could not do that for a long line.
+_SEARCH_MAX_LINE_CHARS = 400
+
+
+def _match_window(line: str, match: re.Match) -> tuple[str, bool]:
+    """One line of search output, and whether it had to be windowed.
+
+    A line that fits is returned stripped, byte-identical to what this
+    function's predecessor produced — the common case must not change, both
+    because it is the overwhelming majority of matches and because a stable
+    observation is a cached one.
+
+    A line that does not fit is windowed around `match` instead of truncated
+    from the left, because the whole point of the observation is to show the
+    model the bytes it is about to copy into an edit_file `old_string`, and on
+    a 4,729-char line those bytes are nowhere near character zero. The window
+    carries its own position, so a model that needs a different part of the
+    line knows one exists and can slide the window by searching for something
+    further along it rather than re-reading the file.
+    """
+    stripped = line.strip()
+    if len(stripped) <= _SEARCH_MAX_LINE_CHARS:
+        return stripped, False
+
+    start, end = match.span()
+    span = end - start
+    if span >= _SEARCH_MAX_LINE_CHARS:
+        # A match wider than the window: anchor at its start rather than
+        # centring, so the window at least begins where the model asked.
+        win_start = start
+    else:
+        win_start = max(0, start - (_SEARCH_MAX_LINE_CHARS - span) // 2)
+    win_end = min(len(line), win_start + _SEARCH_MAX_LINE_CHARS)
+    # Pull back off the right edge so a match near the end of the line still
+    # gets a full window of context rather than a stub.
+    win_start = max(0, win_end - _SEARCH_MAX_LINE_CHARS)
+
+    window = line[win_start:win_end]
+    if win_start == 0:
+        # Match the stripped short-line branch, and keep the reported offsets
+        # honest about what was dropped.
+        lstripped = window.lstrip()
+        win_start += len(window) - len(lstripped)
+        window = lstripped
+    if win_end == len(line):
+        window = window.rstrip()
+
+    text = ("…" if win_start > 0 else "") + window + ("…" if win_end < len(line) else "")
+    return f"{text}  [chars {win_start + 1}-{win_end} of {len(line)}]", True
 
 
 def _search(game_dir: Path, pattern: str, path: str | None = None) -> str:
@@ -814,21 +909,22 @@ def _search(game_dir: Path, pattern: str, path: str | None = None) -> str:
 
     lines: list[str] = []
     total = 0
+    any_windowed = False
     for rel, file_path in targets:
         try:
             text = file_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
-            if not rx.search(line):
+            match = rx.search(line)
+            if match is None:
                 continue
             total += 1
             if len(lines) >= _SEARCH_MAX_MATCHES:
                 continue
-            stripped = line.strip()
-            if len(stripped) > _SEARCH_MAX_LINE_CHARS:
-                stripped = stripped[:_SEARCH_MAX_LINE_CHARS] + " …"
-            lines.append(f"{rel}:{lineno}: {stripped}")
+            shown, windowed = _match_window(line, match)
+            any_windowed = any_windowed or windowed
+            lines.append(f"{rel}:{lineno}: {shown}")
 
     # The pattern is echoed back VERBATIM, not through !r. repr() would turn
     # `function\s+\w+` into `'function\\s+\\w+'`, and this model reliably
@@ -844,7 +940,24 @@ def _search(game_dir: Path, pattern: str, path: str | None = None) -> str:
             f" — showing the first {len(lines)}. Narrow the pattern if you "
             "need the rest"
         )
-    return header + ":\n" + "\n".join(lines)
+    out = header + ":\n" + "\n".join(lines)
+    if any_windowed:
+        # Said once, in the header, rather than on every windowed line: the
+        # '…' is the one piece of scaffolding in this observation that could
+        # end up copied into an edit_file 'old_string', and one clear sentence
+        # is both cheaper and more legible than 60 repetitions of a caveat.
+        # An observation is also the safe place to put it — the imitation bugs
+        # this file documents all came from text left in an ARGUMENTS slot
+        # (see _compact_write_calls), never from a tool result.
+        out += (
+            "\n\nSome matches are on lines too long to show whole. Those are "
+            "windowed around the match: '…' marks where the line was trimmed "
+            "and '[chars A-B of N]' gives the window's position. Neither is "
+            "part of the file — do not include them in an edit_file "
+            "'old_string'. To see a different part of a long line, search for "
+            "something written further along it; the window follows the match."
+        )
+    return out
 
 
 def _write_file(game_dir: Path, path: str, contents: str, max_module_bytes: int,
@@ -2099,6 +2212,81 @@ def _compact_write_calls(messages: list[dict], assistant_msg: dict,
     ]
 
 
+def _await_step_approval(*, job_id: str, db_conn, emit: Callable | None,
+                          extra_steps: int, timeout_seconds: float,
+                          step_budget: int, wrote_anything: bool,
+                          ) -> tuple[int, bool]:
+    """Pause the run at its step ceiling and ask the requester for more turns.
+
+    Returns (steps_granted, cancelled). A grant of 0 means the user said stop,
+    the wait timed out, or the job was cancelled — the caller ends the loop
+    either way, and only `cancelled` changes what happens next (a cancel skips
+    the forced final verification, exactly as the mid-run cancel check does).
+
+    Blocking a worker thread is not something this codebase does lightly: the
+    paused job holds the one 'generating' slot claim_next_queued_request
+    allows site-wide, so the whole queue waits with it. That is why the wait is
+    bounded, why cancel is checked on every poll rather than only at the end,
+    and why the timeout path is byte-for-byte the behaviour that existed before
+    this function did.
+
+    The waiting flag is cleared on every exit, including the exceptional one —
+    a job that finished while still advertising a live prompt would leave the
+    UI offering buttons that can never be answered.
+    """
+    minutes = max(1, int(round(timeout_seconds / 60)))
+    written = ("Everything it has written so far is on disk and will be "
+               "verified either way." if wrote_anything
+               else "It has not written any files yet.")
+    db.request_step_approval(job_id, conn=db_conn)
+    if db.get_step_approval(job_id, conn=db_conn)[0] is None:
+        # The UPDATE matched no row, so there is no job to poll and no status
+        # page attached to one — blocking would burn the whole timeout waiting
+        # for an answer that cannot arrive. Emit nothing and behave exactly as
+        # a run with job_id=None does.
+        return 0, False
+    _safe_emit(
+        emit, "approval_request",
+        f"The agent has used all {step_budget} of its turns without calling "
+        f"finish. {written} Read the transcript above: if it still looks like "
+        f"it is making progress, you can give it {extra_steps} more turns. "
+        f"Waiting up to {minutes} minute(s) — with no answer, it verifies and "
+        "ships whatever is written now.",
+        {"step": step_budget, "extra_steps": extra_steps,
+         "timeout_seconds": timeout_seconds, "wrote_anything": wrote_anything},
+    )
+
+    deadline = time.monotonic() + timeout_seconds
+    granted, cancelled, outcome = 0, False, "timeout"
+    try:
+        while True:
+            if db.is_job_cancelled(job_id, conn=db_conn):
+                cancelled, outcome = True, "cancelled"
+                break
+            _, decision = db.get_step_approval(job_id, conn=db_conn)
+            if decision is not None:
+                granted = max(0, int(decision))
+                outcome = "granted" if granted else "declined"
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(_APPROVAL_POLL_SECONDS, remaining))
+    finally:
+        db.clear_step_approval(job_id, conn=db_conn)
+
+    message = {
+        "granted": f"You granted {granted} more turns.",
+        "declined": "You chose to stop here and ship what is already written.",
+        "timeout": (f"No answer within {minutes} minute(s) — verifying and "
+                    "shipping whatever is written now."),
+        "cancelled": "Job cancelled while waiting.",
+    }[outcome]
+    _safe_emit(emit, "approval_result", message,
+               {"outcome": outcome, "extra_steps": granted})
+    return granted, cancelled
+
+
 def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                      cfg: dict, job_id: str | None, db_conn, emit: Callable | None = None,
                      extra_verify: Callable | None = None,
@@ -2177,6 +2365,12 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     # wording and _normalize_agent_path), but the cap needs real headroom
     # above "one write per module" too.
     max_steps = cfg.get("max_steps", 60)
+    extra_steps_on_approval = cfg.get(
+        "extra_steps_on_approval", DEFAULT_EXTRA_STEPS_ON_APPROVAL
+    )
+    step_approval_timeout = cfg.get(
+        "step_approval_timeout_seconds", DEFAULT_STEP_APPROVAL_TIMEOUT_SECONDS
+    )
     max_verification_retries = cfg.get("max_verification_retries", 3)
     max_module_bytes = cfg.get("max_module_bytes", DEFAULT_MAX_MODULE_BYTES)
     module_warn_bytes = cfg.get(
@@ -2250,7 +2444,13 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     # never blocked.
     last_input_tokens = 0
     nudged_context = False
-    finish_nudge_at = _finish_nudge_threshold(max_steps)
+    # Mutable, because the user can extend it once at the ceiling (see
+    # _await_step_approval). Everything inside the loop measures against
+    # step_budget; max_steps is only the starting value and the one-shot
+    # prompt's trigger point.
+    step_budget = max_steps
+    asked_for_more_steps = False
+    finish_nudge_at = _finish_nudge_threshold(step_budget)
     summary = ""
     last_candidate_summary = ""
     error = None
@@ -2295,7 +2495,59 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                     "forced": forced})
         return False, detail
 
-    for step_num in range(1, max_steps + 1):
+    step_num = 0
+    while True:
+        step_num += 1
+        # Step-budget guard, checked HERE for the same reason the two guards
+        # below are: the conversation ends in a tool result or a user message
+        # at this point, so appending one is legal and stopping loses nothing
+        # — every tool call from the previous turn has already run and hit
+        # disk. Which is also what makes it safe to block here for half an
+        # hour: nothing is in flight.
+        if step_num > step_budget:
+            # job_id is None means there is nobody to ask — a direct call or a
+            # test, with no generation_requests row to poll and no status page
+            # watching it. Those runs keep the pre-existing behaviour exactly.
+            if (job_id is None or asked_for_more_steps
+                    or extra_steps_on_approval <= 0):
+                break
+            asked_for_more_steps = True
+            extra, cancelled = _await_step_approval(
+                job_id=job_id, db_conn=db_conn, emit=emit,
+                extra_steps=extra_steps_on_approval,
+                timeout_seconds=step_approval_timeout,
+                step_budget=step_budget, wrote_anything=wrote_anything,
+            )
+            if cancelled:
+                error = "cancelled by user"
+                break
+            if not extra:
+                break
+            step_budget += extra
+            # A fresh budget earns a fresh warning — same principle as the
+            # stall nudge being re-armed by any successful write. Without
+            # this, finish_nudge_at still points at the old ceiling, which is
+            # now in the past, so the model would coast to the new one with
+            # no warning at all.
+            finish_nudge_at = _finish_nudge_threshold(step_budget)
+            nudged_low_budget = False
+            nudged_refinish = False
+            # Appended, never inserted or edited, so the cached prefix is
+            # untouched and this costs one turn's worth of fresh tokens once.
+            # Worded the way every other nudge here is: lead with what to do.
+            # "You ran out of turns" invites the state-re-checking sweep that
+            # _compact_write_calls' note wording documents.
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"The user reviewed your progress and granted you {extra} "
+                    f"more turns ({step_budget} in total). Carry on from where "
+                    "you are: make the edits this request still needs, then "
+                    "call finish(summary). Do not start over, re-read files "
+                    "you have already seen, or re-check work you have already "
+                    "done — everything you have written is on disk."
+                ),
+            })
         # Cancellation check, checked HERE for the same reason the context
         # guard below is: the conversation always ends in a tool result or a
         # user message at this point, so breaking loses nothing this turn —
@@ -2499,7 +2751,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         # _finish_nudge_threshold): one for a run that has never verified and
         # is running low, and one for a run that failed a finish, fixed it, and
         # is now re-reading instead of re-verifying. Only one fires per turn.
-        steps_left = max_steps - step_num
+        steps_left = step_budget - step_num
         if (verification_attempts > 0 and edited_since_finish
                 and not nudged_refinish and steps_left <= finish_nudge_at):
             # A finish already failed and the model has since edited files to
@@ -2623,16 +2875,32 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     # only when the verification-retry budget is already spent (that ceiling
     # exists to stop exactly this kind of repetition) or when nothing was ever
     # written (nothing to verify).
+    complete = success
     if (not success and not cancelled and wrote_anything
             and verification_attempts < max_verification_retries):
-        stalled_error = error or f"ran out of steps after {max_steps} turns"
+        stalled_error = error or f"ran out of steps after {step_budget} turns"
         passed, detail = run_verification(forced=True)
         if passed:
             success = True
-            summary = last_candidate_summary or (
-                "The agent stopped without calling finish; its written files "
-                "passed a forced final build, safety scan and smoke test."
+            # Shipped, but say so plainly. This path passing means the code
+            # BUILDS, not that the request was carried out: job 837b2b8c
+            # (2026-07-27) was mid-edit on the last of three requested
+            # features when its budget ran out, passed build/scan/smoke on the
+            # two-and-a-bit it had done, and reported as an unqualified
+            # success with a 🎉 — so the requester only found out by playing
+            # the game. The forced verification is worth keeping (the
+            # alternative is discarding real work), but it must not be
+            # reported as a clean finish.
+            warning = (
+                "⚠️ The agent ran out of turns before confirming it was done. "
+                "Everything it had written passed the build, safety scan and "
+                "smoke test and has shipped, but the requested change may be "
+                "only partly applied — check the game and enhance again for "
+                "anything still missing."
             )
+            summary = (f"{warning}\n\nIts last summary of the work: "
+                       f"{last_candidate_summary}"
+                       if last_candidate_summary else warning)
             error = None
         else:
             # Report the real defect, not the stall that exposed it — "smoke
@@ -2643,6 +2911,10 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
 
     return {
         "success": success,
+        # True only for a run the model itself declared done with a passing
+        # finish(). A forced-verification ship is a success that shipped
+        # without that confirmation, and the callers surface the difference.
+        "complete": complete,
         "summary": summary,
         "attempts": verification_attempts,
         "input_tokens": total_input_tokens,
@@ -2694,7 +2966,7 @@ def is_multi_file_source(source_game_id: str, games_dir, conn=None) -> bool:
 
 def _failure_result(exc: Exception, cfg: dict, t0: float) -> dict:
     return {
-        "success": False, "game_id": None, "slug": None, "title": None,
+        "success": False, "complete": False, "game_id": None, "slug": None, "title": None,
         "description": None, "attempts": 0,
         "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "tokens_used": 0, "model": "default",
         "effort": cfg.get("effort", "high"), "duration_seconds": time.monotonic() - t0,
@@ -2795,7 +3067,7 @@ def enhance_multifile_game(source_game_id: str, description: str, requested_by: 
     if not outcome["success"]:
         gg.rollback_game_files(dest_dir)
         result = {
-            "success": False, "game_id": None, "slug": None, "title": None,
+            "success": False, "complete": False, "game_id": None, "slug": None, "title": None,
             "description": None, "attempts": outcome["attempts"],
             "input_tokens": outcome["input_tokens"], "output_tokens": outcome["output_tokens"],
             "tokens_used": outcome["tokens_used"], "cached_tokens": outcome["cached_tokens"],
@@ -2831,6 +3103,7 @@ def enhance_multifile_game(source_game_id: str, description: str, requested_by: 
         "tokens_used": outcome["tokens_used"], "cached_tokens": outcome["cached_tokens"],
         "model": outcome["model"], "effort": outcome["effort"],
         "duration_seconds": duration, "error": None, "notes": outcome["summary"],
+        "complete": outcome["complete"],
         "url": gg.build_play_url(dest_slug, config),
         "parent_game_id": source_row["game_id"], "root_game_id": source_row["root_game_id"],
     }
@@ -2851,7 +3124,8 @@ def enhance_multifile_game(source_game_id: str, description: str, requested_by: 
     result["message"] = ge.format_report(result)
     _safe_emit(emit, "final", result["notes"] or "Enhancement complete.",
                {"slug": result["slug"], "title": result["title"],
-                "url": f"/play/{result['slug']}"})
+                "url": f"/play/{result['slug']}",
+                "incomplete": not result["complete"]})
     return result
 
 
@@ -2950,7 +3224,7 @@ def explode_game(source_game_id: str, requested_by: str, config: dict, db_conn=N
     if not outcome["success"]:
         gg.rollback_game_files(dest_dir)
         result = {
-            "success": False, "game_id": None, "slug": None, "title": None,
+            "success": False, "complete": False, "game_id": None, "slug": None, "title": None,
             "description": None, "attempts": outcome["attempts"],
             "input_tokens": outcome["input_tokens"], "output_tokens": outcome["output_tokens"],
             "tokens_used": outcome["tokens_used"], "cached_tokens": outcome["cached_tokens"],
@@ -2987,6 +3261,7 @@ def explode_game(source_game_id: str, requested_by: str, config: dict, db_conn=N
         "model": outcome["model"], "effort": outcome["effort"],
         "duration_seconds": duration, "error": None,
         "notes": outcome["summary"] or "Converted to the multi-file format.",
+        "complete": outcome["complete"],
         "url": gg.build_play_url(dest_slug, config),
         "parent_game_id": source_row["game_id"], "root_game_id": source_row["root_game_id"],
     }
@@ -3008,7 +3283,8 @@ def explode_game(source_game_id: str, requested_by: str, config: dict, db_conn=N
     if announce_completion:
         _safe_emit(emit, "final", result["notes"],
                    {"slug": result["slug"], "title": result["title"],
-                    "url": f"/play/{result['slug']}"})
+                    "url": f"/play/{result['slug']}",
+                    "incomplete": not result["complete"]})
     else:
         _safe_emit(
             emit, "assistant",

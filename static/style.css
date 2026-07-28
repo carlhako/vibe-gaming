@@ -1119,9 +1119,71 @@ body {
   color: var(--ink);
 }
 
+.chat-msg-final.is-incomplete {
+  background: rgba(255, 180, 0, 0.08);
+  border-color: var(--accent);
+}
+
 .chat-final-play-link {
   display: inline-block;
   margin-top: 8px;
+}
+
+/* The one interactive card in the transcript: the run is blocked on it, so it
+   has to read as a stop rather than as another log line. */
+.chat-msg-approval {
+  background: rgba(255, 180, 0, 0.1);
+  border: 1px solid var(--accent);
+  color: var(--ink);
+}
+
+.chat-approval-head {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.chat-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.chat-approval-btn {
+  font: inherit;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel-raised);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.chat-approval-btn.is-primary {
+  border-color: var(--accent2);
+  color: var(--accent2);
+  font-weight: 700;
+}
+
+.chat-approval-btn:hover:not(:disabled) {
+  filter: brightness(1.25);
+}
+
+.chat-approval-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.chat-approval-note {
+  margin-top: 8px;
+  font-size: 0.9em;
+  opacity: 0.85;
+}
+
+.chat-msg-approval-result {
+  border: 1px solid var(--line);
+  background: var(--panel-raised);
+  font-weight: 600;
 }
 
 .chat-msg-error {

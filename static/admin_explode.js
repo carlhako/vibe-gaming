@@ -41,7 +41,10 @@
     write_file: "✏️",
     finish: "🏁",
   };
-  const TERMINAL_STATUSES = new Set(["success", "failed"]);
+  // "cancelled" belongs here for the same reason it does in agent_chat.js:
+  // without it a cancelled job polls this endpoint forever, successfully, so
+  // the consecutive-error escape never fires.
+  const TERMINAL_STATUSES = new Set(["success", "failed", "cancelled"]);
   const MAX_CONSECUTIVE_ERRORS = 10;
 
   let current = null; // { gameId, title, jobId, lastSeq, timer, errors }
@@ -138,8 +141,18 @@
         return el("div", `chat-msg chat-msg-build ${ok ? "is-success" : "is-fail"}`,
                   (ok ? "✅ " : "❌ ") + (event.content || "") + suffix);
       }
+      // Read-only here, deliberately: an admin watching an explode isn't the
+      // requester whose job it is to answer, and this same renderer replays
+      // finished runs from the History tab, where live buttons would be a lie.
+      // The answering UI is the status page's transcript pane.
+      case "approval_request":
+        return el("div", "chat-msg chat-msg-approval", "⏸️ " + (event.content || ""));
+      case "approval_result":
+        return el("div", "chat-msg chat-msg-approval-result",
+                  ((data.outcome === "granted" ? "▶️ " : "⏹️ ") + (event.content || "")));
       case "final":
-        return el("div", "chat-msg chat-msg-final", "🎉 " + (event.content || "Done."));
+        return el("div", `chat-msg chat-msg-final${data.incomplete ? " is-incomplete" : ""}`,
+                  (data.incomplete ? "" : "🎉 ") + (event.content || "Done."));
       case "error":
         return el("div", "chat-msg chat-msg-error", "⚠️ " + (event.content || "Failed."));
       default:

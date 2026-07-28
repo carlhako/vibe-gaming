@@ -32,6 +32,7 @@ from flask import (
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+import agent
 import builder
 import db
 import game_generator
@@ -109,6 +110,26 @@ def _load_ask_rate_limit_config() -> dict:
 
 
 _ASK_RATE_LIMIT = _load_ask_rate_limit_config()
+
+
+def _load_extra_steps_grant() -> int:
+    """How many extra turns POST /api/jobs/<id>/approve-steps may grant, from
+    `multifile_agent.extra_steps_on_approval` (same load-if-present pattern as
+    the two above). It has to be readable here and not only in agent.py,
+    because the route CLAMPS to it: the request body carries a number, the
+    button that sends it is public, and a client asking for 10,000 turns would
+    otherwise get them."""
+    config_path = _BASE_DIR / "config.yaml"
+    cfg = {}
+    if config_path.exists():
+        import yaml
+        with open(config_path) as f:
+            cfg = (yaml.safe_load(f) or {}).get("multifile_agent", {}) or {}
+    return int(cfg.get("extra_steps_on_approval",
+                       agent.DEFAULT_EXTRA_STEPS_ON_APPROVAL))
+
+
+_EXTRA_STEPS_GRANT = _load_extra_steps_grant()
 
 
 def get_db():
@@ -1117,6 +1138,9 @@ def create_app(games_dir=None) -> Flask:
             # Only ever set for kind='ask' jobs (the sanitized HTML reply,
             # once one succeeds) — None for every other kind.
             "answer": job.get("answer"),
+            # The left pane says so in words; the transcript pane is where the
+            # buttons live, since the transcript is what the answer depends on.
+            "awaiting_approval": bool(job.get("awaiting_approval_at")),
         })
 
     @app.post("/api/jobs/<job_id>/cancel")
@@ -1134,6 +1158,42 @@ def create_app(games_dir=None) -> Flask:
             return jsonify({"error": "job already finished", "status": job["status"]}), 409
         db.update_generation_request(job_id, status="cancelled", error="cancelled by user", conn=conn)
         return jsonify({"success": True, "status": "cancelled"})
+
+    @app.post("/api/jobs/<job_id>/approve-steps")
+    def approve_job_steps(job_id):
+        """Answer a paused agent run's request for more turns.
+
+        The second out-of-band signal into a running job, after cancel, and
+        deliberately the same shape: no auth, because knowing the 32-hex
+        job_id is the capability (it's the URL the requester was redirected
+        to and nobody else has), and a 409 for a job that isn't in a state to
+        receive it.
+
+        `extra_steps` of 0 is a real answer — "stop and ship what you have" —
+        and is why this isn't just a bare "approve" endpoint. Anything above
+        the configured grant is clamped rather than rejected: the number comes
+        from a public button, and a client asking for more turns than an admin
+        configured shouldn't get them, but nor is that worth an error.
+        """
+        if not _GAME_ID_RE.match(job_id):
+            abort(404)
+        conn = get_db()
+        job = db.get_generation_request(job_id, conn=conn)
+        if job is None:
+            abort(404)
+        if not job.get("awaiting_approval_at"):
+            return jsonify({
+                "error": "job is not waiting for approval",
+                "status": job["status"],
+            }), 409
+        payload = request.get_json(silent=True) or {}
+        try:
+            requested = int(payload.get("extra_steps", _EXTRA_STEPS_GRANT))
+        except (TypeError, ValueError):
+            requested = _EXTRA_STEPS_GRANT
+        granted = max(0, min(requested, _EXTRA_STEPS_GRANT))
+        db.grant_extra_steps(job_id, granted, conn=conn)
+        return jsonify({"success": True, "extra_steps": granted})
 
     @app.get("/api/jobs/<job_id>/events")
     def api_job_events(job_id):
@@ -1177,6 +1237,12 @@ def create_app(games_dir=None) -> Flask:
             "cached_tokens": job["cached_tokens"],
             "tokens_used": job["tokens_used"],
             "error": job["error"],
+            # A paused run is still 'generating' — it just can't proceed until
+            # someone answers. The chat pane polls this endpoint every second
+            # already, so the prompt's live/dead state rides along with the
+            # events rather than needing its own poll.
+            "awaiting_approval": bool(job.get("awaiting_approval_at")),
+            "approval_extra_steps": _EXTRA_STEPS_GRANT,
         })
 
     @app.before_request

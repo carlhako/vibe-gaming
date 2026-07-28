@@ -73,10 +73,26 @@ multifile_agent:
   model: "deepseek-v4-pro"
   effort: "high"
   timeout_seconds: 1800        # per ai_client.ask_with_tools() call
-  max_steps: 60                # hard cap on read/write/finish turns before giving up.
-                               # Exploding a 159KB game took 12 module writes; a run
-                               # that hits this cap before calling finish() verifies
-                               # nothing and ships nothing, so leave real headroom.
+  max_steps: 60                # read/write/finish turns before the run pauses to ask
+                               # for more (see extra_steps_on_approval). Exploding a
+                               # 159KB game took 12 module writes, so leave real
+                               # headroom -- the prompt is a safety net, not a budget.
+  extra_steps_on_approval: 40  # one-shot grant when max_steps runs out. The run emits
+                               # an approval_request event and blocks; the requester
+                               # reviews the transcript on /status/<job_id> and either
+                               # grants these extra turns or ships what's written.
+                               # Asked once per run, never twice. Set to 0 to disable
+                               # the prompt entirely (headless deployments) -- the run
+                               # then behaves as it did before this existed.
+                               # Job 837b2b8c (2026-07-27) is why: it was mid-edit on
+                               # the last of three requested features at step 60, and
+                               # shipped a half-applied change as a plain success.
+  step_approval_timeout_seconds: 1800   # how long a paused run waits for an answer.
+                               # Bounded because db.claim_next_queued_request allows
+                               # exactly one 'generating' job site-wide, so a paused
+                               # run blocks the whole queue for as long as it waits.
+                               # On timeout it verifies and ships what's on disk,
+                               # exactly as it did before the prompt existed.
   max_verification_retries: 3  # finish() calls that fail build->scan->smoke before giving up
   max_module_bytes: 450000     # 3x ai_client.MAX_OUTPUT_TOKENS bytes; see agent.py
   explode_max_module_bytes: 120000  # ceiling for the explode pass only. The 450000 above

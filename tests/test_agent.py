@@ -800,6 +800,67 @@ def test_search_echoes_the_pattern_verbatim_not_repr_escaped(isolated_db, games_
     assert r"var\\s" not in observation
 
 
+def test_search_windows_a_long_line_around_the_match(isolated_db, games_dir):
+    """The bug that cost job 837b2b8c 20 of its 60 turns: on a line thousands
+    of characters long, search reported a match and then showed the first 200
+    characters, which did not contain it. The model could not build an
+    edit_file old_string from that, re-read the whole 96KB module three times,
+    and ran out of steps mid-change."""
+    _setup_source_game(games_dir)
+    game_dir = games_dir / "click-counter-src"
+    filler = "var padding = 'xxxxxxxxxx'; "
+    long_line = filler * 100 + "var needle = 42; " + filler * 100
+    (game_dir / "src" / "core.js").write_text(long_line + "\n")
+
+    out = agent._search(game_dir, "needle", "core.js")
+
+    assert "var needle = 42;" in out, "the window must contain the match itself"
+    line = next(ln for ln in out.splitlines() if ln.startswith("core.js:"))
+    assert line.startswith("core.js:1: …"), "trimmed on the left, not from char 0"
+    assert f"of {len(long_line)}]" in line, "the window states where it sits"
+    # Still bounded — a search result rides along unpruned for the whole run.
+    assert len(line) < agent._SEARCH_MAX_LINE_CHARS + 120
+
+
+def test_search_leaves_a_line_that_fits_exactly_as_it_was(isolated_db, games_dir):
+    """The overwhelming majority of matches; their output must not change,
+    and a run that sees no long lines must not carry the windowing note."""
+    _setup_source_game(games_dir)
+    game_dir = games_dir / "click-counter-src"
+    (game_dir / "src" / "core.js").write_text("    var needle = 1;\n")
+
+    out = agent._search(game_dir, "needle", "core.js")
+
+    assert out == "1 match(es) for `needle` in 'core.js':\ncore.js:1: var needle = 1;"
+
+
+def test_search_explains_its_windowing_once_not_per_line(isolated_db, games_dir):
+    """'…' is the one piece of scaffolding here the model could copy into an
+    edit_file old_string, so it is spelled out — but once, in the header."""
+    _setup_source_game(games_dir)
+    game_dir = games_dir / "click-counter-src"
+    long_line = "var padding = 'x'; " * 200 + "var needle = 1;"
+    (game_dir / "src" / "core.js").write_text((long_line + "\n") * 3)
+
+    out = agent._search(game_dir, "needle", "core.js")
+
+    assert out.count("do not include them in an edit_file") == 1
+    assert len([ln for ln in out.splitlines() if ln.startswith("core.js:")]) == 3
+
+
+def test_search_anchors_at_the_match_when_the_match_is_wider_than_the_window(
+        isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    game_dir = games_dir / "click-counter-src"
+    (game_dir / "src" / "core.js").write_text("lead " + ("needle " * 200) + "tail\n")
+
+    out = agent._search(game_dir, "(needle ){200}", "core.js")
+
+    line = next(ln for ln in out.splitlines() if ln.startswith("core.js:"))
+    assert "needle" in line
+    assert line.endswith("]")
+
+
 def test_list_files_flags_the_modules_this_run_already_rewrote(isolated_db, games_dir):
     """Written-ness is bookkeeping the model can't recover on its own once
     _compact_write_calls has removed its write calls from the conversation.
@@ -915,7 +976,8 @@ def test_a_stalled_run_is_verified_before_being_discarded_and_ships_if_it_passes
 
     assert result["success"], result["error"]
     assert (games_dir / result["slug"] / "src" / "core.js").read_text() == NEW_CORE_JS
-    assert "without calling finish" in result["notes"]
+    assert not result["complete"]
+    assert "ran out of turns before confirming it was done" in result["notes"]
     # Recorded like any other verification attempt, so the job's history
     # shows what actually happened.
     assert [a["outcome"] for a in db.get_generation_attempts("job-stall")] == ["success"]
@@ -1646,7 +1708,8 @@ def test_repeated_failed_edits_trip_the_stall_guard_and_the_run_still_ships(
         result, _seen = _run(games_dir, responses, config=_edit_config(max_steps=30))
 
     assert result["success"], result["error"]
-    assert "without calling finish" in result["notes"]
+    assert not result["complete"]
+    assert "ran out of turns before confirming it was done" in result["notes"]
     assert "count += 5;" in (games_dir / result["slug"] / "src" / "core.js").read_text()
 
 
@@ -1758,7 +1821,8 @@ def test_a_run_past_the_context_hard_limit_stops_and_ships_what_it_wrote(
 
     assert len(seen) == 1, "the guard must stop before making a second request"
     assert result["success"], result["error"]
-    assert "without calling finish" in result["notes"]
+    assert not result["complete"]
+    assert "ran out of turns before confirming it was done" in result["notes"]
     assert "count += 7;" in (games_dir / result["slug"] / "src" / "core.js").read_text()
 
 

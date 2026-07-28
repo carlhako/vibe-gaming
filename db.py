@@ -269,6 +269,7 @@ _ADDED_COLUMNS = {
         ("ip_address", "TEXT"), ("cached_tokens", "INTEGER"),
         ("answer", "TEXT"),
         ("git_push_status", "TEXT"), ("git_push_error", "TEXT"),
+        ("awaiting_approval_at", "TEXT"), ("extra_steps_granted", "INTEGER"),
     ],
     "generation_attempts": [
         ("duration_seconds", "REAL"), ("raw_response", "TEXT"),
@@ -885,6 +886,76 @@ def is_job_cancelled(job_id, conn=None) -> bool:
         "SELECT status FROM generation_requests WHERE job_id=?", (job_id,)
     ).fetchone()
     return row is not None and row["status"] == "cancelled"
+
+
+# --- step-budget approval -------------------------------------------------
+#
+# The second out-of-band user signal into a running agent run, after cancel,
+# and shaped the same way: the loop polls its own row at a safe checkpoint,
+# because a worker thread has no other way to hear from a request handler.
+#
+# Two things differ from cancel. It does NOT introduce a new `status` value —
+# the run is still 'generating', it is just waiting — because a sixth status
+# would ripple into job_runner._already_cancelled, sweep_orphaned_requests,
+# claim_next_queued_request's one-job-at-a-time guard and the
+# TERMINAL_STATUSES/LABELS tables in three JS files, all for no gain. And all
+# three helpers write with a direct UPDATE rather than going through
+# update_generation_request, which always bumps `updated_at` — a column
+# /api/status/<job_id> serves as `generating_started_at`, so routing an
+# approval through it would restart the elapsed timer on the user's screen
+# every time they answered a prompt.
+#
+# `extra_steps_granted` is tri-state: NULL = not answered yet, 0 = the user
+# declined and wants the run wrapped up now, > 0 = that many extra steps.
+
+
+def request_step_approval(job_id, conn=None) -> None:
+    """Mark a run as waiting for the user to approve more steps."""
+    c = _c(conn)
+    c.execute(
+        "UPDATE generation_requests SET awaiting_approval_at=?, "
+        "extra_steps_granted=NULL WHERE job_id=?",
+        (_now(), job_id),
+    )
+    c.commit()
+
+
+def get_step_approval(job_id, conn=None) -> tuple[str | None, int | None]:
+    """(awaiting_approval_at, extra_steps_granted) — the cheap poll the ReAct
+    loop runs while paused, same shape and cost as is_job_cancelled."""
+    c = _c(conn)
+    row = c.execute(
+        "SELECT awaiting_approval_at, extra_steps_granted "
+        "FROM generation_requests WHERE job_id=?", (job_id,)
+    ).fetchone()
+    if row is None:
+        return None, None
+    return row["awaiting_approval_at"], row["extra_steps_granted"]
+
+
+def grant_extra_steps(job_id, extra_steps, conn=None) -> None:
+    """Record the user's answer and clear the waiting flag. `extra_steps` of 0
+    is a real answer — "stop and ship what you have" — not an absence of one,
+    which is why the waiting flag and the grant are separate columns."""
+    c = _c(conn)
+    c.execute(
+        "UPDATE generation_requests SET extra_steps_granted=?, "
+        "awaiting_approval_at=NULL WHERE job_id=?",
+        (int(extra_steps), job_id),
+    )
+    c.commit()
+
+
+def clear_step_approval(job_id, conn=None) -> None:
+    """Drop the waiting flag without recording an answer — the loop's cleanup
+    when it stops waiting on its own (timed out, or cancelled). Without it a
+    finished job would sit there advertising a live prompt to the UI forever."""
+    c = _c(conn)
+    c.execute(
+        "UPDATE generation_requests SET awaiting_approval_at=NULL WHERE job_id=?",
+        (job_id,),
+    )
+    c.commit()
 
 
 def claim_next_queued_request(conn=None) -> str | None:
