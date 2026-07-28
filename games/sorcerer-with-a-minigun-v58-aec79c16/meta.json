@@ -1,0 +1,12 @@
+{
+  "game_id": "aec79c16ca85400198d97cf5cadec199",
+  "parent_game_id": "ceee4fcd8dd74f24acc4ecf075ac17b1",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v58)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-28T02:58:20.576048Z",
+  "version": 17,
+  "prompt": "add new amulets, create new graphics for them when they appear on the screen as well as on the dialog when you pick them up so they look visually different to the other amulets. Make the graphics related to their name and what they do. \r\n\r\nNew amulet 1: Amulet of Wildfire. This amulet causes an explosion when your fireball hits a stone block or enemy causing destruction around it destroying walls and doing splash damage to other enemies. make this one rarer then the others. \r\n\r\nNew amulet 2: replace the existing extra token amulet with this one. Amulet of Greed, this one gives 100% more tokens on pickup so every token you pickup you get an extra one, enemies gain 25% HP. \r\n\r\nNew amulet 3: Amulet of Sacrifice, +150% skelton damage, skeleton lifetime reduced by 50%.",
+  "format": "multi-file"
+}
