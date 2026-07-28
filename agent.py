@@ -1587,6 +1587,100 @@ def _mask_js_literals(js: str) -> str:
     return "".join(out)
 
 
+_DELIM_CLOSERS = {"}": "{", ")": "(", "]": "["}
+
+
+def _delimiter_fault(js: str) -> str | None:
+    """The first structural `{}`/`()`/`[]` fault in `js`, as a line
+    reference, or None if every delimiter balances.
+
+    Runs on `_mask_js_literals`' output, which keeps offsets and newlines, so
+    a brace inside a string or a comment can't shift the walk and a reported
+    line number is the real one. Not a parser: it answers exactly the
+    question V8's "Unexpected end of input" refuses to — *which* opener never
+    closed, and where."""
+    stack: list[tuple[str, int]] = []
+    for i, ch in enumerate(js):
+        if ch in "{([":
+            stack.append((ch, i))
+        elif ch in _DELIM_CLOSERS:
+            want = _DELIM_CLOSERS[ch]
+            if not stack:
+                return (f"line {js.count(chr(10), 0, i) + 1}: '{ch}' closes "
+                        "nothing — every opener before it is already closed")
+            opener, at = stack.pop()
+            if opener != want:
+                return (f"line {js.count(chr(10), 0, i) + 1}: '{ch}' does not "
+                        f"match the '{opener}' opened at line "
+                        f"{js.count(chr(10), 0, at) + 1}")
+    if stack:
+        # Report the whole remaining stack, outermost first. One missing
+        # closer leaves exactly one entry; several entries usually means one
+        # opener swallowed the rest of the file.
+        parts = [f"'{ch}' opened at line {js.count(chr(10), 0, at) + 1}"
+                 for ch, at in stack[:5]]
+        more = "" if len(stack) <= 5 else f" (+{len(stack) - 5} more)"
+        return (f"{', '.join(parts)}{more} — never closed; the file ends "
+                "inside it")
+    return None
+
+
+def _locate_syntax_faults(game_dir) -> str:
+    """Point at the unbalanced delimiter behind a failed verification.
+
+    The smoke test loads the *built* index.html and reports whatever Chromium
+    says, which for a parse error is "pageerror: Unexpected end of input" —
+    no file, no line, across every inlined module at once. Job 0cf766d0
+    (2026-07-28) spent all three of its verification retries and ~4.5M tokens
+    guessing at that string, re-reading a 118KB render.js three times, and
+    died with 30 good edits discarded; it never noticed that the message
+    appearing *twice* meant two separate modules were broken, since each
+    module is inlined as its own <script> and so parses independently.
+
+    Returns a note naming each faulty file and line, or "" when everything
+    balances (a ReferenceError, a blocked host, a genuine gameplay crash) —
+    so the caller can append it unconditionally."""
+    src_dir = Path(game_dir) / "src"
+    if not src_dir.is_dir():
+        return ""                       # single-file game: nothing to attribute
+    findings: list[str] = []
+    for path in sorted(src_dir.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in (".js", ".html"):
+            continue
+        rel = path.relative_to(src_dir).as_posix()
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if path.suffix.lower() == ".js":
+            blocks = [(text, 0)]
+        else:
+            # Only the inline <script> bodies of a shell file are JS. Carry
+            # each block's line offset so the number quoted is the one the
+            # model will see when it reads the file.
+            blocks = [(m.group(1), text.count("\n", 0, m.start(1)))
+                      for m in _INLINE_SCRIPT_RE.finditer(text)]
+        for body, line_offset in blocks:
+            fault = _delimiter_fault(_mask_js_literals(body))
+            if fault is None:
+                continue
+            if line_offset:
+                fault = re.sub(r"line (\d+)",
+                               lambda m: f"line {int(m.group(1)) + line_offset}",
+                               fault)
+            findings.append(f"  {rel} {fault}")
+            break                        # one fault per file is enough to act on
+    if not findings:
+        return ""
+    head = ("Unbalanced delimiters found in the source (this is almost "
+            "certainly the parse error above — fix these, then call finish "
+            "again):" if len(findings) > 1 else
+            "Unbalanced delimiter found in the source (this is almost "
+            "certainly the parse error above — fix it, then call finish "
+            "again):")
+    return head + "\n" + "\n".join(findings)
+
+
 def _skip_back(js: str, j: int) -> int:
     while j >= 0 and js[j].isspace():
         j -= 1
@@ -2238,12 +2332,13 @@ def _await_step_approval(*, job_id: str, db_conn, emit: Callable | None,
     written = ("Everything it has written so far is on disk and will be "
                "verified either way." if wrote_anything
                else "It has not written any files yet.")
-    db.request_step_approval(job_id, conn=db_conn)
-    if db.get_step_approval(job_id, conn=db_conn)[0] is None:
+    if not db.request_step_approval(job_id, conn=db_conn):
         # The UPDATE matched no row, so there is no job to poll and no status
         # page attached to one — blocking would burn the whole timeout waiting
         # for an answer that cannot arrive. Emit nothing and behave exactly as
-        # a run with job_id=None does.
+        # a run with job_id=None does. This has to come from the UPDATE's own
+        # rowcount: re-reading awaiting_approval_at instead loses a grant that
+        # lands in between, because answering clears that column too.
         return 0, False
     _safe_emit(
         emit, "approval_request",
@@ -2436,6 +2531,10 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
     # but a nudge would have converged it cleanly with steps to spare.
     edited_since_finish = False
     nudged_refinish = False
+    # One-shot per failure window, so a "maybe it was transient" re-finish
+    # costs a turn instead of one of only three verification attempts. See
+    # the rejection below.
+    rejected_noop_finish = False
     # The context guard reads the PREVIOUS call's billed input rather than
     # estimating the next one: ask_result.input_tokens is what the provider
     # actually charged for the whole message list, which is the only figure
@@ -2489,6 +2588,12 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                         "forced": forced})
             return True, detail
         outcome = _classify_failure(detail)
+        # Classify on the browser's own words, then append our attribution —
+        # the note names files and lines, which would otherwise skew the
+        # keyword match _classify_failure does.
+        located = _locate_syntax_faults(game_dir)
+        if located:
+            detail = f"{detail}\n\n{located}"
         record_verification(outcome, detail)
         _safe_emit(emit, "build", f"{prefix} failed: {detail}",
                    {"outcome": outcome, "attempt": verification_attempts,
@@ -2718,6 +2823,30 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
             _safe_emit(emit, "tool_call", call_content, call_data)
             candidate_summary = _parse_finish_summary(finish_call.arguments)
             last_candidate_summary = candidate_summary or last_candidate_summary
+            # A finish with nothing written since the last failed one runs a
+            # byte-identical build and can only fail identically, yet it
+            # spends one of the three verification attempts doing so. Job
+            # 0cf766d0 (2026-07-28) burned its second attempt on exactly this
+            # — its own reasoning was "maybe the error was transient" — and
+            # then ran out on the third. Bounce it once per failure window
+            # (the latch is re-armed by the next failure, so the model can
+            # still insist and get its build) for the same reason _edit_file
+            # rejects a no-op edit: don't let a turn that changes nothing
+            # register as progress against a budget.
+            if (verification_attempts > 0 and not edited_since_finish
+                    and not rejected_noop_finish):
+                rejected_noop_finish = True
+                note = (
+                    "REJECTED: nothing on disk has changed since the last "
+                    "verification, so this build would be byte-identical and "
+                    "fail the same way. The failure is not transient — it is "
+                    "in the source. Edit the file that is wrong with "
+                    "edit_file or write_file, then call finish again."
+                )
+                messages.append({"role": "tool", "tool_call_id": finish_call.id,
+                                 "content": note})
+                _safe_emit(emit, "tool_result", note, {"tool": "finish"})
+                continue
             passed, detail = run_verification()
             if passed:
                 messages.append({
@@ -2734,6 +2863,7 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
             # failure — not on the very next read.
             edited_since_finish = False
             nudged_refinish = False
+            rejected_noop_finish = False
             if verification_attempts >= max_verification_retries:
                 messages.append({
                     "role": "tool", "tool_call_id": finish_call.id,

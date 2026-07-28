@@ -732,7 +732,13 @@ lives in two nullable columns instead, written by direct `UPDATE`s that skip
 it would restart the elapsed timer on the user's screen. `extra_steps_granted`
 is tri-state: NULL unanswered, 0 declined ("ship what you have"), >0 granted.
 A `job_id` with no row, or `extra_steps_on_approval: 0`, skips the prompt
-entirely rather than waiting out a timeout for an answer that cannot come.
+entirely rather than waiting out a timeout for an answer that cannot come —
+and "no row" has to come from `db.request_step_approval`'s own UPDATE
+rowcount, never from re-reading `awaiting_approval_at`. Answering *clears*
+that column, so a click landing between the write and the re-read reads back
+NULL, which is exactly what an unknown job looks like: the grant was dropped
+and the run shipped early. That was a ~50% flake in the one-shot test before
+it was ever seen in production.
 
 **A forced-verification ship now says so.** `_run_react_loop` returns
 `complete`, false whenever the last-ditch gate is what shipped the run, and
@@ -741,6 +747,44 @@ was done… the requested change may be only partly applied."* The `final`
 event carries `incomplete: true` and both chat panes drop the 🎉. Passing
 build → scan → smoke means the code *builds*, which was never the same claim
 as the request having been carried out.
+
+**A parse error names no file, so the loop names it.** The smoke test loads the
+*built* `index.html` and reports whatever Chromium says, which for a syntax
+error is `pageerror: Unexpected end of input` — no module, no line, across
+every inlined script at once. That string is unactionable on a 238KB
+thirteen-module source, and job 0cf766d0 (2026-07-28) proved it: it made 30
+good edits across 7 files, hit a parse error, and spent **all three**
+verification attempts and ~4.5M tokens guessing at it, re-reading a 118KB
+`render.js` three times and reasoning its way through candidates that were all
+fine, before the retry ceiling discarded the entire fork. It also never noticed
+the clue it was given — the message appeared *twice*, and since
+`builder.build_game` inlines each module as its own `<script>`, scripts parse
+independently, so two errors meant two separate broken modules. So
+`run_verification` now appends `_locate_syntax_faults(game_dir)` to every
+failure detail: `_delimiter_fault` walks `_mask_js_literals`' output (offsets
+and newlines preserved, so a `}` in a string or a regex can't shift the walk or
+the line number) per `src/*.js` file and per inline `<script>` of
+`src/index.html`, and reports `render.js '{' opened at line 386 — never
+closed`, one fault per file, all files. It runs on every failure rather than on
+a message match, because it is silent — `""` — whenever everything balances, so
+a ReferenceError or a blocked-host failure is unaffected; verified against all
+20 real multi-file games with zero false positives, at 0.06s for a whole game.
+Classification stays on the browser's own words: `_classify_failure` runs
+*before* the note is appended, or the file and line text would skew its keyword
+match.
+
+**A re-verification that changed nothing must not cost an attempt.** There are
+only three, and the same job spent its second on a finish it called after pure
+reads — its own reasoning was *"maybe the error was transient"* — and its third
+on an edit it recanted in the next breath (*"wait, actually that was already
+valid code"*). A finish with nothing written since the last failed one runs a
+byte-identical build and can only fail identically. `edited_since_finish` was
+already tracked for the re-finish nudge, so the loop now bounces that call with
+a tool result instead of building — same reasoning as `_edit_file` rejecting a
+no-op edit: a turn that changes nothing must not register as progress against a
+budget. It is **one-shot per failure window** (re-armed by the next real
+failure), so a run that genuinely believes the build is wrong is never locked
+out — it costs a turn to insist, not one of three attempts.
 
 **The agent event stream + live chat UI.** Every think/act/observe/verify
 step is emitted through an `emit(role, content, data)` callback

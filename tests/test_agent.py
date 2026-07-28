@@ -595,7 +595,13 @@ def test_failed_verification_feeds_back_then_retry_succeeds(isolated_db, games_d
             ("write_file", {"path": "core.js", "contents": NEW_CORE_JS}),
             ("finish", {"summary": "first attempt"}),
         ]),
-        _turn([("finish", {"summary": "second attempt, fixed"})]),
+        # A retry has to actually change something — a finish that edits
+        # nothing is bounced without a build (see the no-op bounce tests).
+        _turn([
+            ("write_file", {"path": "core.js",
+                            "contents": NEW_CORE_JS.replace("count += 1", "count += 2")}),
+            ("finish", {"summary": "second attempt, fixed"}),
+        ]),
     ]
 
     with mock.patch("smoke_test.run_smoke_test",
@@ -624,8 +630,11 @@ def test_verification_gives_up_after_max_retries_and_rolls_back(isolated_db, gam
         "multifile_agent": dict(CONFIG["multifile_agent"], max_verification_retries=2),
     }
     responses = [
-        _turn([("finish", {"summary": "attempt 1"})]),
-        _turn([("finish", {"summary": "attempt 2"})]),
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS}),
+               ("finish", {"summary": "attempt 1"})]),
+        _turn([("write_file", {"path": "core.js",
+                               "contents": NEW_CORE_JS.replace("count += 1", "count += 2")}),
+               ("finish", {"summary": "attempt 2"})]),
     ]
 
     with mock.patch("smoke_test.run_smoke_test", return_value=(False, "console.error: still broken")):
@@ -1033,7 +1042,9 @@ def test_exhausting_the_verification_retries_does_not_buy_one_more_attempt(
     responses = [
         _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS}),
                ("finish", {"summary": "attempt 1"})]),
-        _turn([("finish", {"summary": "attempt 2"})]),
+        _turn([("write_file", {"path": "core.js",
+                               "contents": NEW_CORE_JS.replace("count += 1", "count += 2")}),
+               ("finish", {"summary": "attempt 2"})]),
     ]
 
     with mock.patch("smoke_test.run_smoke_test",
@@ -1843,3 +1854,193 @@ def test_a_run_that_hits_the_context_ceiling_with_nothing_written_says_so(
     assert f"{ai.CONTEXT_WINDOW_TOKENS:,}" in result["error"]
     # A failed run leaves no half-written fork behind.
     assert not any(p.name.startswith("click-counter-v2") for p in games_dir.iterdir())
+
+
+# ---------------------------------------------------------------------------
+# 14. Attributing a parse error to a file and line. The smoke test only ever
+#     reports what Chromium says about the BUILT html ("Unexpected end of
+#     input"), which names no module — job 0cf766d0 spent all three
+#     verification attempts guessing at that string.
+# ---------------------------------------------------------------------------
+
+BROKEN_CORE_JS = (
+    'function ok() { return "}"; }   // } ] )\n'
+    'function broken(x) {\n'
+    '  if (x) {\n'
+    '    ok();\n'
+    '  }\n'
+)
+
+
+def _src(tmp_path, **files):
+    """A game directory with a src/ holding `files` (name -> contents)."""
+    src = tmp_path / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    for name, contents in files.items():
+        (src / name).write_text(contents)
+    return tmp_path
+
+
+def test_locate_syntax_faults_names_the_module_and_the_unclosed_line(tmp_path):
+    game_dir = _src(tmp_path, **{"core.js": BROKEN_CORE_JS})
+    note = agent._locate_syntax_faults(game_dir)
+    assert "core.js" in note
+    # The function's brace on line 2, not the `if`'s on line 3, which closes.
+    assert "opened at line 2" in note
+    assert "never closed" in note
+
+
+def test_locate_syntax_faults_is_quiet_when_everything_balances(tmp_path):
+    game_dir = _src(tmp_path, **{
+        # Every closer here lives inside a string, a template, a regex or a
+        # comment: an unmasked walk would report all of them.
+        "core.js": ('const s = "){]";\n'
+                    'const t = `a ${ {b: 1}.b } z`;\n'
+                    'const r = /[)}\\]]/;\n'
+                    '/* } ) ] */\n'
+                    'function f() { return 1; }\n'),
+        "index.html": "<html><script>let a = { b: 1 };</script></html>",
+    })
+    assert agent._locate_syntax_faults(game_dir) == ""
+
+
+def test_locate_syntax_faults_reports_every_broken_module_not_just_the_first(tmp_path):
+    game_dir = _src(tmp_path, **{
+        "core.js": BROKEN_CORE_JS,
+        "render.js": "function draw() {\n  ctx.fill();\n",
+        "fine.js": "function fine() { return 1; }\n",
+    })
+    note = agent._locate_syntax_faults(game_dir)
+    assert "core.js" in note and "render.js" in note
+    assert "fine.js" not in note
+
+
+def test_locate_syntax_faults_counts_html_lines_from_the_top_of_the_file(tmp_path):
+    game_dir = _src(tmp_path, **{
+        "index.html": ("<html>\n"
+                       "<body>\n"
+                       "<script src='core.js'></script>\n"
+                       "<script>\n"
+                       "function boot() {\n"
+                       "  start();\n"
+                       "</script>\n"
+                       "</body></html>\n"),
+        "core.js": "function start() { return 1; }\n",
+    })
+    note = agent._locate_syntax_faults(game_dir)
+    # Line 5 of index.html, not line 2 of the inline block.
+    assert "index.html" in note and "opened at line 5" in note
+
+
+def test_locate_syntax_faults_flags_a_closer_that_matches_nothing(tmp_path):
+    game_dir = _src(tmp_path, **{"core.js": "function f() {\n  return 1;\n}\n}\n"})
+    note = agent._locate_syntax_faults(game_dir)
+    assert "line 4" in note and "closes nothing" in note
+
+
+def test_locate_syntax_faults_flags_a_mismatched_pair(tmp_path):
+    game_dir = _src(tmp_path, **{"core.js": "function f() {\n  const a = [1, 2;\n}\n"})
+    note = agent._locate_syntax_faults(game_dir)
+    assert "does not match the '[' opened at line 2" in note
+
+
+def test_locate_syntax_faults_says_nothing_about_a_single_file_game(tmp_path):
+    (tmp_path / "index.html").write_text("<html><script>function f() {</script></html>")
+    assert agent._locate_syntax_faults(tmp_path) == ""
+
+
+def test_a_failed_verification_tells_the_model_which_file_is_unbalanced(
+        isolated_db, games_dir):
+    """End to end: the note reaches the model as the finish() rejection, and
+    the job's recorded error, not just the bare browser string."""
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("write_file", {"path": "core.js", "contents": BROKEN_CORE_JS}),
+               ("finish", {"summary": "attempt 1"})]),
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS}),
+               ("finish", {"summary": "attempt 2"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test",
+                    side_effect=[(False, "pageerror: Unexpected end of input"),
+                                 (True, "ok")]):
+        result, seen = _run(games_dir, responses, job_id="job-parse")
+
+    assert result["success"], result["error"]
+    rejection = next(m for m in seen[1]
+                     if m.get("role") == "tool" and "REJECTED" in m.get("content", ""))
+    assert "Unexpected end of input" in rejection["content"]
+    assert "core.js" in rejection["content"]
+    assert "opened at line 2" in rejection["content"]
+    # The recorded attempt keeps its classification from the browser's words.
+    assert db.get_generation_attempts("job-parse")[0]["outcome"] == "smoke_test_failed"
+
+
+# ---------------------------------------------------------------------------
+# 15. A re-finish that changed nothing costs a turn, not a verification
+#     attempt — job 0cf766d0's "maybe the error was transient" retry.
+# ---------------------------------------------------------------------------
+
+def test_a_refinish_with_no_edits_is_bounced_without_spending_an_attempt(
+        isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS}),
+               ("finish", {"summary": "attempt 1"})]),
+        _turn([("finish", {"summary": "maybe it was transient"})]),
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS}),
+               ("finish", {"summary": "actually fixed it"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test",
+                    side_effect=[(False, "console.error: boom"), (True, "ok")]) as smoke:
+        result, seen = _run(games_dir, responses, job_id="job-noop")
+
+    assert result["success"], result["error"]
+    # Two builds for three finish calls: the middle one never reached one.
+    assert smoke.call_count == 2
+    assert result["attempts"] == 2
+    assert len(db.get_generation_attempts("job-noop")) == 2
+    bounce = next(m for m in seen[2]
+                  if m.get("role") == "tool"
+                  and "nothing on disk has changed" in m.get("content", ""))
+    assert "not transient" in bounce["content"]
+
+
+def test_the_model_can_insist_and_get_its_build_after_one_bounce(
+        isolated_db, games_dir):
+    """The bounce is one-shot per failure window, so a run that genuinely
+    believes the build is wrong is never locked out of re-verifying."""
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("write_file", {"path": "core.js", "contents": NEW_CORE_JS}),
+               ("finish", {"summary": "attempt 1"})]),
+        _turn([("finish", {"summary": "bounced"})]),
+        _turn([("finish", {"summary": "no really, build it"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test",
+                    side_effect=[(False, "console.error: boom"), (True, "ok")]) as smoke:
+        result, _seen = _run(games_dir, responses, job_id="job-insist")
+
+    assert result["success"], result["error"]
+    assert smoke.call_count == 2
+
+
+def test_an_edit_between_finishes_is_never_bounced(isolated_db, games_dir):
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("write_file", {"path": "core.js", "contents": BROKEN_CORE_JS}),
+               ("finish", {"summary": "attempt 1"})]),
+        _turn([("edit_file", {"path": "core.js", "old_string": "  }\n",
+                              "new_string": "  }\n}\n"}),
+               ("finish", {"summary": "attempt 2"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test",
+                    side_effect=[(False, "pageerror: Unexpected end of input"),
+                                 (True, "ok")]) as smoke:
+        result, _seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    assert smoke.call_count == 2

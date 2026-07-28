@@ -76,7 +76,7 @@ def _run(games_dir, responses, job_id, config=None):
 
 
 @contextmanager
-def _responder(job_id, *, grant=None, cancel=False, timeout=10.0):
+def _responder(job_id, *, grant=None, cancel=False, timeout=120.0):
     """Answer the run's approval prompt from another thread, the way a browser
     would.
 
@@ -85,20 +85,42 @@ def _responder(job_id, *, grant=None, cancel=False, timeout=10.0):
     answer, so the reply has to land after the prompt does. The agent's own
     poll interval is shortened here so these tests take milliseconds rather
     than seconds — nothing about the logic depends on its real value.
+
+    `timeout` is a hang guard, not part of any assertion — it is deliberately
+    far longer than a run needs. A short one made these tests flaky under a
+    full-suite load: a late answer times the pause out, which is a legitimate
+    code path, so the run then ships and the test fails an assertion about
+    turn counts with nothing to say about why. Whatever the thread hits is
+    re-raised in the test's own thread for the same reason — a daemon thread
+    that dies quietly turns a DB error into a mystery off-by-two.
     """
     stop = threading.Event()
+    failure: list[BaseException] = []
 
     def wait_and_answer():
         deadline = time.monotonic() + timeout
         while not stop.is_set() and time.monotonic() < deadline:
-            if db.get_step_approval(job_id)[0] is not None:
-                if cancel:
-                    db.update_generation_request(
-                        job_id, status="cancelled", error="cancelled by user")
-                else:
-                    db.grant_extra_steps(job_id, grant)
+            try:
+                answered = db.get_step_approval(job_id)[0] is not None
+            except Exception as exc:                 # noqa: BLE001 - re-raised below
+                failure.append(exc)
+                return
+            if answered:
+                try:
+                    if cancel:
+                        db.update_generation_request(
+                            job_id, status="cancelled", error="cancelled by user")
+                    else:
+                        db.grant_extra_steps(job_id, grant)
+                except Exception as exc:             # noqa: BLE001 - re-raised below
+                    failure.append(exc)
                 return
             time.sleep(0.005)
+        if not stop.is_set():
+            # Ran out of wall clock rather than being shut down at the end of
+            # the test. A test that never expects a prompt just exits quietly.
+            failure.append(AssertionError(
+                f"responder for {job_id} saw no prompt within {timeout}s"))
 
     thread = threading.Thread(target=wait_and_answer, daemon=True)
     with mock.patch.object(agent, "_APPROVAL_POLL_SECONDS", 0.01):
@@ -107,7 +129,9 @@ def _responder(job_id, *, grant=None, cancel=False, timeout=10.0):
             yield
         finally:
             stop.set()
-            thread.join(timeout=2)
+            thread.join(timeout=5)
+        if failure:
+            raise failure[0]
 
 
 def _read(path="core.js"):
@@ -280,7 +304,7 @@ def test_an_approved_run_gets_its_extra_turns(isolated_db, games_dir):
     with _responder(job_id, grant=3), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result, seen = _run(games_dir, responses, job_id,
-                            config=_config(step_approval_timeout_seconds=10))
+                            config=_config(step_approval_timeout_seconds=120))
 
     assert result["success"], result["error"]
     assert result["complete"], "a passing finish() is a complete run"
@@ -302,7 +326,7 @@ def test_the_grant_is_appended_as_a_user_message_the_model_can_act_on(
     with _responder(job_id, grant=3), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         _result, seen = _run(games_dir, responses, job_id,
-                             config=_config(step_approval_timeout_seconds=10))
+                             config=_config(step_approval_timeout_seconds=120))
 
     # The turn right after the pause must carry the grant, and must say what
     # to do rather than that something went wrong — the wording rule the whole
@@ -328,7 +352,7 @@ def test_the_prompt_is_asked_once_and_never_again(isolated_db, games_dir):
     with _responder(job_id, grant=2), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result, seen = _run(games_dir, responses, job_id,
-                            config=_config(step_approval_timeout_seconds=10))
+                            config=_config(step_approval_timeout_seconds=120))
 
     assert len(seen) == 4, "budget must stop at 2 + one grant of 2"
     assert result["success"], result["error"]
@@ -369,7 +393,7 @@ def test_declining_ships_immediately_without_waiting(isolated_db, games_dir):
     with _responder(job_id, grant=0), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result, seen = _run(games_dir, responses, job_id,
-                            config=_config(step_approval_timeout_seconds=10))
+                            config=_config(step_approval_timeout_seconds=120))
 
     assert len(seen) == 2
     assert result["success"], result["error"]
@@ -390,7 +414,7 @@ def test_a_cancel_during_the_pause_discards_the_run(isolated_db, games_dir):
     with _responder(job_id, cancel=True), \
          mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
         result, seen = _run(games_dir, responses, job_id,
-                            config=_config(step_approval_timeout_seconds=10))
+                            config=_config(step_approval_timeout_seconds=120))
 
     assert len(seen) == 2
     assert result["success"] is False
@@ -430,3 +454,42 @@ def test_a_job_id_with_no_row_never_blocks(isolated_db, games_dir):
     assert len(seen) == 2
     assert result["success"], result["error"]
     assert not result["complete"]
+
+
+def test_request_step_approval_reports_whether_a_row_matched(isolated_db, games_dir):
+    job_id = "9" * 32
+    _job(job_id)
+    assert db.request_step_approval(job_id) is True
+    assert db.request_step_approval("no-such-job") is False
+
+
+def test_an_answer_landing_the_instant_the_prompt_appears_is_not_lost(
+        isolated_db, games_dir):
+    """The "is there anybody to ask" check must come from the UPDATE's own
+    rowcount, not a re-read of awaiting_approval_at.
+
+    Answering clears that column, so a click that lands in between reads back
+    as NULL — which is also what an unknown job looks like. That misread the
+    grant as "nobody home", dropped it, and shipped the run two turns early;
+    it surfaced as a ~50% flake in the one-shot test above, where the
+    responder thread happened to win that window.
+    """
+    _setup_source(games_dir)
+    job_id = "f" * 32
+    _job(job_id)
+    real_request = db.request_step_approval
+
+    def answer_immediately(jid, conn=None):
+        matched = real_request(jid, conn=conn)
+        db.grant_extra_steps(jid, 2)      # the browser, winning the race
+        return matched
+
+    responses = [_write(), _read(), _read(), _read()]
+    with mock.patch.object(db, "request_step_approval", side_effect=answer_immediately), \
+         mock.patch.object(agent, "_APPROVAL_POLL_SECONDS", 0.01), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses, job_id,
+                            config=_config(step_approval_timeout_seconds=120))
+
+    assert len(seen) == 4, "the grant must survive landing before the guard looks"
+    assert result["success"], result["error"]

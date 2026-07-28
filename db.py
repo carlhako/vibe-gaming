@@ -909,15 +909,23 @@ def is_job_cancelled(job_id, conn=None) -> bool:
 # declined and wants the run wrapped up now, > 0 = that many extra steps.
 
 
-def request_step_approval(job_id, conn=None) -> None:
-    """Mark a run as waiting for the user to approve more steps."""
+def request_step_approval(job_id, conn=None) -> bool:
+    """Mark a run as waiting for the user to approve more steps. True if a
+    job row actually matched.
+
+    The caller needs that answer from the UPDATE itself, not from a follow-up
+    read: grant_extra_steps clears awaiting_approval_at as it answers, so an
+    answer landing between the two would make a re-read of that column say
+    NULL — indistinguishable from "no such job", and the grant would be
+    dropped."""
     c = _c(conn)
-    c.execute(
+    cur = c.execute(
         "UPDATE generation_requests SET awaiting_approval_at=?, "
         "extra_steps_granted=NULL WHERE job_id=?",
         (_now(), job_id),
     )
     c.commit()
+    return cur.rowcount > 0
 
 
 def get_step_approval(job_id, conn=None) -> tuple[str | None, int | None]:
