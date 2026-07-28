@@ -1,0 +1,11 @@
+{
+  "game_id": "d2dbee5e8ac345a281eed7c69ce9990a",
+  "parent_game_id": "25cb7aa44cd946619a0b8e1e9f6a08ae",
+  "root_game_id": "7efb6baa274c4a8e90e184d21b56a5dc",
+  "title": "Safari Torchlight (v9)",
+  "description": "A roguelike safari torchlight game: collect torch parts, dodge monsters, buy upgrades, and survive the darkness.",
+  "requested_by": "web:85267fc8cbc2",
+  "created_at": "2026-07-28T08:37:46.669466Z",
+  "version": 9,
+  "prompt": "do the following changes.\r\n\r\n1. make the dash cooldown 7 seconds instead of 10 seconds\r\n\r\n2. make the first level no sapphire torches\r\n\r\n3. make it so you can buy multiple upgrades in one end of round upgrade shop\r\n\r\n4. make the frog make a red circle where it's going to jump next 2 seconds before the frog jumps"
+}
