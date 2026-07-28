@@ -1,0 +1,12 @@
+{
+  "game_id": "ceee4fcd8dd74f24acc4ecf075ac17b1",
+  "parent_game_id": "367cea2a59744bc59f3777fe2b8c2e97",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v57)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-27T21:04:54.688212Z",
+  "version": 16,
+  "prompt": "update the annihilator amulet to also add 100% damage to the annihilator.",
+  "format": "multi-file"
+}
