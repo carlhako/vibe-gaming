@@ -437,9 +437,9 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
 
     `emit(role, content=None, data=None)` (optional), when given, is called
     with the model's chain-of-thought after each successful ask_with_tools
-    call — see _reasoning_content/_safe_emit above. Only generate_game()
-    passes a real emitter; game_enhancer.enhance_game() leaves it None, so
-    legacy single-file enhance has no live transcript, unchanged.
+    call — see _reasoning_content/_safe_emit above. Both generate_game() and
+    game_enhancer.enhance_game() pass a real emitter, so a legacy single-file
+    enhance job gets the same live "thinking" transcript a new-game job does.
     """
     max_attempts = cfg.get("max_attempts", 3)
     model = cfg.get("model", "")

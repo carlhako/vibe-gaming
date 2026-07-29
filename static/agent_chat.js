@@ -279,13 +279,18 @@
       if (!res.ok) throw new Error(`events ${res.status}`);
       consecutiveErrors = 0;
       const data = await res.json();
-      // A brand-new game request has no live tool-call/build steps like a
-      // multi-file enhance does — just the model's own thinking — so the
-      // generic "Waiting for the agent…" line gets a friendlier one-time
-      // rewrite once we know the job's kind, before any event replaces it.
+      // A brand-new game request or a legacy single-file enhance has no live
+      // tool-call/build steps like a multi-file enhance does — just the
+      // model's own thinking — so the generic "Waiting for the agent…" line
+      // gets a friendlier one-time rewrite once we know the job's kind,
+      // before any event replaces it.
       if (!kindApplied && placeholder.isConnected && data.kind === "create") {
         placeholder.textContent =
           "We've sent your new game request over to our expert game-making agent — it's thinking it through now.";
+        kindApplied = true;
+      } else if (!kindApplied && placeholder.isConnected && data.kind === "enhance") {
+        placeholder.textContent =
+          "Your prompt has been sent over to our expert game developer agent — it's working through the change now.";
         kindApplied = true;
       }
       for (const event of data.events) {

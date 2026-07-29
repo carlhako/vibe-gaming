@@ -11,6 +11,7 @@ import pytest
 import ai_client as ai
 import content_moderation
 import db
+import game_enhancer as ge
 import game_generator as gg
 
 CONFIG = {
@@ -306,6 +307,68 @@ def test_moderation_unparseable_reply_defaults_to_unflagged(isolated_db, games_d
     game = db.get_web_game(result["game_id"])
     assert game["hidden"] == 0
     assert db.get_open_reports() == []
+
+
+# ---------------------------------------------------------------------------
+# Legacy single-file enhance now emits the same live "thinking" transcript
+# generate_game() always has — previously game_enhancer.enhance_game() left
+# run_generation_attempts' `emit` as None, so the enhance status page always
+# showed "No live transcript for this job" even on success.
+# ---------------------------------------------------------------------------
+
+def _register_source_game(games_dir, game_id="s" * 32, slug="source-game"):
+    game_dir = games_dir / slug
+    game_dir.mkdir(parents=True)
+    (game_dir / "index.html").write_text(SAFE_HTML, encoding="utf-8")
+    db.register_web_game(
+        game_id=game_id, slug=slug, title="Source Game", description="d",
+        requested_by="web:t", status="success", attempts=1, version=1,
+        parent_game_id=None, root_game_id=game_id,
+    )
+    return game_id
+
+
+def test_enhance_game_emits_thought_and_final_events(isolated_db, games_dir):
+    source_id = _register_source_game(games_dir)
+
+    submission = _submission(_game_args(SAFE_HTML, title="Source Game (v2)"))
+    submission.raw_response["choices"][0]["message"]["reasoning_content"] = (
+        "Thinking about how to apply the requested change..."
+    )
+
+    def scripted(messages, **kwargs):
+        return submission
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result = ge.enhance_game(
+            source_id, "make it better", "web:t", CONFIG,
+            games_dir=games_dir, job_id="enhance-job-1",
+        )
+
+    assert result["success"], result["error"]
+    events = db.get_agent_events("enhance-job-1")
+    roles = [e["role"] for e in events]
+    assert "thought" in roles
+    assert roles[-1] == "final"
+
+
+def test_enhance_game_emits_error_event_on_failure(isolated_db, games_dir):
+    source_id = _register_source_game(games_dir, game_id="f" * 32, slug="source-game-2")
+
+    def scripted(messages, **kwargs):
+        return _submission(_game_args(UNSAFE_HTML))
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted):
+        result = ge.enhance_game(
+            source_id, "make it better", "web:t",
+            dict(CONFIG, enhanceaiwebgame=dict(CONFIG["newaiwebgame"], max_attempts=1)),
+            games_dir=games_dir, job_id="enhance-job-2",
+        )
+
+    assert not result["success"]
+    events = db.get_agent_events("enhance-job-2")
+    assert events[-1]["role"] == "error"
 
 
 def test_generate_game_fails_cleanly_when_ai_disabled(isolated_db, games_dir):

@@ -214,6 +214,7 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
         title_override = f"{base_title} (v{n})"
 
     system_prompt = _build_system_prompt(source_row["title"], existing_game_html)
+    emit = gg._make_emitter(job_id, db_conn)
 
     outcome = gg.run_generation_attempts(
         description=description, requested_by=requested_by, system_prompt=system_prompt,
@@ -222,6 +223,7 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
         parent_game_id=source_row["game_id"], root_game_id=source_row["root_game_id"],
         title_override=title_override,
         version_override=(source_row["version"] or 1) + 1,
+        emit=emit,
     )
     duration = time.monotonic() - t0
 
@@ -265,4 +267,8 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
         }
 
     result["message"] = format_report(result)
+    if result["success"]:
+        gg._safe_emit(emit, "final", result["notes"] or "Enhancement ready.", {"url": result["url"]})
+    else:
+        gg._safe_emit(emit, "error", result["error"])
     return result
