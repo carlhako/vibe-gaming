@@ -1358,6 +1358,139 @@ def test_reading_an_unmodified_snapshot_file_is_answered_with_a_nudge(
     assert rewritten and not any("NOTE:" in c for c in rewritten)
 
 
+# ---------------------------------------------------------------------------
+# Ranged reads. read_file results were 38% of spend across 57 production agent
+# runs (2026-07-25..29), and 238 of the 296 reads were of a file the run had
+# already modified — reads no snapshot or prompt can remove, because they
+# genuinely need the current bytes. A range makes them cost a fraction.
+# ---------------------------------------------------------------------------
+
+def _read_obs(game_dir, **kwargs):
+    """The observation _execute_tool produces for one read_file call."""
+    tc = ai.ToolCall(id="c", name="read_file", arguments=json.dumps(kwargs))
+    observation, path = agent._execute_tool(tc, game_dir, 100_000, 90_000)
+    return observation
+
+
+def test_an_unranged_read_is_byte_identical_to_the_whole_file(games_dir):
+    """The common case must not change: existing transcripts are full of it,
+    and a stable observation is a cached one."""
+    _setup_source_game(games_dir)
+    game_dir = games_dir / "click-counter-src"
+    assert _read_obs(game_dir, path="core.js") == (
+        game_dir / "src" / "core.js").read_text()
+
+
+def test_a_ranged_read_returns_only_those_lines_and_says_what_it_skipped(
+        games_dir):
+    """The header is the load-bearing part. Job 837b2b8c's failure mode was
+    the model treating bytes it could not see as bytes that did not exist."""
+    _setup_source_game(games_dir)
+    game_dir = games_dir / "click-counter-src"
+    lines = (game_dir / "src" / "core.js").read_text().splitlines(keepends=True)
+
+    obs = _read_obs(game_dir, path="core.js", start_line=2, end_line=3)
+
+    assert obs.startswith("NOTE: this is a PARTIAL read of core.js")
+    assert "lines 2-3 of %d" % len(lines) in obs
+    body = obs.split("current bytes.\n", 1)[1]
+    assert body == "".join(lines[1:3])
+
+
+def test_a_range_longer_than_the_cap_reports_where_to_continue_from(games_dir):
+    """The pathological case is one enormous line — this game family's
+    render.js carries lines of 4,729 chars — so the cap is on characters, and
+    a capped read has to hand back a usable char_start or it is a dead end."""
+    _setup_source_game(games_dir)
+    game_dir = games_dir / "click-counter-src"
+    long_line = "// " + "x" * (agent._READ_MAX_CHARS * 2) + "\n"
+    (game_dir / "src" / "core.js").write_text(long_line + "var after = 1;\n")
+
+    obs = _read_obs(game_dir, path="core.js", start_line=1, end_line=1)
+    body = obs.split("current bytes.\n", 1)[1]
+    assert len(body) == agent._READ_MAX_CHARS
+    assert f"char_start={agent._READ_MAX_CHARS + 1}" in obs
+
+    rest = _read_obs(game_dir, path="core.js", start_line=1, end_line=1,
+                     char_start=agent._READ_MAX_CHARS + 1)
+    rest_body = rest.split("current bytes.\n", 1)[1]
+    assert body + rest_body == long_line[:len(body) + len(rest_body)]
+
+
+def test_bad_bounds_are_rejected_rather_than_clamped(games_dir):
+    """A clamp hands back a window the model did not ask for and cannot tell
+    apart from the one it did — same reasoning as _edit_file refusing to guess
+    at a near-miss old_string."""
+    _setup_source_game(games_dir)
+    game_dir = games_dir / "click-counter-src"
+
+    assert _read_obs(game_dir, path="core.js", start_line=0).startswith("ERROR:")
+    assert _read_obs(game_dir, path="core.js", start_line=5,
+                     end_line=2).startswith("ERROR:")
+    assert _read_obs(game_dir, path="core.js", start_line="3").startswith("ERROR:")
+    past_end = _read_obs(game_dir, path="core.js", start_line=99_999)
+    assert past_end.startswith("ERROR:") and "lines" in past_end
+
+
+def test_a_ranged_read_of_an_unmodified_snapshot_file_is_not_nudged(
+        isolated_db, games_dir):
+    """The nudge exists to discourage a redundant WHOLE-file read. A ranged
+    read of the same file is the cheap navigation the range arguments exist to
+    encourage, and nudging it would push the model back toward the unranged
+    call."""
+    _setup_source_game(games_dir)
+    responses = [
+        _turn([("read_file", {"path": "style.css", "start_line": 1, "end_line": 2})]),
+        _turn([("finish", {"summary": "done"})]),
+    ]
+
+    with mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        result, seen = _run(games_dir, responses)
+
+    assert result["success"], result["error"]
+    tool_msgs = [m.get("content", "") for m in seen[-1] if m.get("role") == "tool"]
+    assert not any("told you nothing new" in c for c in tool_msgs)
+
+
+def test_two_ranges_of_one_file_are_two_observations_not_a_repeat(games_dir):
+    """_progress_key keyed on the path alone would score the second read as a
+    repeat and push a run navigating a large file toward the stall guard —
+    the miscount that killed healthy job 73df2b10."""
+    def key(**kwargs):
+        tc = ai.ToolCall(id="c", name="read_file", arguments=json.dumps(kwargs))
+        return agent._progress_key(tc, kwargs["path"])
+
+    first = key(path="core.js", start_line=1, end_line=40)
+    second = key(path="core.js", start_line=200, end_line=240)
+    assert first != second
+    assert first == key(path="core.js", start_line=1, end_line=40)
+    assert key(path="core.js") != first
+
+
+def test_the_syntax_fault_note_names_the_ranged_read(games_dir):
+    """A gate that reports a line number has to name the tool that can look at
+    it — the rule _edit_file's zero-match rejection already follows by
+    pointing at search."""
+    _setup_source_game(games_dir)
+    game_dir = games_dir / "click-counter-src"
+    (game_dir / "src" / "core.js").write_text("function broken() {\n  var a = 1;\n")
+
+    note = agent._locate_syntax_faults(game_dir)
+
+    assert "never closed" in note
+    assert "start_line" in note and "end_line" in note
+
+
+def test_the_transcript_records_which_range_was_read(games_dir):
+    """agent_events is the permanent archive the chat pane replays from; a
+    ranged read that logged as a bare read_file('x') would misreport cost."""
+    tc = ai.ToolCall(id="c", name="read_file", arguments=json.dumps(
+        {"path": "render.js", "start_line": 19, "end_line": 19}))
+    content, data = agent._summarize_tool_call(tc)
+    assert "lines 19-19" in content
+    assert data["start_line"] == 19 and data["end_line"] == 19
+
+
 def test_the_snapshot_is_emitted_as_one_summary_event_never_the_body(
         isolated_db, games_dir):
     """agent_events is a permanent archive that the chat pane replays from, so

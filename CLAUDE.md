@@ -168,7 +168,7 @@ aspirational:
   `src/style.css` + `src/*.js`, and `builder.py` deterministically inlines
   that split source back into the one served `index.html` — no AI
   involved in the build step itself. Enhancing a multi-file game runs
-  `agent.py`'s ReAct loop (`read_map`/`list_files`/`read_file`/`search`/
+  `agent.py`'s ReAct loop (`read_map`/`list_files`/`read_file` (ranged)/`search`/
   `edit_file`/`write_file`/`finish` tools) instead of the whole-file
   resubmit loop, so the model only ever reads/rewrites the modules a change
   touches — and with `edit_file`, often only the lines it touches. See
@@ -672,6 +672,40 @@ which is why both the match count and the per-line length are capped.
 (`written_this_run`), bookkeeping the model otherwise cannot recover, since
 `_compact_write_calls` deliberately removes its own write calls from the
 conversation: that same job rewrote `config.js` five times for one feature.
+
+**`read_file(path, start_line, end_line, char_start)` takes a range, because
+the reads that actually cost money are the ones no snapshot can remove.**
+Measured across 57 production agent runs (2026-07-25..29, $6.23 of spend):
+`read_file` results were **38% of total spend** — the single largest line item,
+ahead of the turn-1 snapshot (21%) and output (18%), with cached input at 5%
+confirming Sprint 6a's finding that retention is nearly free. Of 296 reads,
+only 58 were of an unmodified snapshot file (the waste `_read_file_nudge`
+scolds); **238 were of a file the run had already modified**, which genuinely
+need the current bytes. Those cannot be prompted away — but they were paying
+whole-module price for a question about a few lines. Line numbers are 1-based
+and inclusive; the cap (`_READ_MAX_CHARS`, 20,000) is on **characters
+returned**, not lines, because the pathological case is a single line: this
+game family's `render.js` carries 7 lines over 1,000 chars, longest 4,729, so
+"read line 19" could still mean 100KB. A capped read reports the offsets it
+covered and hands back a `char_start` to continue from, reusing the
+`[chars X-Y of N]` vocabulary `_match_window` already taught the model. Bad
+bounds are rejected, never clamped — a clamp returns a window the model cannot
+tell apart from the one it asked for, the same reason `_edit_file` refuses a
+near-miss `old_string`. An unranged read still returns the whole file
+byte-identically, so existing transcripts and the cached prefix are untouched.
+Three call sites had to agree for this to pay off: `_progress_key` keys on the
+range as well as the path (keying on the path alone would score a second read
+of a different part of the same module as a repeat, the miscount that killed
+healthy job 73df2b10), `_read_file_nudge` stays silent on a ranged read (it
+exists to discourage a redundant *whole-file* read, and nudging the cheap
+alternative pushes the model back to the expensive one), and
+`_locate_syntax_faults` now names the ranged read in its own message. That
+last one is the case that forced this: job b7c3215e (2026-07-29) was told
+`render.js '{' opened at line 19 — never closed`, had no way to look at line
+19, and spent **17 of its 33 turns** on 12 blind regex searches and two
+57,000-token whole-file re-reads to find one brace. Same rule as `_edit_file`'s
+zero-match rejection pointing at `search`: a gate that reports a location has
+to name the tool that can go there.
 
 **A match the observation doesn't show is worse than no match at all.** That
 per-line cap used to take the line's **first** 200 characters, and on a

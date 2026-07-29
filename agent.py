@@ -418,18 +418,66 @@ LIST_FILES_TOOL = {
     },
 }
 
+# A whole-file read is the agent path's single largest cost. Measured over 57
+# production agent runs (2026-07-25..29): read_file results were 38% of total
+# spend, and 238 of the 296 reads were of a file the run had already modified —
+# i.e. reads that genuinely needed the current bytes, so no prompt wording or
+# snapshot can remove them. What makes them expensive is that the tool had only
+# one setting: all of it. Job b7c3215e (2026-07-29) was told by
+# _locate_syntax_faults that render.js's '{' on line 19 was never closed, had no
+# way to look at line 19, and re-read the whole 151KB module twice at ~57,000
+# fresh tokens a call to find one brace.
+#
+# A range answers that question for ~5,000. The cap is on *characters returned*
+# rather than lines, because the pathological case is a single line: this game
+# family's render.js carries 7 lines over 1,000 chars, longest 4,729, and a
+# "read line 19" that returns 100KB would have solved nothing.
+_READ_MAX_CHARS = 20_000
+
 READ_FILE_TOOL = {
     "type": "function",
     "function": {
         "name": "read_file",
         "description": (
-            "Read the full current contents of one file: a module path "
-            "relative to src/ (e.g. 'core.js') or 'game.md'."
+            "Read one file: a module path relative to src/ (e.g. 'core.js') "
+            "or 'game.md'. With no line arguments this returns the file's "
+            "ENTIRE current contents, which on a large module is the most "
+            "expensive call you can make. Prefer a range: pass 'start_line' "
+            "and 'end_line' to read just the part you care about, which is "
+            "usually all you need after an edit or a build failure that names "
+            "a line. Line numbers are 1-based and inclusive, and are the same "
+            "ones search results and build errors report. A read is capped at "
+            f"{_READ_MAX_CHARS:,} characters; if your range is longer than "
+            "that the result says so and tells you the character offsets it "
+            "covered, and you can pass 'char_start' to continue from there — "
+            "which is also how you read part of one very long line."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": _PATH_ARG_DESCRIPTION},
+                "start_line": {
+                    "type": "integer",
+                    "description": (
+                        "1-based line to start at, inclusive. Omit to start at "
+                        "line 1."
+                    ),
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": (
+                        "1-based line to stop at, inclusive. Omit to read to "
+                        "the end of the file."
+                    ),
+                },
+                "char_start": {
+                    "type": "integer",
+                    "description": (
+                        "1-based character offset within the selected lines to "
+                        "start at. Use it to continue a range that was capped, "
+                        "or to see further along a single very long line."
+                    ),
+                },
             },
             "required": ["path"],
         },
@@ -651,6 +699,46 @@ def _parse_path_arg(arguments_json: str) -> str:
     return path.strip()
 
 
+def _parse_read_args(arguments_json: str) -> tuple[str, int | None, int | None, int | None]:
+    """(path, start_line, end_line, char_start) for a read_file call.
+
+    Every bound is validated here rather than clamped silently. A clamp would
+    hand back a window the model did not ask for and cannot tell apart from
+    the one it did — the same reason _edit_file refuses to guess at a
+    near-miss old_string. Bad bounds cost one cheap turn; a silently wrong
+    window costs an edit built on bytes from the wrong place."""
+    path = _parse_path_arg(arguments_json)
+    args = json.loads(arguments_json)
+
+    def _bound(name: str) -> int | None:
+        value = args.get(name)
+        if value is None:
+            return None
+        # bool is an int subclass, and a JSON `true` here is a malformed call,
+        # not line 1.
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise AgentError(
+                f"malformed read_file arguments: {name!r} must be a whole "
+                f"number, got {value!r}"
+            )
+        if value < 1:
+            raise AgentError(
+                f"malformed read_file arguments: {name!r} is 1-based, so it "
+                f"must be 1 or greater, got {value}"
+            )
+        return value
+
+    start_line = _bound("start_line")
+    end_line = _bound("end_line")
+    char_start = _bound("char_start")
+    if start_line is not None and end_line is not None and end_line < start_line:
+        raise AgentError(
+            f"malformed read_file arguments: end_line ({end_line}) is before "
+            f"start_line ({start_line})"
+        )
+    return path, start_line, end_line, char_start
+
+
 def _parse_search_args(arguments_json: str) -> tuple[str, str | None]:
     try:
         args = json.loads(arguments_json)
@@ -777,15 +865,76 @@ def _list_files(game_dir: Path, written: set[str] | None = None) -> str:
     return json.dumps(entries)
 
 
-def _read_file(game_dir: Path, path: str) -> str:
+def _read_file(game_dir: Path, path: str, start_line: int | None = None,
+                end_line: int | None = None, char_start: int | None = None) -> str:
+    """One file's contents, whole or windowed.
+
+    An unranged read returns the file byte-identical to what this function's
+    predecessor returned — the common case must not change, both because
+    existing transcripts are full of it and because a stable observation is a
+    cached one (same reasoning as _match_window's short-line branch).
+
+    A ranged read gets a header stating what it covered and what it did not.
+    That header is the load-bearing part: job 837b2b8c's failure mode was the
+    model treating bytes it could not see as bytes that did not exist, and a
+    partial read with no stated bounds is an invitation to do exactly that.
+    """
     file_path = _resolve_agent_path(game_dir, path)
     if not file_path.is_file():
         return f"ERROR: {path!r} not found"
-    return file_path.read_text(encoding="utf-8")
+    text = file_path.read_text(encoding="utf-8")
+    if start_line is None and end_line is None and char_start is None:
+        return text
+
+    lines = text.splitlines(keepends=True)
+    total_lines = len(lines)
+    first = start_line or 1
+    last = end_line or total_lines
+    if first > total_lines:
+        return (
+            f"ERROR: {path!r} has {total_lines} lines, so start_line "
+            f"{first} is past the end of the file."
+        )
+    last = min(last, total_lines)
+    selected = "".join(lines[first - 1:last])
+
+    offset = (char_start or 1) - 1
+    if offset and offset >= len(selected):
+        return (
+            f"ERROR: lines {first}-{last} of {path!r} are {len(selected)} "
+            f"characters, so char_start {char_start} is past their end."
+        )
+    window = selected[offset:offset + _READ_MAX_CHARS]
+    end_offset = offset + len(window)
+
+    # A "NOTE:" line, not a "===== ... =====" banner. The banner form is what
+    # delimits the source snapshot, and _write_file hard-rejects file contents
+    # containing one precisely because the model copies scaffolding it has seen
+    # (see _SNAPSHOT_MARKER_RE and _PRUNE_SENTINEL). Reusing that shape here to
+    # mean something else would be teaching the confusion the guard exists to
+    # prevent. "NOTE:" is already this file's vocabulary for an observation
+    # prefix (_read_file_nudge, _write_file's size lint).
+    span = f"line {first}" if first == last else f"lines {first}-{last}"
+    header = (f"NOTE: this is a PARTIAL read of {path} — {span} of "
+              f"{total_lines} lines")
+    if offset or end_offset < len(selected):
+        header += (
+            f", characters {offset + 1}-{end_offset} of the {len(selected)} "
+            "in that line range"
+        )
+    header += ". "
+    if end_offset < len(selected):
+        header += (
+            f"That range continues past what is shown — pass "
+            f"char_start={end_offset + 1} to read on from here. "
+        )
+    header += "Everything below is that file's exact current bytes.\n"
+    return header + window
 
 
 def _read_file_nudge(path: str, written: set[str] | None,
-                      snapshot_paths: frozenset | None) -> str:
+                      snapshot_paths: frozenset | None,
+                      ranged: bool = False) -> str:
     """A one-line prefix for a read of a file the snapshot already carries
     unchanged, or "" when the read was worth making.
 
@@ -795,6 +944,13 @@ def _read_file_nudge(path: str, written: set[str] | None,
     used to just gets made again. This is an *observation*, not an arguments
     slot, which is the category that has never caused an imitation bug — same
     shape as _write_file's soft size lint."""
+    if ranged:
+        # A ranged read of an unmodified snapshot file is not the waste this
+        # nudge is about. It is the cheap navigation act the range arguments
+        # exist to encourage — a few thousand characters against a whole
+        # module — and nudging it would push the model back toward the
+        # unranged call this is trying to discourage.
+        return ""
     if not snapshot_paths or path not in snapshot_paths:
         return ""
     if written and path in written:
@@ -804,14 +960,15 @@ def _read_file_nudge(path: str, written: set[str] | None,
         "byte-for-byte identical to the copy in the source snapshot in your "
         "instructions — this read told you nothing new. The snapshot has "
         "every file in full; read_file is only worth a step for a file "
-        "created or rewritten during this run.\n"
+        "created or rewritten during this run, and even then a start_line/"
+        "end_line range costs a fraction of the whole module.\n"
     )
 
 
-# A search result rides along in the conversation for the rest of the run
-# (unlike a read_file result, which gets pruned once stale) — that's the
-# point: an answer the model can still see is an answer it won't ask for
-# twice. Which only holds if the answer stays small, hence both caps. A
+# A search result rides along in the conversation for the rest of the run —
+# as, since Sprint 6a removed both prune sites, does every read_file result.
+# That's the point: an answer the model can still see is an answer it won't
+# ask for twice. Which only holds if the answer stays small, hence both caps. A
 # pattern broad enough to blow through them is a pattern that should have
 # been narrower, and the observation says so. Worst case is 60 × 400 ≈ 24KB
 # of conversation, once, at the cached rate thereafter.
@@ -1134,10 +1291,13 @@ def _execute_tool(tc: ai.ToolCall, game_dir: Path, max_module_bytes: int,
         if tc.name == "list_files":
             return _list_files(game_dir, written), None
         if tc.name == "read_file":
-            path = _normalize_agent_path(_parse_path_arg(tc.arguments))
-            observation = _read_file(game_dir, path)
+            path, start_line, end_line, char_start = _parse_read_args(tc.arguments)
+            path = _normalize_agent_path(path)
+            observation = _read_file(game_dir, path, start_line, end_line, char_start)
             if not observation.startswith("ERROR:"):
-                observation = _read_file_nudge(path, written, snapshot_paths) + observation
+                ranged = any(v is not None for v in (start_line, end_line, char_start))
+                observation = _read_file_nudge(
+                    path, written, snapshot_paths, ranged) + observation
             return observation, path
         if tc.name == "search":
             pattern, path = _parse_search_args(tc.arguments)
@@ -1171,7 +1331,17 @@ def _progress_key(tc: ai.ToolCall, touched_path: str | None):
     if tc.name in ("read_map", "list_files"):
         return (tc.name,)
     if tc.name == "read_file":
-        return ("read_file", touched_path)
+        # The range is part of the identity. Two reads of different parts of
+        # the same module are two different observations, and keying on the
+        # path alone would score the second as a repeat — pushing a run that
+        # is navigating a large file exactly as intended toward the stall
+        # guard. That guard already killed a healthy run once (job 73df2b10)
+        # by miscounting productive turns as idle ones.
+        try:
+            _, start_line, end_line, char_start = _parse_read_args(tc.arguments)
+        except AgentError:
+            return None
+        return ("read_file", touched_path, start_line, end_line, char_start)
     if tc.name == "search":
         try:
             pattern, _ = _parse_search_args(tc.arguments)
@@ -1252,8 +1422,19 @@ def _summarize_tool_call(tc: ai.ToolCall) -> tuple[str, dict]:
     file bytes that already live in src/."""
     if tc.name == "read_file":
         try:
-            path = _parse_path_arg(tc.arguments)
-            return f"read_file({path!r})", {"tool": tc.name, "path": path}
+            path, start_line, end_line, char_start = _parse_read_args(tc.arguments)
+            data = {"tool": tc.name, "path": path}
+            bits = []
+            if start_line is not None or end_line is not None:
+                data["start_line"] = start_line
+                data["end_line"] = end_line
+                bits.append(f"lines {start_line or 1}-{end_line or 'end'}")
+            if char_start is not None:
+                data["char_start"] = char_start
+                bits.append(f"from char {char_start}")
+            if bits:
+                return f"read_file({path!r}, {', '.join(bits)})", data
+            return f"read_file({path!r})", data
         except AgentError:
             return "read_file(...)", {"tool": tc.name}
     if tc.name == "write_file":
@@ -1364,7 +1545,10 @@ def _build_system_prompt(source_title: str,
             "contains — that spends a step and tells you nothing. There are "
             "exactly two reasons to read: a file created later in this run, "
             "and re-reading a file after you have rewritten it with "
-            "write_file.\n"
+            "write_file. In both cases read the LINE RANGE you care about "
+            "rather than the whole module — a whole-file read of a large "
+            "module is the most expensive thing you can do, and it is almost "
+            "never what the question actually needs.\n"
             "You never need to re-read a file after an edit_file call you can "
             "still see in this conversation: that file's current contents are "
             "the snapshot's version with those edits applied, in order.\n"
@@ -1387,16 +1571,26 @@ def _build_system_prompt(source_title: str,
         "- read_map() — game.md: a prose description plus a table of every "
         "src/ file and its purpose.\n"
         "- list_files() — every src/ file with its byte size.\n"
-        "- read_file(path) — the full contents of one src/ file (or "
-        "game.md).\n"
+        "- read_file(path, start_line=None, end_line=None) — one src/ file "
+        "(or game.md). With no range this returns the WHOLE file and is the "
+        "most expensive call available to you; with a range it costs a "
+        "fraction of that. When you already know roughly where you need to "
+        "look — a line number from a search result or a build error, the "
+        "area around an edit you just made — read that range, not the "
+        "module. Line numbers are 1-based and inclusive. If a range is too "
+        "long to return at once the result says so and gives you a "
+        "char_start to continue from, which is also how you read part of a "
+        "single very long line.\n"
         "- search(pattern, path=None) — regex search across every file, "
         "returning matching lines as 'path:line: text'. This is how you "
         "answer a narrow question: whether an identifier exists, where it's "
         "declared, every call site of a function, which module owns a "
         "constant. It costs a fraction of a read_file, so use it instead of "
-        "re-reading a module you've already seen — reach for read_file only "
-        "when you need a file's whole text because you're about to rewrite "
-        "it.\n"
+        "re-reading a module you've already seen. A search result gives you "
+        "the line number, which is what a ranged read_file wants next if you "
+        "need more context around it; reach for an UNRANGED read_file only "
+        "when you genuinely need a file's whole text because you're about to "
+        "rewrite it.\n"
         "- edit_file(path, old_string, new_string) — replace one exact span "
         "of text in an existing file. THIS IS THE TOOL TO REACH FOR when you "
         "are changing part of a file: it costs only the text you pass, where "
@@ -1678,7 +1872,18 @@ def _locate_syntax_faults(game_dir) -> str:
             "Unbalanced delimiter found in the source (this is almost "
             "certainly the parse error above — fix it, then call finish "
             "again):")
-    return head + "\n" + "\n".join(findings)
+    # Name the tool that acts on a line number. This message's whole value is
+    # the line it reports, and until read_file took a range there was no way
+    # to look at that line: job b7c3215e (2026-07-29) was handed "render.js
+    # '{' opened at line 19 — never closed", had only whole-file reads and
+    # regex search, and spent 17 of its 33 turns and two 57,000-token re-reads
+    # of a 151KB module finding one brace. Same rule as _edit_file's
+    # zero-match rejection pointing at search: a gate that demands a fix has
+    # to name the tool that delivers it.
+    tail = ("\nread_file(path, start_line=..., end_line=...) around the "
+            "reported line is the cheap way to see it — a whole-file read is "
+            "not needed to find a brace.")
+    return head + "\n" + "\n".join(findings) + tail
 
 
 def _skip_back(js: str, j: int) -> int:
