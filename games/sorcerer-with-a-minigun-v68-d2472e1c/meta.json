@@ -1,0 +1,12 @@
+{
+  "game_id": "d2472e1ccba04a3f90a913f470f2fda7",
+  "parent_game_id": "824c35ca49b64fb6ac950f7bc32559c1",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v68)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:7fbda6b03e03",
+  "created_at": "2026-07-29T08:05:38.592101Z",
+  "version": 27,
+  "prompt": "make all the weapon have sword slashes not just the shadow greatsword",
+  "format": "multi-file"
+}
