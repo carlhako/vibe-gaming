@@ -1,0 +1,12 @@
+{
+  "game_id": "ac87a8d99bc545ada71c7cb968f1bf12",
+  "parent_game_id": "3ea24a3778f04d5797d6aa590a8aca83",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v73)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-29T09:20:01.777016Z",
+  "version": 32,
+  "prompt": "improve the animation of the knight using air slash, it currently looks like a puff of air, change this to look like a sword swooping through the air, like a long sword white swiping through the air over the same distance the damage covers.",
+  "format": "multi-file"
+}
