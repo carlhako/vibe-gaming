@@ -1,0 +1,12 @@
+{
+  "game_id": "3ea24a3778f04d5797d6aa590a8aca83",
+  "parent_game_id": "f408d45ce8c24e31ad1bddaa07b2b4da",
+  "root_game_id": "e98a42a8ac494123982aceb3214b6063",
+  "title": "Sorcerer With A Minigun (v72)",
+  "description": "Hurl fireballs, summon skeletal minions, and battle through waves of enemies in this dark fantasy arena. Full HP restored at start of each wave.",
+  "requested_by": "web:7fbda6b03e03",
+  "created_at": "2026-07-29T08:44:51.452610Z",
+  "version": 31,
+  "prompt": "make the air slash look more like a sword instead of a puff of air",
+  "format": "multi-file"
+}
