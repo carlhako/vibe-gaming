@@ -1,0 +1,11 @@
+{
+  "game_id": "49918a4c974846ed818d652b9fc95cbf",
+  "parent_game_id": "d2dbee5e8ac345a281eed7c69ce9990a",
+  "root_game_id": "7efb6baa274c4a8e90e184d21b56a5dc",
+  "title": "Safari Torchlight (v10)",
+  "description": "Roguelike safari survival: collect torch parts, light the big torch, dodge monsters, and buy upgrades with sapphires. Now with Top Hat and Rhino monsters, improved zebra sprite, and wandering bushes.",
+  "requested_by": "web:85267fc8cbc2",
+  "created_at": "2026-07-29T00:18:02.382941Z",
+  "version": 10,
+  "prompt": "do the following changes make.\r\n\r\n1. add 2 more monsters i will give you the ideas. for the first monster idea will be a top hat with a little red face. the top hat will lurk at the player's speed around the map once it spots a player it will go 1.008* faster than the players speed and will chase the player. if the top hat comes in contact with the player will be stunned for 3 seconds call the monster monster top hat. for the second monster idea will be a rhino that lurks around the map untill it spots the player it will chase the player for three seconds and will chase at 2* the players speed and once it has chased the player for three second it will stop chasing the player instead it will lurk around the map again and another chase can not be activated for 15 seconds.\r\n\r\n2. make the player model look more like a zebra right now it looks like a panda.\r\n\r\n3. the bush right now doesn't wander when the player can not see the bush make it so the bush when it is out of sight of the player make it wander around at half the players speed."
+}
