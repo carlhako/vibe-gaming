@@ -1,0 +1,12 @@
+{
+  "game_id": "257433a6d8bc4c388464701e17c5fade",
+  "parent_game_id": "4ebcea6438944eebadb0b8b0c9b42f00",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v46)",
+  "description": "Enhanced tower defense with projectile pass-through, upgrade-all buttons, and rich maze generation.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-07-29T06:18:21.803941Z",
+  "version": 5,
+  "prompt": "in the time speed (1x 2x 3x 5x) add a 10x, 15x, 20x. (maybe i am doing it wrong but...) i can't get the buff's to work. (unless there is good reason) always have a weapon (to place) selected - sometimes it deselects, meaning have to click back on, eg, laser). lasers (all weapons) should pass through enemies (fix prev regression). the game maxes out at around l73 (boss always gets through despite full board of teslas/lasers/ice/rollers) - introduce new mechanics that make it possible to reach much higher levels, without ruining existing mechanics.",
+  "format": "multi-file"
+}
