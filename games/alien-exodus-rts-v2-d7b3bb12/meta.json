@@ -1,0 +1,11 @@
+{
+  "game_id": "d7b3bb12232345b78925a0eb72547d49",
+  "parent_game_id": "e23dc9dda421443084ea321da60d5b1b",
+  "root_game_id": "e23dc9dda421443084ea321da60d5b1b",
+  "title": "Alien Exodus - RTS (v2)",
+  "description": "Build your base, harvest mana crystals, train units, and destroy the alien hive in this real-time strategy game.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-07-30T09:41:34.854387Z",
+  "version": 2,
+  "prompt": "there is no way to build new buildings, there should be buttons to build all these\r\n\r\nmultiple buildings and units.\r\nBuildings (defined in BUILDING_DEFS)\r\n\r\n    Command Center \u2014 produces: harvester, refinery, barracks, powerPlant, turret\r\n    Refinery \u2014 no production, gives harvest bonus\r\n    Barracks \u2014 produces: marine, sniper, grenadier\r\n    Power Plant \u2014 no production, gives power bonus (speeds up production)\r\n    Vehicle Depot \u2014 produces: scoutJeep, tank, mechWalker (requires Power Plant tech)\r\n    Turret \u2014 no production, auto-attacks enemies\r\n\r\nUnits (defined in UNIT_DEFS)\r\n\r\n    Harvester \u2014 gathers crystals for credits\r\n    Marine \u2014 basic infantry\r\n    Sniper \u2014 long-range, high damage\r\n    Grenadier \u2014 area-of-effect damage\r\n    Scout Jeep \u2014 fast vehicle\r\n    Tank \u2014 heavy vehicle, high damage\r\n    Mech Walker \u2014 medium vehicle\r\n\r\nBuildings are placed by clicking a production button (e.g. from the Command Center) which enters placement mode, then left-clicking on a valid location. Units are queued from the production panel of the appropriate building."
+}

@@ -1,0 +1,2041 @@
+<![CDATA[<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Alien Exodus - RTS</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;height:100%;overflow:hidden;background:#0a0510;font-family:'Segoe UI',system-ui,sans-serif;}
+canvas{display:block;cursor:crosshair;}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+(function(){
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// ==================== CONSTANTS ====================
+const TILE = 32;
+const MAP_W = 52;
+const MAP_H = 36;
+const MAP_PX_W = MAP_W * TILE;
+const MAP_PX_H = MAP_H * TILE;
+
+const TERRAIN = { EMPTY:0, CRYSTAL:1, ROCK:2, FUNGUS:3, HIVE_GROUND:4 };
+const TEAM = { PLAYER:0, ENEMY:1, NEUTRAL:2 };
+const FOW = { UNEXPLORED:0, EXPLORED:1, VISIBLE:2 };
+
+// Colors
+const COL = {
+    ground1:'#c2692d', ground2:'#a8511e', ground3:'#8a3f14',
+    crystal1:'#b44dff', crystal2:'#d98fff', crystalGlow:'#e0b0ff',
+    rock1:'#3d2b5c', rock2:'#5c3d8f',
+    fungus1:'#6b2d8f', fungus2:'#8b4dc4',
+    playerBase:'#2d7db5', playerAccent:'#4da6e8',
+    playerUnit:'#38a3d9', playerSelect:'#6dcff6',
+    enemyBase:'#b53d3d', enemyAccent:'#e85555',
+    enemyUnit:'#d94d4d', enemySelect:'#ff6b6b',
+    hiveGround:'#3d1a1a',
+    minimapPlayer:'#4dc8f0', minimapEnemy:'#f05050', minimapCrystal:'#c880ff',
+    minimapFog:'#0a0510', minimapExplored:'#1a1030', minimapVisible:'#2a1a40',
+    uiBg:'#0d0a18', uiBorder:'#3d2b5c', uiText:'#e0d0ff', uiGold:'#ffcc44',
+    uiBtnBg:'#2a1d4a', uiBtnHover:'#3d2b5c', uiBtnDisabled:'#1a1028',
+    healthBar:'#44cc44', healthBarDmg:'#cc3333', healthBarBg:'#1a1a1a',
+    shieldBar:'#4488ff',
+    fogDark:'rgba(0,0,0,0.75)', fogMid:'rgba(0,0,0,0.45)',
+    constructionOverlay:'rgba(255,200,50,0.25)',
+};
+
+// ==================== GAME STATE ====================
+let gameState = 'menu'; // menu | playing | victory | defeat
+let difficulty = 'medium';
+let credits = 350;
+let entities = [];
+let particles = [];
+let selectedEntities = [];
+let camera = { x:0, y:0 };
+let cameraVel = { x:0, y:0 };
+let map = [];
+let fogOfWar = [];
+let placementMode = null; // building type string or null
+let placementGhost = null; // {x,y,w,h} in world coords
+let placementValid = false;
+let dragStart = null;
+let dragActive = false;
+let dragWorldStart = null;
+let mouseWorld = { x:0, y:0 };
+let mouseScreen = { x:0, y:0 };
+let controlGroups = {};
+let buildMenuTarget = null; // entity ref for production panel
+let gameTime = 0;
+let nextEntityId = 1;
+let aiTimer = 0;
+let aiWaveSize = 0;
+let aiCredits = 0;
+let messageText = '';
+let messageTimer = 0;
+let screenShake = 0;
+let hoveredEntity = null;
+
+// Difficulty settings
+const DIFF = {
+    easy:{ aiStartCredits:200, aiIncomeRate:0.3, waveInterval:35, waveGrowth:1, aiAggression:0.4 },
+    medium:{ aiStartCredits:350, aiIncomeRate:0.55, waveInterval:25, waveGrowth:2, aiAggression:0.7 },
+    hard:{ aiStartCredits:500, aiIncomeRate:0.85, waveInterval:16, waveGrowth:3, aiAggression:1.0 },
+};
+
+// ==================== ENTITY TYPES ====================
+const BUILDING_DEFS = {
+    commandCenter:{ name:'Command Center', w:3, h:3, hp:1200, cost:0, buildTime:0, sight:10, color:COL.playerBase, accent:COL.playerAccent, produces:['harvester','refinery','barracks','powerPlant','turret'], techRequired:null },
+    refinery:{ name:'Refinery', w:2, h:2, hp:500, cost:150, buildTime:12, sight:6, color:'#5c9e4a', accent:'#7cc86a', produces:[], techRequired:null, harvestBonus:true },
+    barracks:{ name:'Barracks', w:2, h:2, hp:600, cost:200, buildTime:15, sight:7, color:'#5c7a9e', accent:'#7aa8cc', produces:['marine','sniper','grenadier'], techRequired:null },
+    powerPlant:{ name:'Power Plant', w:2, h:2, hp:400, cost:250, buildTime:18, sight:6, color:'#c4a030', accent:'#e0c850', produces:[], techRequired:null, powerBonus:true },
+    vehicleDepot:{ name:'Vehicle Depot', w:3, h:3, hp:700, cost:300, buildTime:20, sight:7, color:'#6b5c8a', accent:'#9a8cc0', produces:['scoutJeep','tank','mechWalker'], techRequired:'powerPlant' },
+    turret:{ name:'Turret', w:1, h:1, hp:350, cost:100, buildTime:8, sight:8, color:'#5a5a6e', accent:'#8888aa', produces:[], techRequired:null, isTurret:true, damage:18, range:5, fireRate:1.2 },
+};
+
+const UNIT_DEFS = {
+    harvester:{ name:'Harvester', hp:150, speed:1.8, damage:0, range:0, fireRate:0, cost:75, buildTime:8, sight:6, color:'#e8c840', size:10, isHarvester:true },
+    marine:{ name:'Marine', hp:120, speed:2.5, damage:10, range:3.5, fireRate:0.7, cost:60, buildTime:6, sight:7, color:'#4dc8f0', size:8 },
+    sniper:{ name:'Sniper', hp:90, speed:2.0, damage:28, range:7, fireRate:1.8, cost:110, buildTime:9, sight:9, color:'#38d9a9', size:8 },
+    grenadier:{ name:'Grenadier', hp:100, speed:2.2, damage:22, range:3, fireRate:1.5, cost:140, buildTime:11, sight:6, color:'#e89040', size:9, aoe:true, aoeRadius:50 },
+    scoutJeep:{ name:'Scout Jeep', hp:200, speed:4.5, damage:12, range:4, fireRate:0.5, cost:130, buildTime:10, sight:10, color:'#c0d840', size:12, isVehicle:true },
+    tank:{ name:'Tank', hp:400, speed:1.8, damage:40, range:5, fireRate:2.0, cost:260, buildTime:17, sight:8, color:'#888888', size:14, isVehicle:true },
+    mechWalker:{ name:'Mech Walker', hp:300, speed:2.5, damage:30, range:5.5, fireRate:1.3, cost:220, buildTime:14, sight:8, color:'#c0a0e0', size:13, isVehicle:true },
+};
+
+const ENEMY_DEFS = {
+    swarmling:{ name:'Swarmling', hp:70, speed:3.2, damage:8, range:1.2, fireRate:0.5, cost:40, buildTime:4, sight:6, color:'#e85540', size:7, isMelee:true },
+    spitter:{ name:'Spitter', hp:100, speed:2.0, damage:14, range:5, fireRate:1.2, cost:70, buildTime:7, sight:7, color:'#d08040', size:9 },
+    ravager:{ name:'Ravager', hp:350, speed:2.0, damage:35, range:4, fireRate:1.8, cost:180, buildTime:14, sight:7, color:'#cc3344', size:13, isVehicle:true },
+    queen:{ name:'Queen', hp:800, speed:1.4, damage:50, range:6, fireRate:2.5, cost:400, buildTime:25, sight:9, color:'#ff2255', size:16, isBoss:true },
+};
+
+// ==================== CLASSES ====================
+class Entity {
+    constructor(type, team, x, y, def){
+        this.id = nextEntityId++;
+        this.type = type;
+        this.team = team;
+        this.x = x;
+        this.y = y;
+        this.def = def;
+        this.hp = def.hp || 100;
+        this.maxHp = def.hp || 100;
+        this.size = def.size || 10;
+        this.speed = def.speed || 0;
+        this.damage = def.damage || 0;
+        this.range = (def.range || 0) * TILE;
+        this.fireRate = def.fireRate || 1;
+        this.cost = def.cost || 0;
+        this.buildTime = def.buildTime || 0;
+        this.sight = (def.sight || 5) * TILE;
+        this.color = def.color || '#888';
+        this.accent = def.accent || def.color || '#aaa';
+        this.isBuilding = false;
+        this.isUnit = false;
+        this.isHarvester = def.isHarvester || false;
+        this.isTurret = def.isTurret || false;
+        this.isMelee = def.isMelee || false;
+        this.isVehicle = def.isVehicle || false;
+        this.isBoss = def.isBoss || false;
+        this.aoe = def.aoe || false;
+        this.aoeRadius = def.aoeRadius || 0;
+        this.harvestBonus = def.harvestBonus || false;
+        this.powerBonus = def.powerBonus || false;
+        this.produces = def.produces || [];
+        this.techRequired = def.techRequired || null;
+        this.w = (def.w || 1) * TILE;
+        this.h = (def.h || 1) * TILE;
+
+        // State
+        this.alive = true;
+        this.selected = false;
+        this.constructing = false;
+        this.constructionProgress = 0;
+        this.targetX = null;
+        this.targetY = null;
+        this.attackTarget = null;
+        this.harvestTarget = null;
+        this.firing = false;
+        this.fireCooldown = 0;
+        this.productionQueue = [];
+        this.productionProgress = 0;
+        this.flashTimer = 0;
+        this.orderGiven = false;
+    }
+
+    get cx(){ return this.isBuilding ? this.x + this.w/2 : this.x; }
+    get cy(){ return this.isBuilding ? this.y + this.h/2 : this.y; }
+
+    distTo(ex, ey){ const dx=this.cx-ex, dy=this.cy-ey; return Math.sqrt(dx*dx+dy*dy); }
+
+    startConstruction(){
+        this.constructing = true;
+        this.constructionProgress = 0;
+        this.hp = Math.floor(this.maxHp * 0.1);
+    }
+
+    updateConstruction(dt){
+        if(!this.constructing) return;
+        this.constructionProgress += dt / Math.max(this.buildTime, 0.1);
+        this.hp = Math.floor(this.maxHp * Math.max(0.1, this.constructionProgress));
+        if(this.constructionProgress >= 1){
+            this.constructing = false;
+            this.constructionProgress = 1;
+            this.hp = this.maxHp;
+        }
+    }
+
+    queueUnit(unitType){
+        const def = UNIT_DEFS[unitType];
+        if(!def) return false;
+        if(this.productionQueue.length >= 5) return false;
+        this.productionQueue.push({ type:unitType, progress:0, buildTime:def.buildTime, cost:def.cost });
+        return true;
+    }
+
+    updateProduction(dt, gameRef){
+        if(this.productionQueue.length === 0){ this.productionProgress=0; return; }
+        const speedMult = gameRef.hasPowerPlant() ? 1.4 : 1.0;
+        const item = this.productionQueue[0];
+        item.progress += dt * speedMult;
+        this.productionProgress = item.progress / item.buildTime;
+        if(item.progress >= item.buildTime){
+            // Spawn unit
+            const def = UNIT_DEFS[item.type];
+            const sx = this.x + this.w/2 + (Math.random()-0.5)*TILE;
+            const sy = this.y + this.h + 10;
+            const u = new Entity(item.type, TEAM.PLAYER, sx, sy, def);
+            u.isUnit = true;
+            u.isBuilding = false;
+            gameRef.addEntity(u);
+            this.productionQueue.shift();
+            this.productionProgress = 0;
+            if(this.productionQueue.length > 0){
+                this.productionQueue[0].progress = 0;
+            }
+        }
+    }
+}
+
+// ==================== MAP GENERATION ====================
+function generateMap(){
+    map = [];
+    fogOfWar = [];
+    for(let y=0; y<MAP_H; y++){
+        map[y] = [];
+        fogOfWar[y] = [];
+        for(let x=0; x<MAP_W; x++){
+            map[y][x] = TERRAIN.EMPTY;
+            fogOfWar[y][x] = FOW.UNEXPLORED;
+        }
+    }
+
+    // Place obstacles (rocks and fungal stalks)
+    const rng = mulberry32(42);
+    for(let i=0; i<60; i++){
+        const x = Math.floor(rng()*MAP_W);
+        const y = Math.floor(rng()*MAP_H);
+        if(x>3 && x<MAP_W-4 && y>3 && y<MAP_H-4){
+            if(map[y][x]===TERRAIN.EMPTY){
+                map[y][x] = rng()<0.5 ? TERRAIN.ROCK : TERRAIN.FUNGUS;
+                // Sometimes cluster
+                if(rng()<0.4){
+                    const dx=Math.floor(rng()*3)-1, dy=Math.floor(rng()*3)-1;
+                    const nx=x+dx, ny=y+dy;
+                    if(nx>=0&&nx<MAP_W&&ny>=0&&ny<MAP_H&&map[ny][nx]===TERRAIN.EMPTY){
+                        map[ny][nx] = map[y][x];
+                    }
+                }
+            }
+        }
+    }
+
+    // Place crystal deposits
+    const crystalClusters = [
+        {cx:8,cy:12,count:4},{cx:16,cy:8,count:3},{cx:14,cy:20,count:3},
+        {cx:24,cy:14,count:4},{cx:28,cy:22,count:3},{cx:38,cy:10,count:3},
+        {cx:35,cy:25,count:4},{cx:20,cy:16,count:2},{cx:42,cy:18,count:3},
+        {cx:8,cy:25,count:3},{cx:44,cy:28,count:2},
+    ];
+
+    for(const cluster of crystalClusters){
+        for(let i=0; i<cluster.count; i++){
+            let cx = cluster.cx + Math.floor(rng()*5)-2;
+            let cy = cluster.cy + Math.floor(rng()*5)-2;
+            cx = Math.max(0,Math.min(MAP_W-1,cx));
+            cy = Math.max(0,Math.min(MAP_H-1,cy));
+            if(map[cy][cx]===TERRAIN.EMPTY){
+                map[cy][cx] = TERRAIN.CRYSTAL;
+            }
+        }
+    }
+
+    // Player starting area - clear
+    for(let y=2; y<10; y++){
+        for(let x=2; x<12; x++){
+            if(map[y][x]!==TERRAIN.CRYSTAL) map[y][x]=TERRAIN.EMPTY;
+        }
+    }
+    // Ensure some crystals near player base
+    map[8][6]=TERRAIN.CRYSTAL;
+    map[7][8]=TERRAIN.CRYSTAL;
+    map[9][9]=TERRAIN.CRYSTAL;
+
+    // Enemy area
+    for(let y=MAP_H-10; y<MAP_H-2; y++){
+        for(let x=MAP_W-12; x<MAP_W-2; x++){
+            if(map[y][x]===TERRAIN.EMPTY) map[y][x]=TERRAIN.HIVE_GROUND;
+        }
+    }
+}
+
+function mulberry32(a){
+    return function(){
+        a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;
+        return((t^t>>>14)>>>0)/4294967296;
+    };
+}
+
+// ==================== GAME INIT ====================
+let gameRef;
+function initGame(diff){
+    difficulty = diff;
+    credits = 350;
+    entities = [];
+    particles = [];
+    selectedEntities = [];
+    placementMode = null;
+    placementGhost = null;
+    placementValid = false;
+    dragStart = null;
+    dragActive = false;
+    buildMenuTarget = null;
+    gameTime = 0;
+    nextEntityId = 1;
+    aiTimer = 0;
+    aiCredits = DIFF[difficulty].aiStartCredits;
+    aiWaveSize = 0;
+    messageText = '';
+    messageTimer = 0;
+    screenShake = 0;
+    controlGroups = {};
+    hoveredEntity = null;
+    gameState = 'playing';
+
+    generateMap();
+
+    // Player Command Center
+    const cc = new Entity('commandCenter', TEAM.PLAYER, 4*TILE, 5*TILE, BUILDING_DEFS.commandCenter);
+    cc.isBuilding = true;
+    cc.hp = cc.maxHp;
+    cc.constructing = false;
+    entities.push(cc);
+
+    // Player Harvesters
+    for(let i=0; i<2; i++){
+        const hx = 7*TILE + i*TILE*2;
+        const hy = 9*TILE;
+        const h = new Entity('harvester', TEAM.PLAYER, hx, hy, UNIT_DEFS.harvester);
+        h.isUnit = true;
+        entities.push(h);
+        // Auto-assign to nearest crystal
+        assignHarvesterToCrystal(h);
+    }
+
+    // Enemy Hive
+    const hive = new Entity('commandCenter', TEAM.ENEMY, (MAP_W-7)*TILE, (MAP_H-7)*TILE, {
+        ...BUILDING_DEFS.commandCenter, name:'Alien Hive', color:COL.enemyBase, accent:COL.enemyAccent,
+        produces:[], w:4, h:4, hp:2000, sight:10
+    });
+    hive.isBuilding = true;
+    hive.hp = hive.maxHp;
+    hive.constructing = false;
+    entities.push(hive);
+
+    // Enemy starting units
+    const eUnits = diff==='easy'?[{t:'swarmling',n:2}]:diff==='medium'?[{t:'swarmling',n:3},{t:'spitter',n:1}]:[{t:'swarmling',n:4},{t:'spitter',n:2},{t:'ravager',n:1}];
+    for(const eu of eUnits){
+        for(let i=0; i<eu.n; i++){
+            const ex = hive.x - TILE*2 + Math.random()*TILE*3;
+            const ey = hive.y - TILE*2 + Math.random()*TILE*3;
+            const e = new Entity(eu.t, TEAM.ENEMY, ex, ey, ENEMY_DEFS[eu.t]);
+            e.isUnit = true;
+            entities.push(e);
+        }
+    }
+
+    // Enemy crystal deposits near hive
+    const enemyCrystals = [{x:MAP_W-8,y:MAP_H-10},{x:MAP_W-9,y:MAP_H-11},{x:MAP_W-7,y:MAP_H-12}];
+    for(const ec of enemyCrystals){
+        if(ec.x>=0&&ec.x<MAP_W&&ec.y>=0&&ec.y<MAP_H){
+            map[ec.y][ec.x] = TERRAIN.CRYSTAL;
+        }
+    }
+
+    // Center camera on player base
+    camera.x = cc.x - canvas.width/2 + cc.w/2;
+    camera.y = cc.y - canvas.height/2 + cc.h/2;
+    clampCamera();
+
+    gameRef = { entities, addEntity, hasPowerPlant, showMessage, particles, map, fogOfWar, selectedEntities, credits, difficulty, aiCredits, aiTimer, aiWaveSize, gameTime };
+}
+
+function addEntity(e){
+    entities.push(e);
+}
+
+function hasPowerPlant(){
+    return entities.some(e=>e.team===TEAM.PLAYER && e.isBuilding && e.alive && !e.constructing && e.powerBonus);
+}
+
+function showMessage(msg, duration=3){
+    messageText = msg;
+    messageTimer = duration;
+}
+
+// ==================== HARVESTER LOGIC ====================
+function assignHarvesterToCrystal(harvester){
+    let best = null;
+    let bestDist = Infinity;
+    for(let y=0; y<MAP_H; y++){
+        for(let x=0; x<MAP_W; x++){
+            if(map[y][x]===TERRAIN.CRYSTAL){
+                const wx = x*TILE+TILE/2, wy = y*TILE+TILE/2;
+                const d = harvester.distTo(wx, wy);
+                if(d < bestDist){ bestDist = d; best = {x:wx, y:wy, tileX:x, tileY:y}; }
+            }
+        }
+    }
+    if(best){
+        harvester.harvestTarget = best;
+        harvester.targetX = best.x;
+        harvester.targetY = best.y;
+    }
+}
+
+function harvestUpdate(harvester, dt){
+    if(!harvester.harvestTarget) {
+        assignHarvesterToCrystal(harvester);
+        if(!harvester.harvestTarget) return;
+    }
+    const ht = harvester.harvestTarget;
+    const d = harvester.distTo(ht.x, ht.y);
+    if(d < TILE*1.5){
+        // Harvesting
+        const rate = 8 * dt;
+        const bonus = hasPowerPlant() ? 1.2 : 1.0;
+        const refBonus = entities.some(e=>e.team===TEAM.PLAYER&&e.isBuilding&&e.alive&&!e.constructing&&e.harvestBonus) ? 1.5 : 1.0;
+        credits += rate * bonus * refBonus;
+        // Deplete crystal slowly
+        if(Math.random() < dt * 0.03){
+            map[ht.tileY][ht.tileX] = TERRAIN.EMPTY;
+            harvester.harvestTarget = null;
+            assignHarvesterToCrystal(harvester);
+        }
+    } else {
+        // Move toward crystal
+        moveToward(harvester, ht.x, ht.y, dt);
+    }
+}
+
+// ==================== MOVEMENT & COMBAT ====================
+function moveToward(entity, tx, ty, dt){
+    const dx = tx - entity.cx;
+    const dy = ty - entity.cy;
+    const dist = Math.sqrt(dx*dx+dy*dy);
+    if(dist < 2) { entity.targetX=null; entity.targetY=null; return; }
+    const speed = entity.speed * TILE * 2.5;
+    const nx = entity.cx + (dx/dist) * speed * dt;
+    const ny = entity.cy + (dy/dist) * speed * dt;
+    // Simple collision with obstacles
+    const tileX = Math.floor(nx/TILE);
+    const tileY = Math.floor(ny/TILE);
+    let blocked = false;
+    if(tileX>=0&&tileX<MAP_W&&tileY>=0&&tileY<MAP_H){
+        if(map[tileY][tileX]===TERRAIN.ROCK||map[tileY][tileX]===TERRAIN.FUNGUS){
+            blocked = true;
+        }
+    }
+    // Check building collision
+    for(const e of entities){
+        if(!e.alive || !e.isBuilding) continue;
+        if(e.team===entity.team && e===entity) continue;
+        const bx=e.x-TILE*0.3, by=e.y-TILE*0.3, bw=e.w+TILE*0.6, bh=e.h+TILE*0.6;
+        if(nx>bx&&nx<bx+bw&&ny>by&&ny<by+bh) blocked=true;
+    }
+    if(!blocked){
+        if(entity.isBuilding){
+            entity.x = nx - entity.w/2;
+            entity.y = ny - entity.h/2;
+        } else {
+            entity.x = nx;
+            entity.y = ny;
+        }
+    } else {
+        // Try sliding
+        const sx = entity.cx + (dx/dist) * speed * dt;
+        if(!isBlocked(sx, entity.cy, entity)){
+            if(!entity.isBuilding){ entity.x = sx; } else { entity.x = sx - entity.w/2; }
+        }
+        const sy = entity.cy + (dy/dist) * speed * dt;
+        if(!isBlocked(entity.cx, sy, entity)){
+            if(!entity.isBuilding){ entity.y = sy; } else { entity.y = sy - entity.h/2; }
+        }
+    }
+    if(entity.isBuilding){
+        entity.x = Math.round(entity.x/TILE)*TILE;
+        entity.y = Math.round(entity.y/TILE)*TILE;
+    }
+    // Clamp to map
+    if(!entity.isBuilding){
+        entity.x = Math.max(entity.size, Math.min(MAP_PX_W-entity.size, entity.x));
+        entity.y = Math.max(entity.size, Math.min(MAP_PX_H-entity.size, entity.y));
+    }
+    if(entity.distTo(tx, ty) < 3) { entity.targetX=null; entity.targetY=null; }
+}
+
+function isBlocked(px, py, self){
+    const tx=Math.floor(px/TILE), ty=Math.floor(py/TILE);
+    if(tx<0||tx>=MAP_W||ty<0||ty>=MAP_H) return true;
+    if(map[ty][tx]===TERRAIN.ROCK||map[ty][tx]===TERRAIN.FUNGUS) return true;
+    for(const e of entities){
+        if(!e.alive||!e.isBuilding||e===self) continue;
+        const bx=e.x-TILE*0.3, by=e.y-TILE*0.3, bw=e.w+TILE*0.6, bh=e.h+TILE*0.6;
+        if(px>bx&&px<bx+bw&&py>by&&py<by+bh) return true;
+    }
+    return false;
+}
+
+function findNearestEnemy(entity, team){
+    let best = null, bestDist = entity.range || entity.sight;
+    for(const e of entities){
+        if(!e.alive || e.team===team) continue;
+        if(e.isBuilding && e.constructing) continue;
+        const d = entity.distTo(e.cx, e.cy);
+        if(d < bestDist){ bestDist = d; best = e; }
+    }
+    return best;
+}
+
+function unitUpdate(unit, dt, gameRef){
+    if(unit.isHarvester && unit.team===TEAM.PLAYER){
+        harvestUpdate(unit, dt);
+        return;
+    }
+    if(unit.fireCooldown > 0) unit.fireCooldown -= dt;
+    if(unit.flashTimer > 0) unit.flashTimer -= dt;
+
+    // Auto-acquire target if idle
+    if(!unit.attackTarget || !unit.attackTarget.alive){
+        unit.attackTarget = findNearestEnemy(unit, unit.team);
+    }
+
+    // If has attack target, move toward it or fire
+    if(unit.attackTarget && unit.attackTarget.alive){
+        const d = unit.distTo(unit.attackTarget.cx, unit.attackTarget.cy);
+        if(d <= unit.range){
+            // Fire
+            if(unit.fireCooldown <= 0 && unit.damage > 0){
+                fireWeapon(unit, unit.attackTarget);
+                unit.fireCooldown = unit.fireRate;
+            }
+            unit.targetX = null; unit.targetY = null;
+        } else {
+            // Move toward
+            moveToward(unit, unit.attackTarget.cx, unit.attackTarget.cy, dt);
+        }
+    } else if(unit.targetX !== null && unit.targetY !== null){
+        moveToward(unit, unit.targetX, unit.targetY, dt);
+        // Reacquire while moving
+        if(!unit.attackTarget || !unit.attackTarget.alive){
+            const near = findNearestEnemy(unit, unit.team);
+            if(near && unit.distTo(near.cx, near.cy) < unit.sight){
+                unit.attackTarget = near;
+            }
+        }
+    }
+}
+
+function fireWeapon(attacker, target){
+    attacker.firing = true;
+    setTimeout(()=>{ if(attacker.alive) attacker.firing=false; }, 150);
+
+    if(attacker.aoe){
+        // AoE damage
+        for(const e of entities){
+            if(!e.alive||e.team===attacker.team) continue;
+            if(e.isBuilding&&e.constructing) continue;
+            const d = target.distTo(e.cx, e.cy);
+            if(d < attacker.aoeRadius){
+                damageEntity(e, attacker.damage * (e===target?1:0.6));
+            }
+        }
+        // AoE particles
+        for(let i=0; i<8; i++){
+            const ang = Math.random()*Math.PI*2;
+            const spd = 40+Math.random()*80;
+            particles.push({x:target.cx, y:target.cy, vx:Math.cos(ang)*spd, vy:Math.sin(ang)*spd, life:0.4, color:'#ff8844', size:3});
+        }
+    } else {
+        damageEntity(target, attacker.damage);
+        // Tracer particle
+        particles.push({x:attacker.cx, y:attacker.cy, vx:(target.cx-attacker.cx)*0.15, vy:(target.cy-attacker.cy)*0.15, life:0.2, color:attacker.team===TEAM.PLAYER?'#88ddff':'#ff8866', size:2, tx:target.cx, ty:target.cy});
+    }
+}
+
+function damageEntity(entity, amount){
+    entity.hp -= amount;
+    entity.flashTimer = 0.15;
+    if(entity.hp <= 0){
+        entity.hp = 0;
+        entity.alive = false;
+        // Death particles
+        for(let i=0; i<6; i++){
+            particles.push({x:entity.cx, y:entity.cy, vx:(Math.random()-0.5)*120, vy:(Math.random()-0.5)*120, life:0.5, color:entity.team===TEAM.PLAYER?'#88ccff':'#ff6644', size:3+Math.random()*3});
+        }
+        if(entity.isBuilding && entity.team===TEAM.PLAYER){
+            checkPlayerDefeat();
+        }
+        if(entity.isBuilding && entity.team===TEAM.ENEMY && entity.type==='commandCenter'){
+            checkPlayerVictory();
+        }
+    }
+}
+
+function checkPlayerDefeat(){
+    const hasBuildings = entities.some(e=>e.team===TEAM.PLAYER&&e.isBuilding&&e.alive);
+    if(!hasBuildings){
+        gameState = 'defeat';
+        screenShake = 0.8;
+    }
+}
+
+function checkPlayerVictory(){
+    const hasEnemyBuildings = entities.some(e=>e.team===TEAM.ENEMY&&e.isBuilding&&e.alive);
+    if(!hasEnemyBuildings){
+        gameState = 'victory';
+        screenShake = 0.6;
+    }
+}
+
+// ==================== TURRET AI ====================
+function turretUpdate(turret, dt){
+    if(turret.fireCooldown > 0) turret.fireCooldown -= dt;
+    const target = findNearestEnemy(turret, turret.team);
+    if(target && turret.distTo(target.cx, target.cy) <= turret.range){
+        if(turret.fireCooldown <= 0){
+            fireWeapon(turret, target);
+            turret.fireCooldown = turret.fireRate;
+        }
+    }
+}
+
+// ==================== ENEMY AI ====================
+function enemyAI(dt){
+    const diff = DIFF[difficulty];
+    aiCredits += diff.aiIncomeRate * 60 * dt;
+    aiTimer += dt;
+
+    const interval = diff.waveInterval;
+    if(aiTimer >= interval){
+        aiTimer = 0;
+        aiWaveSize += diff.waveGrowth;
+        const waveSize = Math.min(aiWaveSize, 10);
+
+        // Find player base
+        const playerBase = entities.find(e=>e.team===TEAM.PLAYER&&e.isBuilding&&e.alive&&e.type==='commandCenter');
+        if(!playerBase) return;
+
+        // Spawn wave
+        const hive = entities.find(e=>e.team===TEAM.ENEMY&&e.isBuilding&&e.alive);
+        if(!hive) return;
+
+        const availableUnits = ['swarmling','spitter'];
+        if(aiCredits >= 180 && waveSize >= 4) availableUnits.push('ravager');
+        if(aiCredits >= 400 && waveSize >= 7 && gameTime > 120) availableUnits.push('queen');
+
+        let spawned = 0;
+        for(let i=0; i<waveSize && spawned<waveSize; i++){
+            const unitType = availableUnits[Math.floor(Math.random()*availableUnits.length)];
+            const def = ENEMY_DEFS[unitType];
+            if(aiCredits >= def.cost){
+                aiCredits -= def.cost;
+                const sx = hive.x + hive.w/2 + (Math.random()-0.5)*TILE*4;
+                const sy = hive.y + hive.h + 10 + Math.random()*TILE*2;
+                const e = new Entity(unitType, TEAM.ENEMY, sx, sy, def);
+                e.isUnit = true;
+                // Target player base
+                e.targetX = playerBase.cx + (Math.random()-0.5)*TILE*6;
+                e.targetY = playerBase.cy + (Math.random()-0.5)*TILE*6;
+                entities.push(e);
+                spawned++;
+            }
+        }
+    }
+
+    // Update enemy units without targets
+    for(const e of entities){
+        if(!e.alive || e.team!==TEAM.ENEMY || !e.isUnit) continue;
+        if(e.attackTarget && e.attackTarget.alive) continue;
+        if(e.targetX !== null && e.targetY !== null) continue;
+        // Find something to attack
+        const target = findNearestEnemy(e, TEAM.ENEMY);
+        if(target){
+            e.attackTarget = target;
+        } else {
+            // Move toward player base
+            const pb = entities.find(en=>en.team===TEAM.PLAYER&&en.isBuilding&&en.alive);
+            if(pb){
+                e.targetX = pb.cx;
+                e.targetY = pb.cy;
+            }
+        }
+    }
+}
+
+// ==================== UPDATE ====================
+function update(dt){
+    if(gameState !== 'playing') return;
+    const cappedDt = Math.min(dt, 0.1);
+    gameTime += cappedDt;
+
+    // Update messages
+    if(messageTimer > 0) messageTimer -= cappedDt;
+
+    // Update screen shake
+    if(screenShake > 0) screenShake = Math.max(0, screenShake - cappedDt*2);
+
+    // Update entities
+    for(const e of entities){
+        if(!e.alive) continue;
+        if(e.isBuilding && e.constructing){
+            e.updateConstruction(cappedDt);
+        }
+        if(e.isBuilding && !e.constructing && e.produces && e.produces.length > 0){
+            e.updateProduction(cappedDt, gameRef);
+        }
+        if(e.isTurret && !e.constructing && e.alive){
+            turretUpdate(e, cappedDt);
+        }
+        if(e.isUnit && e.alive){
+            unitUpdate(e, cappedDt, gameRef);
+        }
+    }
+
+    // Update particles
+    for(let i=particles.length-1; i>=0; i--){
+        const p = particles[i];
+        p.life -= cappedDt;
+        if(p.life <= 0) { particles.splice(i,1); continue; }
+        p.x += p.vx * cappedDt;
+        p.y += p.vy * cappedDt;
+    }
+
+    // Enemy AI
+    enemyAI(cappedDt);
+
+    // Update fog of war
+    updateFogOfWar();
+
+    // Remove dead entities (delayed)
+    for(let i=entities.length-1; i>=0; i--){
+        if(!entities[i].alive && entities[i].flashTimer <= 0){
+            const e = entities[i];
+            if(selectedEntities.includes(e)){
+                selectedEntities.splice(selectedEntities.indexOf(e),1);
+            }
+            if(buildMenuTarget === e) buildMenuTarget = null;
+            entities.splice(i,1);
+        }
+    }
+
+    // Clean up selection
+    for(let i=selectedEntities.length-1; i>=0; i--){
+        if(!selectedEntities[i].alive) selectedEntities.splice(i,1);
+    }
+
+    // Camera edge scrolling
+    const edgeSize = 30;
+    const spd = 350;
+    cameraVel.x = 0; cameraVel.y = 0;
+    if(mouseScreen.x < edgeSize && mouseScreen.x >= 0) cameraVel.x = -spd;
+    if(mouseScreen.x > canvas.width - edgeSize) cameraVel.x = spd;
+    if(mouseScreen.y < edgeSize && mouseScreen.y >= 0) cameraVel.y = -spd;
+    if(mouseScreen.y > canvas.height - edgeSize - 40) cameraVel.y = spd;
+
+    camera.x += cameraVel.x * cappedDt;
+    camera.y += cameraVel.y * cappedDt;
+    clampCamera();
+
+    // Update hover
+    updateHover();
+}
+
+function clampCamera(){
+    camera.x = Math.max(0, Math.min(MAP_PX_W - canvas.width, camera.x));
+    camera.y = Math.max(0, Math.min(MAP_PX_H - canvas.height, camera.y));
+}
+
+function updateHover(){
+    hoveredEntity = null;
+    if(buildMenuTarget) return;
+    if(dragActive) return;
+    if(placementMode) return;
+    for(const e of entities){
+        if(!e.alive) continue;
+        if(isPointInEntity(mouseWorld.x, mouseWorld.y, e)){
+            hoveredEntity = e;
+            return;
+        }
+    }
+}
+
+function isPointInEntity(px, py, e){
+    if(e.isBuilding){
+        return px>=e.x && px<=e.x+e.w && py>=e.y && py<=e.y+e.h;
+    }
+    return Math.hypot(px-e.x, py-e.y) < e.size + 4;
+}
+
+function updateFogOfWar(){
+    // Reset visibility
+    for(let y=0; y<MAP_H; y++){
+        for(let x=0; x<MAP_W; x++){
+            if(fogOfWar[y][x]===FOW.VISIBLE) fogOfWar[y][x]=FOW.EXPLORED;
+        }
+    }
+    // Player sight
+    for(const e of entities){
+        if(!e.alive || e.team!==TEAM.PLAYER) continue;
+        const sightPx = e.sight || (TILE*5);
+        const stx = Math.floor((e.cx - sightPx)/TILE);
+        const sty = Math.floor((e.cy - sightPx)/TILE);
+        const etx = Math.floor((e.cx + sightPx)/TILE);
+        const ety = Math.floor((e.cy + sightPx)/TILE);
+        for(let ty=sty; ty<=ety; ty++){
+            for(let tx=stx; tx<=etx; tx++){
+                if(tx<0||tx>=MAP_W||ty<0||ty>=MAP_H) continue;
+                const wx = tx*TILE+TILE/2, wy = ty*TILE+TILE/2;
+                const d = Math.hypot(wx-e.cx, wy-e.cy);
+                if(d <= sightPx){
+                    fogOfWar[ty][tx] = FOW.VISIBLE;
+                }
+            }
+        }
+    }
+}
+
+// ==================== RENDERING ====================
+function render(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    if(gameState==='menu'){ renderMenu(); return; }
+
+    // Screen shake offset
+    let shakeX=0, shakeY=0;
+    if(screenShake>0){
+        shakeX=(Math.random()-0.5)*screenShake*20;
+        shakeY=(Math.random()-0.5)*screenShake*20;
+    }
+
+    ctx.save();
+    ctx.translate(-camera.x + shakeX, -camera.y + shakeY);
+
+    // Draw terrain
+    const startTX = Math.max(0, Math.floor(camera.x/TILE)-1);
+    const startTY = Math.max(0, Math.floor(camera.y/TILE)-1);
+    const endTX = Math.min(MAP_W, Math.floor((camera.x+canvas.width)/TILE)+2);
+    const endTY = Math.min(MAP_H, Math.floor((camera.y+canvas.height)/TILE)+2);
+
+    for(let ty=startTY; ty<endTY; ty++){
+        for(let tx=startTX; tx<endTX; tx++){
+            const wx=tx*TILE, wy=ty*TILE;
+            const fow = fogOfWar[ty][tx];
+
+            if(fow===FOW.UNEXPLORED){
+                ctx.fillStyle = '#0a0510';
+                ctx.fillRect(wx,wy,TILE,TILE);
+                continue;
+            }
+
+            // Draw terrain
+            const terrainType = map[ty][tx];
+            const shade = ((tx+ty)%2===0)?COL.ground1:COL.ground2;
+            ctx.fillStyle = fow===FOW.VISIBLE?shade:'#1a1025';
+            ctx.fillRect(wx,wy,TILE,TILE);
+
+            if(fow===FOW.VISIBLE){
+                // Small ground detail
+                if((tx*7+ty*13)%5===0){
+                    ctx.fillStyle = COL.ground3;
+                    ctx.fillRect(wx+TILE*0.3,wy+TILE*0.6,TILE*0.4,TILE*0.2);
+                }
+
+                // Draw terrain features
+                if(terrainType===TERRAIN.CRYSTAL){
+                    drawCrystal(wx+TILE/2, wy+TILE/2);
+                } else if(terrainType===TERRAIN.ROCK){
+                    drawRock(wx, wy);
+                } else if(terrainType===TERRAIN.FUNGUS){
+                    drawFungus(wx, wy);
+                } else if(terrainType===TERRAIN.HIVE_GROUND){
+                    ctx.fillStyle = COL.hiveGround;
+                    ctx.fillRect(wx,wy,TILE,TILE);
+                    if((tx+ty)%3===0){
+                        ctx.fillStyle = '#2a1015';
+                        ctx.fillRect(wx+TILE*0.2,wy+TILE*0.3,TILE*0.6,TILE*0.4);
+                    }
+                }
+            }
+
+            // Fog overlay
+            if(fow===FOW.EXPLORED){
+                ctx.fillStyle = COL.fogMid;
+                ctx.fillRect(wx,wy,TILE,TILE);
+            }
+        }
+    }
+
+    // Draw grid lines (subtle)
+    ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+    ctx.lineWidth = 1;
+    for(let tx=startTX; tx<=endTX; tx++){
+        ctx.beginPath();
+        ctx.moveTo(tx*TILE, startTY*TILE);
+        ctx.lineTo(tx*TILE, endTY*TILE);
+        ctx.stroke();
+    }
+    for(let ty=startTY; ty<=endTY; ty++){
+        ctx.beginPath();
+        ctx.moveTo(startTX*TILE, ty*TILE);
+        ctx.lineTo(endTX*TILE, ty*TILE);
+        ctx.stroke();
+    }
+
+    // Draw entities
+    const sorted = [...entities].filter(e=>e.alive).sort((a,b)=>{
+        const aIsB = a.isBuilding?1:0;
+        const bIsB = b.isBuilding?1:0;
+        return aIsB - bIsB || a.y - b.y;
+    });
+
+    for(const e of sorted){
+        if(!isOnScreen(e)) continue;
+        // Check if visible
+        const midTX = Math.floor(e.cx/TILE);
+        const midTY = Math.floor(e.cy/TILE);
+        if(midTX>=0&&midTX<MAP_W&&midTY>=0&&midTY<MAP_H){
+            if(fogOfWar[midTY][midTX]===FOW.UNEXPLORED) continue;
+        }
+
+        if(e.isBuilding) drawBuilding(e);
+        else drawUnit(e);
+    }
+
+    // Draw particles
+    for(const p of particles){
+        const alpha = p.life / 0.5;
+        ctx.fillStyle = p.color.replace(')', `,${alpha})`).replace('rgb','rgba');
+        if(p.color.startsWith('#')){
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = p.color;
+        }
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+        ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // Draw selection rectangle
+    if(dragActive && dragStart && dragWorldStart){
+        const rx = Math.min(dragWorldStart.x, mouseWorld.x);
+        const ry = Math.min(dragWorldStart.y, mouseWorld.y);
+        const rw = Math.abs(mouseWorld.x - dragWorldStart.x);
+        const rh = Math.abs(mouseWorld.y - dragWorldStart.y);
+        ctx.strokeStyle = '#6dcff6';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4,3]);
+        ctx.strokeRect(rx, ry, rw, rh);
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(109,207,246,0.12)';
+        ctx.fillRect(rx, ry, rw, rh);
+    }
+
+    // Placement ghost
+    if(placementMode && placementGhost){
+        const g = placementGhost;
+        ctx.fillStyle = placementValid?'rgba(100,255,100,0.3)':'rgba(255,80,80,0.3)';
+        ctx.fillRect(g.x, g.y, g.w, g.h);
+        ctx.strokeStyle = placementValid?'#66ff66':'#ff5555';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5,3]);
+        ctx.strokeRect(g.x, g.y, g.w, g.h);
+        ctx.setLineDash([]);
+
+        // Show building name and cost during placement
+        const def = BUILDING_DEFS[placementMode];
+        if(def){
+            ctx.fillStyle = 'rgba(0,0,0,0.75)';
+            const labelW = ctx.measureText(def.name+'  '+def.cost).width + 16;
+            ctx.fillRect(g.x+g.w/2-labelW/2, g.y-22, labelW, 18);
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 11px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(def.name+'  💎'+def.cost, g.x+g.w/2, g.y-8);
+        }
+    }
+
+    ctx.restore();
+
+    // ===== UI (screen space) =====
+    renderUI();
+
+    if(gameState==='victory' || gameState==='defeat'){
+        renderGameOver();
+    }
+}
+
+function drawCrystal(cx, cy){
+    // Glow
+    const grad = ctx.createRadialGradient(cx,cy,2,cx,cy,TILE*0.8);
+    grad.addColorStop(0,COL.crystalGlow);
+    grad.addColorStop(0.4,COL.crystal2);
+    grad.addColorStop(1,'transparent');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(cx,cy,TILE*0.8,0,Math.PI*2);
+    ctx.fill();
+
+    // Crystal shards
+    ctx.fillStyle = COL.crystal1;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy-TILE*0.5);
+    ctx.lineTo(cx+TILE*0.2, cy-TILE*0.1);
+    ctx.lineTo(cx+TILE*0.4, cy+TILE*0.35);
+    ctx.lineTo(cx-TILE*0.1, cy+TILE*0.15);
+    ctx.lineTo(cx-TILE*0.35, cy-TILE*0.05);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = COL.crystal2;
+    ctx.beginPath();
+    ctx.moveTo(cx-TILE*0.15, cy-TILE*0.3);
+    ctx.lineTo(cx+TILE*0.25, cy+TILE*0.1);
+    ctx.lineTo(cx-TILE*0.2, cy+TILE*0.3);
+    ctx.closePath();
+    ctx.fill();
+    // Sparkle
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(cx-TILE*0.08, cy-TILE*0.2, 2, 0, Math.PI*2);
+    ctx.fill();
+}
+
+function drawRock(wx, wy){
+    ctx.fillStyle = COL.rock1;
+    ctx.beginPath();
+    ctx.moveTo(wx+TILE*0.1, wy+TILE*0.8);
+    ctx.lineTo(wx+TILE*0.05, wy+TILE*0.3);
+    ctx.lineTo(wx+TILE*0.3, wy+TILE*0.1);
+    ctx.lineTo(wx+TILE*0.7, wy+TILE*0.05);
+    ctx.lineTo(wx+TILE*0.9, wy+TILE*0.4);
+    ctx.lineTo(wx+TILE*0.85, wy+TILE*0.75);
+    ctx.lineTo(wx+TILE*0.5, wy+TILE*0.9);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = COL.rock2;
+    ctx.beginPath();
+    ctx.moveTo(wx+TILE*0.3, wy+TILE*0.1);
+    ctx.lineTo(wx+TILE*0.55, wy+TILE*0.2);
+    ctx.lineTo(wx+TILE*0.5, wy+TILE*0.55);
+    ctx.lineTo(wx+TILE*0.2, wy+TILE*0.4);
+    ctx.closePath();
+    ctx.fill();
+}
+
+function drawFungus(wx, wy){
+    // Stalk
+    ctx.fillStyle = COL.fungus1;
+    ctx.fillRect(wx+TILE*0.4, wy+TILE*0.3, TILE*0.2, TILE*0.6);
+    // Cap
+    ctx.fillStyle = COL.fungus2;
+    ctx.beginPath();
+    ctx.ellipse(wx+TILE*0.5, wy+TILE*0.25, TILE*0.35, TILE*0.2, 0, Math.PI, 0);
+    ctx.fill();
+    // Bioluminescent spots
+    ctx.fillStyle = '#d0a0ff';
+    ctx.beginPath();
+    ctx.arc(wx+TILE*0.35, wy+TILE*0.2, 2.5, 0, Math.PI*2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(wx+TILE*0.6, wy+TILE*0.18, 2, 0, Math.PI*2);
+    ctx.fill();
+}
+
+function drawBuilding(e){
+    const alpha = e.constructing ? 0.5 + 0.5*e.constructionProgress : 1;
+    ctx.globalAlpha = alpha;
+
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.fillRect(e.x+3, e.y+3, e.w, e.h);
+
+    // Main body
+    const grad = ctx.createLinearGradient(e.x, e.y, e.x, e.y+e.h);
+    grad.addColorStop(0, e.accent);
+    grad.addColorStop(1, e.color);
+    ctx.fillStyle = grad;
+    ctx.fillRect(e.x, e.y, e.w, e.h);
+
+    // Border
+    ctx.strokeStyle = e.team===TEAM.PLAYER?'#88ccff':'#cc6666';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(e.x, e.y, e.w, e.h);
+
+    // Team indicator
+    ctx.fillStyle = e.team===TEAM.PLAYER?COL.playerAccent:COL.enemyAccent;
+    ctx.fillRect(e.x+2, e.y+2, e.w-4, 4);
+
+    // Construction overlay
+    if(e.constructing){
+        ctx.fillStyle = COL.constructionOverlay;
+        ctx.fillRect(e.x, e.y, e.w, e.h);
+        // Progress bar
+        const barY = e.y + e.h/2 - 4;
+        ctx.fillStyle = COL.healthBarBg;
+        ctx.fillRect(e.x+4, barY, e.w-8, 8);
+        ctx.fillStyle = '#ffcc44';
+        ctx.fillRect(e.x+4, barY, (e.w-8)*e.constructionProgress, 8);
+    }
+
+    // Building icon (simple shape)
+    if(!e.constructing || e.constructionProgress>0.5){
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        const icx = e.x+e.w/2, icy = e.y+e.h/2;
+        if(e.type==='commandCenter'){ ctx.fillRect(icx-8,icy-8,16,16); ctx.fillStyle='rgba(255,255,255,0.6)'; ctx.fillRect(icx-3,icy-3,6,6); }
+        else if(e.type==='refinery'){ ctx.beginPath(); ctx.arc(icx,icy,8,0,Math.PI*2); ctx.fill(); }
+        else if(e.type==='barracks'){ ctx.fillRect(icx-10,icy-6,20,12); ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.fillRect(icx-2,icy-4,4,8); }
+        else if(e.type==='vehicleDepot'){ ctx.fillRect(icx-10,icy-4,20,8); ctx.beginPath(); ctx.arc(icx,icy,5,0,Math.PI*2); ctx.fill(); }
+        else if(e.type==='powerPlant'){ ctx.beginPath(); ctx.moveTo(icx,icy-8); ctx.lineTo(icx+8,icy+6); ctx.lineTo(icx-8,icy+6); ctx.closePath(); ctx.fill(); }
+        else if(e.type==='turret'){ ctx.beginPath(); ctx.arc(icx,icy,7,0,Math.PI*2); ctx.fill(); ctx.fillStyle='rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.arc(icx,icy,3,0,Math.PI*2); ctx.fill(); }
+    }
+
+    // Health bar
+    if(!e.constructing && e.hp < e.maxHp){
+        const barW = e.w-4, barH=5, barX=e.x+2, barY=e.y-9;
+        ctx.fillStyle = COL.healthBarBg;
+        ctx.fillRect(barX, barY, barW, barH);
+        ctx.fillStyle = e.hp/e.maxHp>0.5?COL.healthBar:e.hp/e.maxHp>0.25?'#ccaa33':COL.healthBarDmg;
+        ctx.fillRect(barX, barY, barW*(e.hp/e.maxHp), barH);
+    }
+
+    // Selection highlight
+    if(e.selected){
+        ctx.strokeStyle = COL.playerSelect;
+        ctx.lineWidth = 3;
+        ctx.setLineDash([6,2]);
+        ctx.strokeRect(e.x-3, e.y-3, e.w+6, e.h+6);
+        ctx.setLineDash([]);
+    }
+
+    // Production indicator
+    if(e.productionQueue.length > 0 && !e.constructing){
+        const py = e.y + e.h + 2;
+        ctx.fillStyle = COL.healthBarBg;
+        ctx.fillRect(e.x, py, e.w, 4);
+        ctx.fillStyle = '#ffcc44';
+        ctx.fillRect(e.x, py, e.w*e.productionProgress, 4);
+        // Queue count
+        ctx.fillStyle = '#fff';
+        ctx.font = '9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(e.productionQueue.length, e.x+e.w/2, py-2);
+    }
+
+    ctx.globalAlpha = 1;
+}
+
+function drawUnit(e){
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(e.x+2, e.y+2, e.size*0.8, e.size*0.4, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // Body
+    if(e.isVehicle || e.isBoss){
+        // Rectangular body
+        ctx.fillStyle = e.color;
+        ctx.fillRect(e.x-e.size*0.7, e.y-e.size*0.5, e.size*1.4, e.size);
+        ctx.strokeStyle = e.team===TEAM.PLAYER?'#88ccff':'#cc6666';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(e.x-e.size*0.7, e.y-e.size*0.5, e.size*1.4, e.size);
+        // Treads/wheels
+        ctx.fillStyle = '#333';
+        ctx.fillRect(e.x-e.size*0.8, e.y-e.size*0.6, e.size*0.3, e.size*0.3);
+        ctx.fillRect(e.x+e.size*0.5, e.y-e.size*0.6, e.size*0.3, e.size*0.3);
+        ctx.fillRect(e.x-e.size*0.8, e.y+e.size*0.35, e.size*0.3, e.size*0.3);
+        ctx.fillRect(e.x+e.size*0.5, e.y+e.size*0.35, e.size*0.3, e.size*0.3);
+        // Turret on tank/mech
+        if(e.damage>20){
+            ctx.fillStyle = e.accent;
+            ctx.beginPath();
+            ctx.arc(e.x, e.y-e.size*0.1, e.size*0.4, 0, Math.PI*2);
+            ctx.fill();
+        }
+    } else if(e.isHarvester){
+        ctx.fillStyle = e.color;
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, e.size, 0, Math.PI*2);
+        ctx.fill();
+        ctx.strokeStyle = '#ddaa30';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // Harvester icon
+        ctx.fillStyle = '#fff';
+        ctx.font = `${e.size}px sans-serif`;
+        ctx.textAlign='center';
+        ctx.fillText('⛏', e.x, e.y+e.size*0.3);
+    } else {
+        // Infantry - circle
+        ctx.fillStyle = e.color;
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, e.size, 0, Math.PI*2);
+        ctx.fill();
+        ctx.strokeStyle = e.team===TEAM.PLAYER?'#88ddff':'#dd6666';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // Inner dot
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.beginPath();
+        ctx.arc(e.x, e.y-e.size*0.2, e.size*0.35, 0, Math.PI*2);
+        ctx.fill();
+    }
+
+    // Firing flash
+    if(e.firing){
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(e.x, e.y-e.size, e.size*0.4, 0, Math.PI*2);
+        ctx.fill();
+    }
+
+    // Damage flash
+    if(e.flashTimer > 0){
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, e.size+2, 0, Math.PI*2);
+        ctx.fill();
+    }
+
+    // Health bar
+    if(e.hp < e.maxHp){
+        const barW = e.size*2, barH=4;
+        const barX = e.x - barW/2, barY = e.y - e.size - 8;
+        ctx.fillStyle = COL.healthBarBg;
+        ctx.fillRect(barX, barY, barW, barH);
+        ctx.fillStyle = e.hp/e.maxHp>0.5?COL.healthBar:e.hp/e.maxHp>0.25?'#ccaa33':COL.healthBarDmg;
+        ctx.fillRect(barX, barY, barW*(e.hp/e.maxHp), barH);
+    }
+
+    // Selection ring
+    if(e.selected){
+        ctx.strokeStyle = COL.playerSelect;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4,2]);
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, e.size+5, 0, Math.PI*2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    // Enemy hover highlight
+    if(e===hoveredEntity && e.team===TEAM.ENEMY){
+        ctx.strokeStyle = COL.enemySelect;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3,3]);
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, e.size+3, 0, Math.PI*2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+}
+
+function isOnScreen(e){
+    const margin = TILE*3;
+    if(e.isBuilding) return e.x+e.w > camera.x-margin && e.x < camera.x+canvas.width+margin && e.y+e.h > camera.y-margin && e.y < camera.y+canvas.height+margin;
+    return e.x > camera.x-margin && e.x < camera.x+canvas.width+margin && e.y > camera.y-margin && e.y < camera.y+canvas.height+margin;
+}
+
+// ==================== UI RENDERING ====================
+function renderUI(){
+    // Top bar
+    const barH = 40;
+    ctx.fillStyle = COL.uiBg;
+    ctx.fillRect(0,0,canvas.width,barH);
+    ctx.strokeStyle = COL.uiBorder;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0,barH);
+    ctx.lineTo(canvas.width,barH);
+    ctx.stroke();
+
+    // Credits
+    ctx.fillStyle = COL.uiGold;
+    ctx.font = 'bold 16px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(`💎 ${Math.floor(credits)}`, 12, 28);
+
+    // Unit count
+    const playerUnits = entities.filter(e=>e.team===TEAM.PLAYER&&e.isUnit&&e.alive).length;
+    const playerBuildings = entities.filter(e=>e.team===TEAM.PLAYER&&e.isBuilding&&e.alive).length;
+    ctx.fillStyle = COL.uiText;
+    ctx.fillText(`Units: ${playerUnits}  Buildings: ${playerBuildings}`, 180, 28);
+
+    // Difficulty & time
+    const mins = Math.floor(gameTime/60), secs = Math.floor(gameTime%60);
+    ctx.fillStyle = '#888';
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${difficulty.toUpperCase()} | ${mins}:${secs.toString().padStart(2,'0')}`, canvas.width-12, 20);
+
+    // Enemy count indicator
+    const enemyUnits = entities.filter(e=>e.team===TEAM.ENEMY&&e.isUnit&&e.alive).length;
+    ctx.fillText(`Enemies: ${enemyUnits}`, canvas.width-12, 36);
+
+    // Selected entity count
+    if(selectedEntities.length > 0){
+        ctx.fillStyle = COL.playerSelect;
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${selectedEntities.length} selected`, 12, 36);
+    }
+
+    // Message
+    if(messageTimer > 0){
+        const alpha = Math.min(1, messageTimer);
+        ctx.fillStyle = `rgba(255,220,100,${alpha})`;
+        ctx.font = 'bold 15px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(messageText, canvas.width/2, 28);
+    }
+
+    // Minimap
+    const mmW = 140, mmH = 100;
+    const mmX = canvas.width - mmW - 10, mmY = canvas.height - mmH - 10;
+    ctx.fillStyle = COL.minimapFog;
+    ctx.fillRect(mmX, mmY, mmW, mmH);
+    ctx.strokeStyle = COL.uiBorder;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(mmX, mmY, mmW, mmH);
+
+    const sx = mmW/MAP_W, sy = mmH/MAP_H;
+    for(let ty=0; ty<MAP_H; ty++){
+        for(let tx=0; tx<MAP_W; tx++){
+            const fow = fogOfWar[ty][tx];
+            if(fow===FOW.UNEXPLORED) continue;
+            const px = mmX+tx*sx, py = mmY+ty*sy;
+            if(fow===FOW.EXPLORED) ctx.fillStyle = COL.minimapExplored;
+            else ctx.fillStyle = COL.minimapVisible;
+            ctx.fillRect(px, py, Math.ceil(sx), Math.ceil(sy));
+            if(fow===FOW.VISIBLE && map[ty][tx]===TERRAIN.CRYSTAL){
+                ctx.fillStyle = COL.minimapCrystal;
+                ctx.fillRect(px, py, Math.ceil(sx), Math.ceil(sy));
+            }
+        }
+    }
+
+    // Entities on minimap
+    for(const e of entities){
+        if(!e.alive) continue;
+        const mx = mmX + (e.cx/MAP_PX_W)*mmW;
+        const my = mmY + (e.cy/MAP_PX_H)*mmH;
+        const midTX=Math.floor(e.cx/TILE), midTY=Math.floor(e.cy/TILE);
+        if(midTX>=0&&midTX<MAP_W&&midTY>=0&&midTY<MAP_H&&fogOfWar[midTY][midTX]!==FOW.VISIBLE) continue;
+        ctx.fillStyle = e.team===TEAM.PLAYER?COL.minimapPlayer:COL.minimapEnemy;
+        const sz = e.isBuilding?3:2;
+        ctx.fillRect(mx-sz/2, my-sz/2, sz, sz);
+    }
+
+    // Camera rect on minimap
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1;
+    const crx = mmX + (camera.x/MAP_PX_W)*mmW;
+    const cry = mmY + (camera.y/MAP_PX_H)*mmH;
+    const crw = (canvas.width/MAP_PX_W)*mmW;
+    const crh = ((canvas.height-barH)/MAP_PX_H)*mmH;
+    ctx.strokeRect(crx, cry, crw, crh);
+
+    // Production panel
+    if(buildMenuTarget && buildMenuTarget.alive && !buildMenuTarget.constructing && buildMenuTarget.team===TEAM.PLAYER){
+        renderProductionPanel(buildMenuTarget);
+    }
+
+    // Placement hint
+    if(placementMode){
+        ctx.fillStyle = 'rgba(255,200,50,0.9)';
+        ctx.font = 'bold 13px sans-serif';
+        ctx.textAlign = 'center';
+        const def = BUILDING_DEFS[placementMode];
+        ctx.fillText(`Placing ${def?def.name:placementMode} — Click to place, Right-click to cancel`, canvas.width/2, canvas.height-20);
+    }
+
+    // Hover tooltip
+    if(hoveredEntity && !dragActive && !placementMode){
+        const e = hoveredEntity;
+        const tipX = Math.min(mouseScreen.x+15, canvas.width-160);
+        const tipY = Math.max(mouseScreen.y-40, 50);
+        ctx.fillStyle = 'rgba(0,0,0,0.85)';
+        ctx.fillRect(tipX, tipY, 150, 35);
+        ctx.strokeStyle = COL.uiBorder;
+        ctx.strokeRect(tipX, tipY, 150, 35);
+        ctx.fillStyle = '#fff';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'left';
+        const name = e.isBuilding?(BUILDING_DEFS[e.type]?.name||e.type):(UNIT_DEFS[e.type]?.name||ENEMY_DEFS[e.type]?.name||e.type);
+        ctx.fillText(name, tipX+5, tipY+14);
+        ctx.fillText(`HP: ${Math.floor(e.hp)}/${e.maxHp}`, tipX+5, tipY+28);
+    }
+
+    // Hotkey hints at bottom left
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('1-9: Groups | Ctrl+1-9: Set Group | ESC: Deselect | Arrows: Scroll', 10, canvas.height-6);
+}
+
+function renderProductionPanel(target){
+    const panelH = 80;
+    const panelY = canvas.height - panelH;
+    ctx.fillStyle = COL.uiBg;
+    ctx.fillRect(0, panelY, canvas.width, panelH);
+    ctx.strokeStyle = COL.uiBorder;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, panelY);
+    ctx.lineTo(canvas.width, panelY);
+    ctx.stroke();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 13px sans-serif';
+    ctx.textAlign = 'left';
+    const bldName = BUILDING_DEFS[target.type]?.name || target.type;
+    ctx.fillText(`${bldName} — Production`, 10, panelY+18);
+
+    if(target.produces && target.produces.length > 0){
+        const btnW = 90, btnH = 50, gap = 8;
+        const maxPerRow = Math.floor((canvas.width - 20) / (btnW + gap));
+        const startX = 10, startY = panelY+26;
+
+        for(let i=0; i<target.produces.length; i++){
+            const unitType = target.produces[i];
+            // Look up in either UNIT_DEFS or BUILDING_DEFS
+            const def = UNIT_DEFS[unitType] || BUILDING_DEFS[unitType];
+            if(!def) continue;
+            const col = i % maxPerRow;
+            const row = Math.floor(i / maxPerRow);
+            const bx = startX + col*(btnW+gap);
+            const by = startY + row*(btnH+4);
+
+            // Check if this is a building that needs tech
+            let canBuild = credits >= def.cost;
+            let techBlocked = false;
+            if(BUILDING_DEFS[unitType] && def.techRequired){
+                if(def.techRequired==='powerPlant' && !hasPowerPlant()){
+                    canBuild = false;
+                    techBlocked = true;
+                }
+            }
+
+            const isHover = mouseScreen.x>=bx && mouseScreen.x<=bx+btnW && mouseScreen.y>=by && mouseScreen.y<=by+btnH;
+            ctx.fillStyle = isHover&&canBuild?COL.uiBtnHover:COL.uiBtnBg;
+            ctx.fillRect(bx, by, btnW, btnH);
+            ctx.strokeStyle = canBuild?COL.uiBorder:'#333';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(bx, by, btnW, btnH);
+
+            // Show "Building" or "Unit" label
+            const isBld = !!BUILDING_DEFS[unitType];
+            ctx.fillStyle = canBuild?'#fff':'#666';
+            ctx.font = 'bold 11px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(def.name, bx+btnW/2, by+16);
+            ctx.fillStyle = canBuild?COL.uiGold:'#555';
+            ctx.font = '10px sans-serif';
+            ctx.fillText(`💎${def.cost} ${isBld?'(Build)':'(Train)'}`, bx+btnW/2, by+32);
+            if(techBlocked){
+                ctx.fillStyle = '#ff6644';
+                ctx.fillText('Need Power', bx+btnW/2, by+44);
+            } else if(!isBld && target.productionQueue.length >= 5){
+                ctx.fillStyle = '#ffaa44';
+                ctx.fillText('Queue full', bx+btnW/2, by+44);
+            }
+        }
+    } else {
+        ctx.fillStyle = '#888';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('This building has no production options.', 10, panelY+45);
+    }
+
+    // Close button
+    const closeX = canvas.width - 60, closeY = panelY+5;
+    const closeHover = mouseScreen.x>=closeX && mouseScreen.x<=closeX+50 && mouseScreen.y>=closeY && mouseScreen.y<=closeY+22;
+    ctx.fillStyle = closeHover?'#664444':'#553333';
+    ctx.fillRect(closeX, closeY, 50, 22);
+    ctx.fillStyle = '#fff';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('✕ Close', closeX+25, closeY+15);
+}
+
+function renderMenu(){
+    // Background
+    const grad = ctx.createRadialGradient(canvas.width/2, canvas.height/2, canvas.width*0.2, canvas.width/2, canvas.height/2, canvas.width*0.8);
+    grad.addColorStop(0,'#1a1030');
+    grad.addColorStop(1,'#050210');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // Stars
+    for(let i=0; i<80; i++){
+        const sx = (i*173+37)%canvas.width, sy = (i*241+53)%canvas.height;
+        ctx.fillStyle = `rgba(255,255,255,${0.3+Math.sin(Date.now()/2000+i)*0.3})`;
+        ctx.fillRect(sx,sy,1.5,1.5);
+    }
+
+    // Title
+    ctx.fillStyle = '#d0b0ff';
+    ctx.font = `bold ${Math.min(48,canvas.width*0.06)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText('ALIEN EXODUS', canvas.width/2, canvas.height*0.22);
+
+    ctx.fillStyle = '#b090e0';
+    ctx.font = `${Math.min(18,canvas.width*0.022)}px sans-serif`;
+    ctx.fillText('RTS — Base Building on a Hostile World', canvas.width/2, canvas.height*0.28);
+
+    // Story box
+    ctx.fillStyle = 'rgba(20,10,40,0.7)';
+    const storyY = canvas.height*0.33;
+    ctx.fillRect(canvas.width*0.15, storyY, canvas.width*0.7, 50);
+    ctx.fillStyle = '#c0a0e0';
+    ctx.font = `${Math.min(13,canvas.width*0.016)}px sans-serif`;
+    ctx.fillText('Your expedition crash-landed on a purple-skied alien world.', canvas.width/2, storyY+18);
+    ctx.fillText('Build a base, harvest mana crystals, and destroy the insectoid hive!', canvas.width/2, storyY+38);
+
+    // Difficulty buttons
+    const btnW = Math.min(180, canvas.width*0.22), btnH = 50;
+    const btnStartX = canvas.width/2 - btnW*1.6;
+    const btnY = canvas.height*0.5;
+    const diffs = ['easy','medium','hard'];
+    const diffLabels = ['🟢 Easy','🟡 Medium','🔴 Hard'];
+    const diffDescs = ['AI is slow, plenty of time','Balanced challenge','AI expands fast, aggressive'];
+
+    for(let i=0; i<3; i++){
+        const bx = btnStartX + i*(btnW+15);
+        const by = btnY;
+        const isHover = mouseScreen.x>=bx && mouseScreen.x<=bx+btnW && mouseScreen.y>=by && mouseScreen.y<=by+btnH;
+
+        ctx.fillStyle = isHover?COL.uiBtnHover:COL.uiBtnBg;
+        ctx.fillRect(bx, by, btnW, btnH);
+        ctx.strokeStyle = diffs[i]==='easy'?'#44aa44':diffs[i]==='medium'?'#ccaa44':'#cc4444';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(bx, by, btnW, btnH);
+
+        ctx.fillStyle = '#fff';
+        ctx.font = `bold ${Math.min(16,canvas.width*0.02)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText(diffLabels[i], bx+btnW/2, by+20);
+        ctx.fillStyle = '#aaa';
+        ctx.font = `${Math.min(11,canvas.width*0.013)}px sans-serif`;
+        ctx.fillText(diffDescs[i], bx+btnW/2, by+40);
+    }
+
+    // Controls
+    const ctrlY = canvas.height*0.68;
+    ctx.fillStyle = '#888';
+    ctx.font = `${Math.min(12,canvas.width*0.015)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText('🖱 Left-click: Select | 🖱 Right-click: Move/Attack | 🔢 1-9: Control Groups | ⌨ Arrow Keys: Scroll', canvas.width/2, ctrlY);
+    ctx.fillText('Click Command Center → build structures | Click Barracks/Depot → train units', canvas.width/2, ctrlY+22);
+}
+
+function renderGameOver(){
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    const isVictory = gameState==='victory';
+    ctx.fillStyle = isVictory?'#ffdd44':'#ff4444';
+    ctx.font = `bold ${Math.min(52,canvas.width*0.07)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText(isVictory?'VICTORY!':'DEFEAT', canvas.width/2, canvas.height*0.35);
+
+    ctx.fillStyle = '#ddd';
+    ctx.font = `${Math.min(18,canvas.width*0.025)}px sans-serif`;
+    ctx.fillText(isVictory?'The alien hive has been destroyed!':'Your base has been overrun...', canvas.width/2, canvas.height*0.43);
+
+    ctx.fillText(`Time: ${Math.floor(gameTime/60)}:${Math.floor(gameTime%60).toString().padStart(2,'0')} | Difficulty: ${difficulty.toUpperCase()}`, canvas.width/2, canvas.height*0.5);
+
+    // Restart button
+    const rbx = canvas.width/2-80, rby = canvas.height*0.56, rbw=160, rbh=44;
+    const rbHover = mouseScreen.x>=rbx && mouseScreen.x<=rbx+rbw && mouseScreen.y>=rby && mouseScreen.y<=rby+rbh;
+    ctx.fillStyle = rbHover?'#5a3d8a':'#3d2b5c';
+    ctx.fillRect(rbx, rby, rbw, rbh);
+    ctx.strokeStyle = '#8a6acc';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(rbx, rby, rbw, rbh);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.fillText('🔄 PLAY AGAIN', canvas.width/2, rby+30);
+
+    // Menu button
+    const mbx = canvas.width/2-80, mby = rby+55, mbw=160, mbh=36;
+    const mbHover = mouseScreen.x>=mbx && mouseScreen.x<=mbx+mbw && mouseScreen.y>=mby && mouseScreen.y<=mby+mbh;
+    ctx.fillStyle = mbHover?'#3d3040':'#2a1d30';
+    ctx.fillRect(mbx, mby, mbw, mbh);
+    ctx.strokeStyle = '#5a4a6a';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(mbx, mby, mbw, mbh);
+    ctx.fillStyle = '#ccc';
+    ctx.font = '14px sans-serif';
+    ctx.fillText('🏠 Main Menu', canvas.width/2, mby+25);
+}
+
+// ==================== INPUT HANDLING ====================
+function screenToWorld(sx, sy){
+    return { x: sx + camera.x, y: sy + camera.y };
+}
+
+function getBuildMenuClick(){
+    if(!buildMenuTarget || !buildMenuTarget.alive || buildMenuTarget.constructing || buildMenuTarget.team!==TEAM.PLAYER) return null;
+    const panelH = 80;
+    const panelY = canvas.height - panelH;
+    if(mouseScreen.y < panelY) return null;
+
+    // Close button
+    if(mouseScreen.x >= canvas.width-60 && mouseScreen.x <= canvas.width-10 && mouseScreen.y >= panelY+5 && mouseScreen.y <= panelY+27){
+        return 'close';
+    }
+
+    const target = buildMenuTarget;
+    if(!target.produces || target.produces.length===0) return null;
+
+    const btnW = 90, btnH = 50, gap = 8;
+    const maxPerRow = Math.floor((canvas.width - 20) / (btnW + gap));
+    const startX = 10, startY = panelY+26;
+
+    for(let i=0; i<target.produces.length; i++){
+        const col = i % maxPerRow;
+        const row = Math.floor(i / maxPerRow);
+        const bx = startX + col*(btnW+gap);
+        const by = startY + row*(btnH+4);
+        if(mouseScreen.x>=bx && mouseScreen.x<=bx+btnW && mouseScreen.y>=by && mouseScreen.y<=by+btnH){
+            return target.produces[i];
+        }
+    }
+    return null;
+}
+
+function handleMenuClick(){
+    const btnW = Math.min(180, canvas.width*0.22), btnH = 50;
+    const btnStartX = canvas.width/2 - btnW*1.6;
+    const btnY = canvas.height*0.5;
+    const diffs = ['easy','medium','hard'];
+    for(let i=0; i<3; i++){
+        const bx = btnStartX + i*(btnW+15);
+        if(mouseScreen.x>=bx && mouseScreen.x<=bx+btnW && mouseScreen.y>=btnY && mouseScreen.y<=btnY+btnH){
+            return diffs[i];
+        }
+    }
+    return null;
+}
+
+function handleGameOverClick(){
+    const rbx = canvas.width/2-80, rby = canvas.height*0.56, rbw=160, rbh=44;
+    if(mouseScreen.x>=rbx && mouseScreen.x<=rbx+rbw && mouseScreen.y>=rby && mouseScreen.y<=rby+rbh){
+        return 'restart';
+    }
+    const mbx = canvas.width/2-80, mby = rby+55, mbw=160, mbh=36;
+    if(mouseScreen.x>=mbx && mouseScreen.x<=mbx+mbw && mouseScreen.y>=mby && mouseScreen.y<=mby+mbh){
+        return 'menu';
+    }
+    return null;
+}
+
+canvas.addEventListener('mousedown',(e)=>{
+    const rect = canvas.getBoundingClientRect();
+    mouseScreen = { x: e.clientX-rect.left, y: e.clientY-rect.top };
+    mouseWorld = screenToWorld(mouseScreen.x, mouseScreen.y);
+
+    if(gameState==='menu'){
+        const diff = handleMenuClick();
+        if(diff) initGame(diff);
+        return;
+    }
+    if(gameState==='victory'||gameState==='defeat'){
+        const action = handleGameOverClick();
+        if(action==='restart') initGame(difficulty);
+        else if(action==='menu'){ gameState='menu'; entities=[]; selectedEntities=[]; buildMenuTarget=null; placementMode=null; }
+        return;
+    }
+
+    if(e.button===0){ // Left click
+        // Check minimap click
+        const mmW=140, mmH=100, mmX=canvas.width-mmW-10, mmY=canvas.height-mmH-10;
+        if(mouseScreen.x>=mmX && mouseScreen.x<=mmX+mmW && mouseScreen.y>=mmY && mouseScreen.y<=mmY+mmH){
+            const pctX = (mouseScreen.x-mmX)/mmW;
+            const pctY = (mouseScreen.y-mmY)/mmH;
+            camera.x = pctX*MAP_PX_W - canvas.width/2;
+            camera.y = pctY*MAP_PX_H - canvas.height/2;
+            clampCamera();
+            return;
+        }
+
+        // Check production panel
+        const prodClick = getBuildMenuClick();
+        if(prodClick){
+            if(prodClick==='close'){
+                buildMenuTarget = null;
+            } else if(BUILDING_DEFS[prodClick]){
+                // --- It's a BUILDING: enter placement mode ---
+                const def = BUILDING_DEFS[prodClick];
+                if(def.techRequired==='powerPlant' && !hasPowerPlant()){
+                    showMessage('Need Power Plant first!', 2);
+                    return;
+                }
+                if(credits >= def.cost){
+                    placementMode = prodClick;
+                    placementGhost = null;
+                    buildMenuTarget = null;
+                    showMessage(`Click to place ${def.name} (💎${def.cost})`, 3);
+                } else {
+                    showMessage('Not enough credits!', 1.5);
+                }
+            } else {
+                // --- It's a UNIT: queue it ---
+                const def = UNIT_DEFS[prodClick];
+                if(def){
+                    if(credits >= def.cost && buildMenuTarget.productionQueue.length < 5){
+                        credits -= def.cost;
+                        buildMenuTarget.queueUnit(prodClick);
+                        showMessage(`Training ${def.name}...`, 1.5);
+                    } else if(credits < def.cost){
+                        showMessage('Not enough credits!', 1.5);
+                    } else {
+                        showMessage('Production queue full! (max 5)', 1.5);
+                    }
+                }
+            }
+            return;
+        }
+
+        // Placement mode - place building
+        if(placementMode && placementValid && placementGhost){
+            const def = BUILDING_DEFS[placementMode];
+            if(def && credits >= def.cost){
+                credits -= def.cost;
+                const b = new Entity(placementMode, TEAM.PLAYER, placementGhost.x, placementGhost.y, def);
+                b.isBuilding = true;
+                b.startConstruction();
+                entities.push(b);
+                showMessage(`Building ${def.name}...`, 2);
+            }
+            placementMode = null;
+            placementGhost = null;
+            return;
+        }
+        if(placementMode){
+            // Clicked invalid spot - cancel placement
+            placementMode = null;
+            placementGhost = null;
+            return;
+        }
+
+        // Check if clicking on an entity
+        let clickedEntity = null;
+        // Check buildings first (they're "on top" for selection)
+        for(const e of entities){
+            if(!e.alive) continue;
+            if(e.team!==TEAM.PLAYER) continue;
+            if(isPointInEntity(mouseWorld.x, mouseWorld.y, e)){
+                clickedEntity = e;
+                break;
+            }
+        }
+
+        if(clickedEntity){
+            if(!e.shiftKey && !e.ctrlKey){
+                selectedEntities.forEach(s=>s.selected=false);
+                selectedEntities = [];
+            }
+            if(!selectedEntities.includes(clickedEntity)){
+                clickedEntity.selected = true;
+                selectedEntities.push(clickedEntity);
+            }
+            // Show building menu for any player building
+            if(clickedEntity.isBuilding){
+                buildMenuTarget = clickedEntity;
+            }
+        } else {
+            // Start drag selection
+            if(!e.shiftKey && !e.ctrlKey){
+                selectedEntities.forEach(s=>s.selected=false);
+                selectedEntities = [];
+            }
+            buildMenuTarget = null;
+            dragStart = { x: mouseScreen.x, y: mouseScreen.y };
+            dragWorldStart = { x: mouseWorld.x, y: mouseWorld.y };
+            dragActive = true;
+        }
+    }
+
+    if(e.button===2){ // Right click
+        e.preventDefault();
+        if(placementMode){
+            placementMode = null;
+            placementGhost = null;
+            return;
+        }
+        if(selectedEntities.length > 0){
+            // Check if clicking on enemy
+            let clickedEnemy = null;
+            for(const e of entities){
+                if(!e.alive || e.team===TEAM.PLAYER) continue;
+                if(isPointInEntity(mouseWorld.x, mouseWorld.y, e)){
+                    clickedEnemy = e;
+                    break;
+                }
+            }
+            if(clickedEnemy){
+                for(const sel of selectedEntities){
+                    if(sel.isUnit && !sel.isHarvester){
+                        sel.attackTarget = clickedEnemy;
+                        sel.targetX = null;
+                        sel.targetY = null;
+                    }
+                }
+            } else {
+                // Move command
+                for(const i in selectedEntities){
+                    const sel = selectedEntities[i];
+                    if(sel.isUnit){
+                        const offsetX = (Math.random()-0.5)*TILE*2;
+                        const offsetY = (Math.random()-0.5)*TILE*2;
+                        sel.targetX = mouseWorld.x + offsetX;
+                        sel.targetY = mouseWorld.y + offsetY;
+                        sel.attackTarget = null;
+                    }
+                }
+            }
+        }
+    }
+});
+
+canvas.addEventListener('mousemove',(e)=>{
+    const rect = canvas.getBoundingClientRect();
+    mouseScreen = { x: e.clientX-rect.left, y: e.clientY-rect.top };
+    mouseWorld = screenToWorld(mouseScreen.x, mouseScreen.y);
+
+    // Update placement ghost
+    if(placementMode && BUILDING_DEFS[placementMode]){
+        const def = BUILDING_DEFS[placementMode];
+        const gx = Math.floor(mouseWorld.x/TILE)*TILE;
+        const gy = Math.floor(mouseWorld.y/TILE)*TILE;
+        placementGhost = { x:gx, y:gy, w:def.w*TILE, h:def.h*TILE };
+        placementValid = isValidPlacement(gx, gy, def.w, def.h);
+    }
+});
+
+canvas.addEventListener('mouseup',(e)=>{
+    if(e.button===0 && dragActive){
+        dragActive = false;
+        if(dragStart && dragWorldStart){
+            // Selection rectangle
+            const rx = Math.min(dragWorldStart.x, mouseWorld.x);
+            const ry = Math.min(dragWorldStart.y, mouseWorld.y);
+            const rw = Math.abs(mouseWorld.x - dragWorldStart.x);
+            const rh = Math.abs(mouseWorld.y - dragWorldStart.y);
+
+            if(rw > 4 || rh > 4){
+                if(!e.shiftKey && !e.ctrlKey){
+                    selectedEntities.forEach(s=>s.selected=false);
+                    selectedEntities = [];
+                }
+                for(const ent of entities){
+                    if(!ent.alive || ent.team!==TEAM.PLAYER || !ent.isUnit) continue;
+                    const ecx = ent.cx, ecy = ent.cy;
+                    if(ecx>=rx && ecx<=rx+rw && ecy>=ry && ecy<=ry+rh){
+                        if(!selectedEntities.includes(ent)){
+                            ent.selected = true;
+                            selectedEntities.push(ent);
+                        }
+                    }
+                }
+                // Also check buildings
+                for(const ent of entities){
+                    if(!ent.alive || ent.team!==TEAM.PLAYER || !ent.isBuilding) continue;
+                    if(ent.x+ent.w>rx && ent.x<rx+rw && ent.y+ent.h>ry && ent.y<ry+rh){
+                        if(!selectedEntities.includes(ent)){
+                            ent.selected = true;
+                            selectedEntities.push(ent);
+                        }
+                    }
+                }
+            }
+        }
+        dragStart = null;
+        dragWorldStart = null;
+    }
+});
+
+canvas.addEventListener('contextmenu',(e)=>e.preventDefault());
+
+document.addEventListener('keydown',(e)=>{
+    if(gameState==='menu') return;
+    if(gameState==='victory'||gameState==='defeat'){
+        if(e.key==='r'||e.key==='R') initGame(difficulty);
+        if(e.key==='Escape'){ gameState='menu'; entities=[]; selectedEntities=[]; buildMenuTarget=null; placementMode=null; }
+        return;
+    }
+
+    // Arrow keys for camera
+    const camSpd = 400;
+    if(e.key==='ArrowLeft') cameraVel.x = -camSpd;
+    if(e.key==='ArrowRight') cameraVel.x = camSpd;
+    if(e.key==='ArrowUp') cameraVel.y = -camSpd;
+    if(e.key==='ArrowDown') cameraVel.y = camSpd;
+
+    if(e.key==='Escape'){
+        selectedEntities.forEach(s=>s.selected=false);
+        selectedEntities = [];
+        buildMenuTarget = null;
+        placementMode = null;
+        placementGhost = null;
+    }
+
+    // Number keys for control groups
+    if(e.key>='1' && e.key<='9'){
+        const groupNum = parseInt(e.key);
+        if(e.ctrlKey || e.metaKey){
+            // Set control group
+            controlGroups[groupNum] = [...selectedEntities];
+            showMessage(`Group ${groupNum} set (${selectedEntities.length} units)`, 1.5);
+        } else {
+            // Select control group
+            const group = controlGroups[groupNum];
+            if(group){
+                selectedEntities.forEach(s=>s.selected=false);
+                selectedEntities = [];
+                for(const ent of group){
+                    if(ent.alive && entities.includes(ent)){
+                        ent.selected = true;
+                        selectedEntities.push(ent);
+                    }
+                }
+                // Clean up dead refs
+                controlGroups[groupNum] = selectedEntities.filter(e=>e.alive);
+            }
+        }
+    }
+
+    // B for build menu on selected building
+    if(e.key==='b'||e.key==='B'){
+        const selBuilding = selectedEntities.find(en=>en.isBuilding&&en.team===TEAM.PLAYER);
+        if(selBuilding) buildMenuTarget = selBuilding;
+    }
+
+    // A for attack-move (all selected to attack nearest)
+    if(e.key==='a'||e.key==='A'){
+        for(const sel of selectedEntities){
+            if(sel.isUnit && !sel.isHarvester){
+                const enemy = findNearestEnemy(sel, TEAM.PLAYER);
+                if(enemy) sel.attackTarget = enemy;
+            }
+        }
+    }
+
+    // S for stop
+    if(e.key==='s'||e.key==='S'){
+        for(const sel of selectedEntities){
+            if(sel.isUnit){
+                sel.targetX = null;
+                sel.targetY = null;
+                sel.attackTarget = null;
+            }
+        }
+    }
+});
+
+document.addEventListener('keyup',(e)=>{
+    if(e.key==='ArrowLeft'||e.key==='ArrowRight') cameraVel.x = 0;
+    if(e.key==='ArrowUp'||e.key==='ArrowDown') cameraVel.y = 0;
+});
+
+function isValidPlacement(gx, gy, w, h){
+    // Check map bounds
+    if(gx<0||gy<0||gx+w*TILE>MAP_PX_W||gy+h*TILE>MAP_PX_H) return false;
+    // Check terrain
+    const stx=Math.floor(gx/TILE), sty=Math.floor(gy/TILE);
+    const etx=Math.floor((gx+w*TILE-1)/TILE), ety=Math.floor((gy+h*TILE-1)/TILE);
+    for(let ty=sty; ty<=ety; ty++){
+        for(let tx=stx; tx<=etx; tx++){
+            if(tx<0||tx>=MAP_W||ty<0||ty>=MAP_H) return false;
+            if(map[ty][tx]===TERRAIN.ROCK||map[ty][tx]===TERRAIN.FUNGUS||map[ty][tx]===TERRAIN.CRYSTAL) return false;
+            if(fogOfWar[ty][tx]===FOW.UNEXPLORED) return false;
+        }
+    }
+    // Check near existing player building
+    let nearBuilding = false;
+    for(const e of entities){
+        if(!e.alive||e.team!==TEAM.PLAYER||!e.isBuilding) continue;
+        const dist = Math.max(
+            Math.abs(gx+w*TILE/2 - (e.x+e.w/2)),
+            Math.abs(gy+h*TILE/2 - (e.y+e.h/2))
+        );
+        if(dist < TILE*8) { nearBuilding = true; break; }
+    }
+    if(!nearBuilding) return false;
+    // Check no overlap with other entities
+    for(const e of entities){
+        if(!e.alive||!e.isBuilding) continue;
+        if(gx+w*TILE > e.x && gx < e.x+e.w && gy+h*TILE > e.y && gy < e.y+e.h) return false;
+    }
+    return true;
+}
+
+// ==================== RESIZE ====================
+function resize(){
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    if(camera.x !== undefined) clampCamera();
+}
+
+window.addEventListener('resize', resize);
+
+// ==================== GAME LOOP ====================
+let lastTime = 0;
+function gameLoop(timestamp){
+    if(!lastTime) lastTime = timestamp;
+    let dt = (timestamp - lastTime) / 1000;
+    if(dt <= 0) dt = 0.016;
+    if(dt > 0.2) dt = 0.2;
+    lastTime = timestamp;
+
+    update(dt);
+    render();
+
+    requestAnimationFrame(gameLoop);
+}
+
+// ==================== INIT ====================
+resize();
+lastTime = performance.now();
+requestAnimationFrame(gameLoop);
+
+})();
+</script>
+</body>
+</html>]]>
