@@ -1,0 +1,12 @@
+{
+  "game_id": "e1afbd43ef31493f93cb208d0309f37c",
+  "parent_game_id": "257433a6d8bc4c388464701e17c5fade",
+  "root_game_id": "57c25c0bfb5942fea3e00494d087ab61",
+  "title": "Tower Maze Defense (v47)",
+  "description": "Enhanced tower defense with projectile pass-through, upgrade-all buttons, and rich maze generation.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-07-31T21:05:44.136180Z",
+  "version": 6,
+  "prompt": "With the new weapon upgrades (l4 and l5), it is now too easy. stagger in new levels - dont introduce l4 upgrades until wave 65. introduce l5 at a suitable wave. move the stars of upgraded weapons to be on the same tile as the weapon - currently the stars are 1 tile above which can make it seem like the stars belong to the weapon above - fix. change the cycle speed (1x 2x 3x 5x 10x 15x 20x) button to 2 buttons - and up arrow and a down arrow to increase/decrease speed. make these buttons half-width so both take up a normal button space (dont make button 100% height so you can fit in title/desc)",
+  "format": "multi-file"
+}
