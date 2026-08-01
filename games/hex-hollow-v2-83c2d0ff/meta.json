@@ -1,0 +1,13 @@
+{
+  "game_id": "83c2d0ff64844cb28a622dc17540cbbe",
+  "parent_game_id": "5f05709e0df548788d58e5336a5a49d9",
+  "root_game_id": "5f05709e0df548788d58e5336a5a49d9",
+  "title": "Hex & Hollow (v2)",
+  "description": "A dark fantasy dungeon-crawler: buy weapons in the lobby, then enter the arena to battle waves of ghosts, skeletons, zombies, and witches.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-08-01T23:40:46.706857Z",
+  "version": 2,
+  "prompt": "fix the game, i cant start the game its all black and i dont see anything.",
+  "engine": "three",
+  "engine_version": "0.185.1"
+}
