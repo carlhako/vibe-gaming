@@ -1,0 +1,13 @@
+{
+  "game_id": "5f05709e0df548788d58e5336a5a49d9",
+  "parent_game_id": null,
+  "root_game_id": "5f05709e0df548788d58e5336a5a49d9",
+  "title": "Hex & Hollow",
+  "description": "Third-person 3D dungeon crawler roguelite: buy weapons in a stone lobby, battle waves of ghosts/zombies/skeletons in a torchlit arena, and keep your weapons on death.",
+  "requested_by": "web:74910672e475",
+  "created_at": "2026-08-01T23:33:20.082509Z",
+  "version": 1,
+  "prompt": "Hex & Hollow \u2014 a third-person 3D dungeon crawler roguelite. The player starts in a small stone lobby with a shop dialog overlay; they own the Rusty Dagger and start with 100 coins. The shop sells medieval/witch/sorcery weapons at escalating prices: Arming Sword (75), Short Bow (150), Flanged Mace (225), Crossbow (400), War Hammer (600), Staff of Embers (900, fires fireballs), Soul Reaper Scythe (1500, wide fast swings), Archmage Staff (2500, chain lightning); every weapon can be upgraded with coins for +damage and +attack speed, and potions are sold to restore health. Walking to the lobby doorway starts a 5-second on-screen countdown, then launches into the arena: a large dark stone room with stone columns, a stone ceiling, and flickering torchlight. Waves of ghosts (fast, float, phase through pillars), zombies (slow, tanky, melee) and skeletons (medium speed, melee) spawn spread around the arena \u2014 the player must destroy every enemy to clear the wave, and every 5th wave adds a Cursed Witch boss that shoots magic. Enemies drop coins that auto-collect with a magnet effect; clearing a wave returns the player to the lobby fully healed to shop again, and each wave is harder (more, faster, tougher enemies). Controls: WASD to move, mouse (pointer lock) to aim the third-person camera, click to attack (melee swing arc or aimed projectile for ranged weapons), Space to dodge-roll, Esc to release the mouse. The player has an HP bar; death shows a game-over screen that restarts from the lobby with 100 coins while keeping purchased weapons (roguelite meta-progression). Visual style: dark medieval stone, low-poly geometric meshes built from primitives, glowing enemy eyes, purple witch magic, dim torch lighting. Procedural WebAudio sounds for sword clangs, coin dings, countdown beeps, hurt grunts and a spooky ambient drone, with a mute button. Single player, instant restart on death. IMPORTANT technical constraints: do NOT use any HTML <form> elements or form action attributes anywhere in the code \u2014 the safety scanner rejects them. Implement the shop buy/equip/upgrade buttons as plain <button> elements wired with addEventListener click handlers, and manage all shop state with JavaScript.",
+  "engine": "three",
+  "engine_version": "0.185.1"
+}
