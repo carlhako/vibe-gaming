@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hex & Hollow</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="ui">
+<div id="hud">
+<div id="hp-bar-outer"><div id="hp-bar-inner"></div></div>
+<div id="hp-text">100 / 100</div>
+<div id="coins-display">🪙 100</div>
+<div id="wave-display">Lobby</div>
+<div id="weapon-display">⚔ Rusty Dagger</div>
+</div>
+<div id="countdown-overlay"></div>
+<div id="message-overlay"></div>
+<div id="crosshair"></div>
+<button id="mute-btn" title="Toggle Sound">🔊</button>
+<div id="game-over-overlay">
+<h2>YOU PERISHED</h2>
+<p id="go-waves"></p>
+<p id="go-coins"></p>
+<button id="restart-btn">Rise Again</button>
+</div>
+<div id="shop-overlay">
+<h3>⚒ THE ARMORY ⚒</h3>
+<div id="shop-items"></div>
+<button id="shop-potion-btn">🧪 Buy Health Potion (25 coins)</button>
+<div id="shop-coins">Your Coins: 100</div>
+</div>
+</div>
+<script src="audio.js"></script>
+<script src="world.js"></script>
+<script src="state.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
