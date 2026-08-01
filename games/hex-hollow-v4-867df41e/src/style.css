@@ -1,0 +1,44 @@
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0a;overflow:hidden;font-family:'Georgia',serif;user-select:none;-webkit-user-select:none}
+canvas{display:block}
+#ui{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10}
+#hud{position:absolute;top:16px;left:16px;color:#e0d8c8;font-size:15px;line-height:1.6;text-shadow:0 0 8px #000}
+#hp-bar-outer{width:200px;height:18px;background:#1a0a0a;border:2px solid #5a3a2a;border-radius:4px;margin-bottom:6px;overflow:hidden}
+#hp-bar-inner{width:100%;height:100%;background:linear-gradient(180deg,#c0392b,#e74c3c);transition:width .3s}
+#hp-text{font-size:12px;text-align:center;margin-top:-16px;color:#fff;text-shadow:0 0 4px #000}
+#coins-display{color:#f1c40f;font-size:16px;font-weight:bold}
+#wave-display{color:#c0c0c0}
+#weapon-display{color:#d4a574}
+#countdown-overlay{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:72px;font-weight:bold;color:#ff6600;text-shadow:0 0 30px #ff4400,0 0 60px #ff2200;display:none}
+#message-overlay{position:absolute;top:40%;left:50%;transform:translate(-50%,-50%);font-size:36px;font-weight:bold;color:#f1c40f;text-shadow:0 0 20px #000;display:none;text-align:center}
+#game-over-overlay{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.75);display:none;flex-direction:column;align-items:center;justify-content:center;pointer-events:all}
+#game-over-overlay h2{font-size:48px;color:#c0392b;text-shadow:0 0 20px #600;margin-bottom:16px}
+#game-over-overlay p{color:#ccc;font-size:18px;margin:6px 0}
+#restart-btn{margin-top:20px;padding:12px 36px;font-size:20px;background:#5a3a2a;color:#e0d8c8;border:2px solid #8a6a4a;border-radius:6px;cursor:pointer;font-family:Georgia,serif;pointer-events:all}
+#restart-btn:hover{background:#7a5a3a}
+#shop-overlay{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(10,5,2,.85);border:3px solid #6a4a2a;border-radius:12px;padding:20px 24px;color:#e0d8c8;min-width:380px;max-height:85vh;overflow-y:auto;pointer-events:all;display:none;box-shadow:0 0 40px rgba(0,0,0,.8)}
+#shop-overlay h3{text-align:center;font-size:22px;color:#f1c40f;margin-bottom:12px;letter-spacing:2px}
+.shop-item{display:flex;align-items:center;justify-content:space-between;padding:8px 6px;border-bottom:1px solid #3a2a1a;gap:10px}
+.shop-item:last-child{border-bottom:none}
+.shop-info{flex:1;min-width:0}
+.shop-name{font-size:14px;font-weight:bold;color:#d4a574}
+.shop-stats{font-size:11px;color:#a09080}
+.shop-actions{display:flex;gap:6px;flex-shrink:0}
+.shop-actions button{padding:6px 12px;font-size:12px;border-radius:4px;cursor:pointer;font-family:Georgia,serif;border:1px solid #6a4a2a;white-space:nowrap;color:#e0d8c8}
+.btn-buy{background:#2a5a1a;color:#cfc}
+.btn-buy:hover{background:#3a7a2a}
+.btn-equip{background:#3a3a6a;color:#ccf}
+.btn-equip:hover{background:#4a4a8a}
+.btn-upgrade{background:#5a4a1a;color:#ffc}
+.btn-upgrade:hover{background:#7a6a2a}
+.btn-owned{background:#333;color:#888;cursor:default}
+.btn-equipped{background:#1a4a1a;color:#8f8;cursor:default;border-color:#4a8a4a}
+#shop-potion-btn{display:block;margin:12px auto 0;padding:10px 24px;font-size:14px;background:#4a1a1a;color:#fcc;border:2px solid #8a3a3a;border-radius:6px;cursor:pointer;font-family:Georgia,serif}
+#shop-potion-btn:hover{background:#6a2a2a}
+#shop-coins{text-align:center;margin-top:8px;color:#f1c40f;font-weight:bold}
+#mute-btn{position:absolute;top:16px;right:16px;width:40px;height:40px;background:rgba(20,10,5,.7);border:2px solid #5a3a2a;border-radius:50%;color:#e0d8c8;font-size:18px;cursor:pointer;pointer-events:all;display:flex;align-items:center;justify-content:center}
+#mute-btn:hover{background:rgba(40,20,10,.8)}
+#crosshair{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:24px;height:24px;pointer-events:none;display:none}
+#crosshair::before,#crosshair::after{content:'';position:absolute;background:#fff;opacity:.6}
+#crosshair::before{width:2px;height:100%;left:50%;transform:translateX(-50%)}
+#crosshair::after{height:2px;width:100%;top:50%;transform:translateY(-50%)}

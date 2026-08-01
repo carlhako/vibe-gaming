@@ -1,0 +1,14 @@
+{
+  "game_id": "867df41eca1b4315916f83d8fac21c82",
+  "parent_game_id": "dd9f94bcac08414d95c208f6b9ab2dcb",
+  "root_game_id": "5f05709e0df548788d58e5336a5a49d9",
+  "title": "Hex & Hollow (v4)",
+  "description": "Third-person 3D dungeon crawler roguelite: buy weapons in a stone lobby, battle waves of ghosts/zombies/skeletons in a torchlit arena, and keep your weapons on death.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-08-01T23:52:17.545627Z",
+  "version": 3,
+  "prompt": "when the game starts its all black and i cant see anything, there is a bug or its too dark and possibly no textures on the walls. fix so the player can see their surroundings in the lobby",
+  "format": "multi-file",
+  "engine": "three",
+  "engine_version": "0.185.1"
+}
