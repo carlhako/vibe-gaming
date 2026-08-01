@@ -1573,6 +1573,15 @@ body {
   color: var(--muted);
 }
 
+.fmt-badge.fmt-3d {
+  border-color: var(--accent-dim);
+  color: var(--accent2);
+}
+
+.fmt-badge.fmt-2d {
+  color: var(--muted);
+}
+
 .explode-btn {
   background: none;
   border: 1px solid var(--line);

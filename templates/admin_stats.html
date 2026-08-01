@@ -162,7 +162,7 @@
             the multi-file version appears here as a new row you can hide.
           </p>
           <table class="stats-table">
-            <thead><tr><th>Game</th><th title="Source format">Fmt</th><th>Visibility</th><th></th><th></th><th></th></tr></thead>
+            <thead><tr><th>Game</th><th title="Source format">Fmt</th><th title="2D or 3D engine">Engine</th><th>Visibility</th><th></th><th></th><th></th></tr></thead>
             <tbody>
               {% for g in all_games %}
               <tr class="{{ 'is-hidden-row' if g.hidden }}">
@@ -172,6 +172,13 @@
                   <span class="fmt-badge fmt-multi" title="multi-file (exploded into src/ modules)">E</span>
                   {% else %}
                   <span class="fmt-badge fmt-single" title="single-file (one index.html)">S</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if g.engine == 'three' %}
+                  <span class="fmt-badge fmt-3d" title="3D (three.js)">3D</span>
+                  {% else %}
+                  <span class="fmt-badge fmt-2d" title="2D">2D</span>
                   {% endif %}
                 </td>
                 <td>
@@ -252,12 +259,19 @@
           </p>
           <div class="table-scroll">
           <table class="stats-table">
-            <thead><tr><th>When</th><th>Kind</th><th>Title</th><th>Requested by</th><th>Status</th><th>Git</th><th>Attempts</th><th>Model</th><th>Duration</th><th>Input tokens</th><th>Input cached</th><th>Output tokens</th><th>Total tokens</th><th>Links</th></tr></thead>
+            <thead><tr><th>When</th><th>Kind</th><th title="2D or 3D engine">Engine</th><th>Title</th><th>Requested by</th><th>Status</th><th>Git</th><th>Attempts</th><th>Model</th><th>Duration</th><th>Input tokens</th><th>Input cached</th><th>Output tokens</th><th>Total tokens</th><th>Links</th></tr></thead>
             <tbody>
               {% for r in history_rows %}
               <tr class="{{ 'is-hidden-row' if r.status == 'failed' }}">
                 <td><span class="local-ts" data-utc="{{ r.created_at }}">{{ r.created_at[:19].replace('T', ' ') }}</span></td>
                 <td>{{ 'new' if r.kind == 'create' else r.kind }}{% if r.kind in ('enhance', 'explode') and r.source_title %} <span class="form-hint">of {{ r.source_title }}</span>{% endif %}</td>
+                <td>
+                  {% if r.engine == 'three' %}
+                  <span class="fmt-badge fmt-3d" title="3D (three.js)">3D</span>
+                  {% else %}
+                  <span class="fmt-badge fmt-2d" title="2D">2D</span>
+                  {% endif %}
+                </td>
                 <td>{{ r.result_title or r.new_title or (r.prompt[:60] ~ ('…' if r.prompt|length > 60 else '')) }}</td>
                 <td>{{ r.creator_username or (r.creator_uid[:8] ~ '…' if r.creator_uid else r.requested_by) }}</td>
                 <td title="{{ r.error or '' }}">{{ r.status }}{% if r.status == 'failed' and r.error %} &#9432;{% endif %}</td>

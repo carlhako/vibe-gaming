@@ -218,6 +218,27 @@ def _attach_token_costs(rows, input_cost_per_million, output_cost_per_million,
     return rows
 
 
+def _attach_engine(rows, games_by_id):
+    """Mutates each history row in place, adding "engine" ("three" or None,
+    i.e. 2D). Only kind='create' jobs record their own engine on the
+    generation_requests row (db.create_generation_request's `engine` param);
+    every other kind (enhance/explode/ask) inherits it from the game the job
+    ran against, which lives in meta.json on disk rather than in the DB, so
+    it's looked up from the already-loaded disk manifest instead — first the
+    job's resulting game (present once it succeeds), falling back to its
+    source game (present from the moment the job is queued)."""
+    for row in rows:
+        engine = row.get("request_engine")
+        if not engine:
+            game = (
+                games_by_id.get(row.get("result_game_id"))
+                or games_by_id.get(row.get("source_game_id"))
+            )
+            engine = game.get("engine") if game else None
+        row["engine"] = engine
+    return rows
+
+
 def _build_manifest(games_dir: Path) -> list[dict]:
     games = []
     if not games_dir.exists():
@@ -248,6 +269,9 @@ def _build_manifest(games_dir: Path) -> list[dict]:
             # Resolved through builder so the admin page can never disagree
             # with what the build/enhance paths actually treat the game as.
             "format": "multi-file" if builder.is_multi_file(entry) else "single-file",
+            # A 3D game's engine is a property of the lineage (see engines.py),
+            # so this is None for every 2D game rather than a literal "2d".
+            "engine": meta.get("engine") or None,
         })
 
     titles_by_id = {g["game_id"]: g["title"] for g in games if g["game_id"]}
@@ -513,6 +537,7 @@ def create_app(games_dir=None) -> Flask:
             "title": game["title"],
             "description": game["description"],
             "prompt": game.get("prompt", ""),
+            "engine": game.get("engine"),
             "model": game.get("model"),
             "effort": game.get("effort"),
             "tokens_used": game.get("tokens_used"),
@@ -1333,6 +1358,7 @@ def create_app(games_dir=None) -> Flask:
             if (g["thumbs_up"] or g["thumbs_down"])
         ][:10]
         all_games = get_games(include_hidden=True)
+        games_by_id = {g["game_id"]: g for g in all_games if g["game_id"]}
         all_users = db.get_all_users(conn=conn)
         open_report_count = len(db.get_open_reports(conn=conn))
         ai_generation_enabled = db.is_ai_generation_enabled(conn=conn)
@@ -1365,6 +1391,7 @@ def create_app(games_dir=None) -> Flask:
             cached_input_cost_per_million = input_cost_per_million
         _attach_token_costs(history_rows, input_cost_per_million, output_cost_per_million,
                             cached_input_cost_per_million)
+        _attach_engine(history_rows, games_by_id)
 
         plays_total = db.count_plays(conn=conn)
         plays_pages = max(1, math.ceil(plays_total / plays_per))

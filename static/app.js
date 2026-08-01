@@ -275,6 +275,7 @@ async function openInfoModal(gameId) {
 
     document.getElementById("info-modal-title").textContent = data.title;
     const meta = [
+      data.engine === "three" ? "3D" : "2D",
       `by ${data.creator || "anonymous"}`,
       data.model ? `${data.model} (${data.effort || "default"})` : null,
       data.tokens_used != null ? `${data.tokens_used} tokens` : null,
