@@ -1,0 +1,13 @@
+{
+  "game_id": "44876fbf7803422e9a961e259b73feb7",
+  "parent_game_id": "c88c3b2c0546466bafcd099ae5c3f369",
+  "root_game_id": "c88c3b2c0546466bafcd099ae5c3f369",
+  "title": "Asteroid Drift (v2)",
+  "description": "Survive an asteroid field in 3D \u2014 blast rocks with rockets and watch chain-reaction explosions tear through the field.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-08-01T22:44:09.338492Z",
+  "version": 2,
+  "prompt": "make the aseroids a bit smaller and make them a solid object they are currently not solid but has gaps. Change the laser to a rocker, create a rocket object to replace the laser. Create bigger explosions with fire and more chunks of rock flying around, if these chunks hit another asteriod that one explodes too.",
+  "engine": "three",
+  "engine_version": "0.185.1"
+}

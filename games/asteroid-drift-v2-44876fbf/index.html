@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><script type="importmap">{"imports":{"three":"/vendor/three/0.185.1/three.module.min.js","three/addons/":"/vendor/three/0.185.1/addons/"}}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Asteroid Drift</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; background: #000; font-family: 'Segoe UI', system-ui, sans-serif; user-select: none; -webkit-user-select: none; }
+  canvas { display: block; }
+
+  #hud {
+    position: fixed; top: 20px; left: 24px; z-index: 10; pointer-events: none;
+    color: #fff; font-size: 16px; text-shadow: 0 0 10px rgba(255,255,255,0.5);
+    line-height: 1.6;
+  }
+  #hud .val { font-weight: 700; color: #ffd740; }
+
+  #crosshair {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    z-index: 10; pointer-events: none;
+    width: 22px; height: 22px;
+  }
+  #crosshair::before, #crosshair::after {
+    content: ''; position: absolute; background: rgba(255,255,255,0.8);
+  }
+  #crosshair::before { width: 2px; height: 100%; left: 50%; transform: translateX(-50%); }
+  #crosshair::after { width: 100%; height: 2px; top: 50%; transform: translateY(-50%); }
+
+  #lock-overlay {
+    position: fixed; inset: 0; z-index: 20;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.55); cursor: pointer;
+    transition: opacity 0.3s;
+  }
+  #lock-overlay.hidden { opacity: 0; pointer-events: none; }
+  #lock-overlay .box {
+    text-align: center; color: #fff;
+    background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 12px; padding: 32px 40px;
+  }
+  #lock-overlay h2 { font-size: 28px; margin-bottom: 12px; }
+  #lock-overlay p { font-size: 14px; opacity: 0.8; margin: 4px 0; }
+
+  #gameover {
+    position: fixed; inset: 0; z-index: 30;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.75);
+  }
+  #gameover.show { display: flex; }
+  #gameover .box {
+    text-align: center; color: #fff;
+    background: rgba(20,0,0,0.85); border: 2px solid #c62828;
+    border-radius: 14px; padding: 36px 44px;
+  }
+  #gameover h1 { font-size: 38px; color: #ef5350; margin-bottom: 10px; letter-spacing: 2px; }
+  #gameover .final-score { font-size: 22px; margin: 8px 0; }
+  #gameover .restart { font-size: 15px; opacity: 0.7; margin-top: 14px; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:0.5;} 50%{opacity:1;} }
+
+  #damage-flash {
+    position: fixed; inset: 0; z-index: 25; pointer-events: none;
+    background: #ff0000; opacity: 0; transition: opacity 0.08s;
+  }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div>SCORE <span class="val" id="score-val">0</span></div>
+  <div>DESTROYED <span class="val" id="kills-val">0</span></div>
+  <div>SPEED <span class="val" id="speed-val">1.0</span>x</div>
+</div>
+
+<div id="crosshair"></div>
+
+<div id="lock-overlay">
+  <div class="box">
+    <h2>🚀 ASTEROID DRIFT</h2>
+    <p><strong>Click</strong> to lock mouse &amp; start</p>
+    <p>Mouse or ←→↑↓ to steer</p>
+    <p><strong>Space</strong> to fire rockets</p>
+    <p style="opacity:0.5;margin-top:8px;">Survive as long as you can!</p>
+  </div>
+</div>
+
+<div id="damage-flash"></div>
+
+<div id="gameover">
+  <div class="box">
+    <h1>GAME OVER</h1>
+    <div class="final-score">Score: <strong id="final-score">0</strong></div>
+    <div style="opacity:0.6;">Asteroids destroyed: <span id="final-kills">0</span></div>
+    <div class="restart">Press <strong>R</strong> to restart</div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+// ─── DOM refs ────────────────────────────────────
+const scoreEl = document.getElementById('score-val');
+const killsEl = document.getElementById('kills-val');
+const speedEl = document.getElementById('speed-val');
+const lockOverlay = document.getElementById('lock-overlay');
+const gameoverEl = document.getElementById('gameover');
+const finalScoreEl = document.getElementById('final-score');
+const finalKillsEl = document.getElementById('final-kills');
+const damageFlash = document.getElementById('damage-flash');
+
+// ─── Scene, camera, renderer ────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x020210);
+scene.fog = new THREE.FogExp2(0x020210, 0.00008);
+
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.15, 200);
+camera.position.set(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = false;
+document.body.appendChild(renderer.domElement);
+
+// ─── PointerLock ────────────────────────────────
+const controls = new PointerLockControls(camera, document.body);
+
+controls.addEventListener('lock', () => {
+  lockOverlay.classList.add('hidden');
+});
+
+controls.addEventListener('unlock', () => {
+  if (!gameOver) {
+    lockOverlay.classList.remove('hidden');
+  }
+});
+
+lockOverlay.addEventListener('click', () => {
+  if (!gameOver) controls.lock();
+});
+
+// ─── Lighting ────────────────────────────────────
+const ambient = new THREE.AmbientLight(0x334466, 0.7);
+scene.add(ambient);
+
+const sun = new THREE.DirectionalLight(0xffeedd, 1.4);
+sun.position.set(30, 50, 20);
+scene.add(sun);
+
+const fill = new THREE.DirectionalLight(0x4466aa, 0.5);
+fill.position.set(-20, -10, -30);
+scene.add(fill);
+
+// ─── Starfield (child of camera) ─────────────────
+function createStarfield() {
+  const count = 1800;
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const r = 80 + Math.random() * 80;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+    positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+    positions[i * 3 + 2] = r * Math.cos(phi);
+    const brightness = 0.5 + Math.random() * 0.5;
+    const tint = Math.random();
+    if (tint < 0.1) { colors[i * 3] = 0.7; colors[i * 3 + 1] = 0.8; colors[i * 3 + 2] = 1.0; }
+    else if (tint < 0.2) { colors[i * 3] = 1.0; colors[i * 3 + 1] = 0.85; colors[i * 3 + 2] = 0.65; }
+    else { colors[i * 3] = brightness; colors[i * 3 + 1] = brightness; colors[i * 3 + 2] = brightness; }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  const mat = new THREE.PointsMaterial({ size: 0.25, vertexColors: true, blending: THREE.AdditiveBlending, depthWrite: false });
+  const stars = new THREE.Points(geo, mat);
+  stars.renderOrder = -1;
+  return stars;
+}
+const starfield = createStarfield();
+camera.add(starfield);
+scene.add(camera);
+
+// ─── Space dust (speed particles) ────────────────
+const DUST_COUNT = 280;
+const dustPositions = new Float32Array(DUST_COUNT * 3);
+const dustData = [];
+for (let i = 0; i < DUST_COUNT; i++) {
+  dustData.push({
+    l: (Math.random() - 0.5) * 50,
+    v: (Math.random() - 0.5) * 35,
+    d: 3 + Math.random() * 70
+  });
+}
+const dustGeo = new THREE.BufferGeometry();
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPositions, 3));
+const dustMat = new THREE.PointsMaterial({
+  size: 0.12, color: 0xaaccff, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.7
+});
+const dustPoints = new THREE.Points(dustGeo, dustMat);
+dustPoints.renderOrder = 0;
+scene.add(dustPoints);
+
+function updateDust(dt, playerSpeed, forward, right, up, playerPos) {
+  for (let i = 0; i < DUST_COUNT; i++) {
+    const d = dustData[i];
+    d.d -= playerSpeed * dt;
+    if (d.d < 2) {
+      d.d = 40 + Math.random() * 60;
+      d.l = (Math.random() - 0.5) * 50;
+      d.v = (Math.random() - 0.5) * 35;
+    }
+    const wx = playerPos.x + forward.x * d.d + right.x * d.l + up.x * d.v;
+    const wy = playerPos.y + forward.y * d.d + right.y * d.l + up.y * d.v;
+    const wz = playerPos.z + forward.z * d.d + right.z * d.l + up.z * d.v;
+    dustPositions[i * 3] = wx;
+    dustPositions[i * 3 + 1] = wy;
+    dustPositions[i * 3 + 2] = wz;
+  }
+  dustGeo.attributes.position.needsUpdate = true;
+}
+
+// ─── Shared geometries / materials ───────────────
+const fragGeoSmall = new THREE.TetrahedronGeometry(0.2, 0);
+const fragGeoMed = new THREE.TetrahedronGeometry(0.35, 1);
+const fragGeoBig = new THREE.TetrahedronGeometry(0.5, 1);
+const fireGeo = new THREE.SphereGeometry(0.15, 5, 4);
+
+// Rocket shared geometries
+const rocketBodyGeo = new THREE.CylinderGeometry(0.08, 0.1, 0.5, 8);
+const rocketNoseGeo = new THREE.ConeGeometry(0.08, 0.2, 8);
+const rocketNozzleGeo = new THREE.CylinderGeometry(0.05, 0.07, 0.1, 8);
+const rocketFlameGeo = new THREE.ConeGeometry(0.05, 0.18, 6);
+
+function createAsteroidMesh(radius) {
+  // Use SphereGeometry for a solid, gap-free base
+  const segments = radius > 2.0 ? 14 : 10;
+  const rings = radius > 2.0 ? 10 : 7;
+  const geo = new THREE.SphereGeometry(1, segments, rings);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const len = Math.sqrt(x * x + y * y + z * z);
+    if (len < 0.001) continue;
+    // Subtle noise for rocky texture without gaps
+    const noise = 0.88 + Math.random() * 0.24;
+    pos.setXYZ(i, (x / len) * noise, (y / len) * noise, (z / len) * noise);
+  }
+  geo.computeVertexNormals();
+  const hue = 0.07 + Math.random() * 0.06;
+  const sat = 0.08 + Math.random() * 0.14;
+  const light = 0.24 + Math.random() * 0.22;
+  const mat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color().setHSL(hue, sat, light),
+    roughness: 0.78, metalness: 0.12, flatShading: true
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.scale.setScalar(radius);
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  return mesh;
+}
+
+// ─── Rocket mesh creation ────────────────────────
+function createRocketMesh() {
+  const group = new THREE.Group();
+
+  // Body
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.35, metalness: 0.65 });
+  const body = new THREE.Mesh(rocketBodyGeo, bodyMat);
+  group.add(body);
+
+  // Nose cone
+  const noseMat = new THREE.MeshStandardMaterial({ color: 0xdd3333, roughness: 0.3, metalness: 0.35 });
+  const nose = new THREE.Mesh(rocketNoseGeo, noseMat);
+  nose.position.y = 0.35;
+  group.add(nose);
+
+  // Engine nozzle
+  const nozzleMat = new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.5, metalness: 0.8 });
+  const nozzle = new THREE.Mesh(rocketNozzleGeo, nozzleMat);
+  nozzle.position.y = -0.3;
+  group.add(nozzle);
+
+  // Fins (3)
+  const finGeo = new THREE.BoxGeometry(0.04, 0.18, 0.14);
+  for (let i = 0; i < 3; i++) {
+    const angle = (i / 3) * Math.PI * 2;
+    const finMat = new THREE.MeshStandardMaterial({ color: 0x777777, roughness: 0.45, metalness: 0.55 });
+    const fin = new THREE.Mesh(finGeo, finMat);
+    fin.position.set(Math.cos(angle) * 0.1, -0.2, Math.sin(angle) * 0.1);
+    fin.lookAt(new THREE.Vector3(Math.cos(angle) * 1.5, -0.8, Math.sin(angle) * 1.5));
+    group.add(fin);
+  }
+
+  // Engine flame (animated via userData)
+  const flameMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
+  const flame = new THREE.Mesh(rocketFlameGeo, flameMat);
+  flame.position.y = -0.42;
+  flame.name = 'flame';
+  group.add(flame);
+
+  return group;
+}
+
+// ─── Trail particle ──────────────────────────────
+function spawnTrailParticle(position) {
+  const size = 0.04 + Math.random() * 0.04;
+  const geo = new THREE.SphereGeometry(size, 4, 3);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xff6600, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
+  const trail = new THREE.Mesh(geo, mat);
+  trail.position.copy(position).add(
+    new THREE.Vector3((Math.random() - 0.5) * 0.15, (Math.random() - 0.5) * 0.15, (Math.random() - 0.5) * 0.15)
+  );
+  trail.userData = { life: 0.35, maxLife: 0.35 };
+  scene.add(trail);
+  trailParticles.push(trail);
+}
+
+// ─── Game state ──────────────────────────────────
+let gameOver = false;
+let score = 0;
+let kills = 0;
+let timeSurvived = 0;
+let playerSpeed = 14;
+let baseSpeed = 14;
+let maxSpeed = 28;
+let spawnInterval = 0.85;
+let spawnTimer = 0;
+let rocketCooldown = 0;
+const ROCKET_COOLDOWN_TIME = 0.28;
+const ROCKET_SPEED = 50;
+const ROCKET_LIFETIME = 1.4;
+const PLAYER_RADIUS = 1.3;
+
+const asteroids = [];
+const rockets = [];
+const explosions = [];
+const debrisChunks = []; // { mesh, velocity, life, maxLife, radius }
+const trailParticles = []; // { mesh, life, maxLife }
+
+// ─── Input ───────────────────────────────────────
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.code] = true; });
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ─── Audio ───────────────────────────────────────
+let audioCtx = null;
+function getAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function playSound(freq, endFreq, duration, type, vol) {
+  try {
+    const ctx = getAudio();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type || 'square';
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+    if (endFreq) osc.frequency.exponentialRampToValueAtTime(endFreq, ctx.currentTime + duration);
+    gain.gain.setValueAtTime(vol || 0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + duration);
+  } catch(e) { /* audio not available */ }
+}
+
+function sfxRocket() { playSound(180, 60, 0.2, 'sawtooth', 0.09); }
+function sfxExplosion() { playSound(55, 18, 0.45, 'sawtooth', 0.16); }
+function sfxBigExplosion() { playSound(40, 15, 0.55, 'sawtooth', 0.18); }
+function sfxGameOver() { playSound(200, 30, 0.7, 'sawtooth', 0.11); }
+
+// ─── Spawn helpers ───────────────────────────────
+function spawnAsteroid(overridePos, overrideVel) {
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+  const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+
+  let pos, vel;
+  if (overridePos) {
+    pos = overridePos.clone();
+  } else {
+    const dist = 35 + Math.random() * 50;
+    const lat = (Math.random() - 0.5) * 38;
+    const vert = (Math.random() - 0.5) * 28;
+    pos = camera.position.clone()
+      .add(forward.clone().multiplyScalar(dist))
+      .add(right.clone().multiplyScalar(lat))
+      .add(up.clone().multiplyScalar(vert));
+  }
+
+  if (overrideVel) {
+    vel = overrideVel.clone();
+  } else {
+    const r = Math.random();
+    if (r < 0.3) {
+      const toward = camera.position.clone().add(forward.clone().multiplyScalar(20)).sub(pos).normalize();
+      vel = toward.multiplyScalar(2 + Math.random() * 6);
+    } else if (r < 0.65) {
+      vel = new THREE.Vector3((Math.random()-0.5)*6, (Math.random()-0.5)*5, (Math.random()-0.5)*6);
+    } else {
+      vel = new THREE.Vector3((Math.random()-0.5)*2, (Math.random()-0.5)*2, (Math.random()-0.5)*2);
+    }
+  }
+
+  // Smaller asteroids: 0.55 to 2.8 (was 0.9 to 3.8)
+  const radius = 0.55 + Math.random() * 2.25;
+  const mesh = createAsteroidMesh(radius);
+  mesh.position.copy(pos);
+  const rotSpeed = new THREE.Vector3(
+    (Math.random() - 0.5) * 2.5,
+    (Math.random() - 0.5) * 2.5,
+    (Math.random() - 0.5) * 2.5
+  );
+
+  scene.add(mesh);
+  asteroids.push({ mesh, radius, velocity: vel, rotSpeed });
+}
+
+function spawnAsteroidBatch() {
+  const count = 1 + Math.floor(Math.random() * (timeSurvived > 90 ? 4 : timeSurvived > 40 ? 3 : 2));
+  for (let i = 0; i < count; i++) spawnAsteroid();
+}
+
+function fireRocket() {
+  if (gameOver) return;
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  const rocket = createRocketMesh();
+  rocket.position.copy(camera.position).add(forward.clone().multiplyScalar(1.2));
+  rocket.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), forward);
+  rocket.userData = {
+    direction: forward.clone(),
+    life: ROCKET_LIFETIME,
+    trailTimer: 0
+  };
+  scene.add(rocket);
+  rockets.push(rocket);
+  sfxRocket();
+
+  // Muzzle flash
+  const flashGeo = new THREE.SphereGeometry(0.2, 8, 8);
+  const flashMat = new THREE.MeshBasicMaterial({ color: 0xffaa44, blending: THREE.AdditiveBlending, depthWrite: false });
+  const flash = new THREE.Mesh(flashGeo, flashMat);
+  flash.position.copy(camera.position).add(forward.clone().multiplyScalar(0.6));
+  scene.add(flash);
+  setTimeout(() => { scene.remove(flash); flashGeo.dispose(); flashMat.dispose(); }, 60);
+}
+
+function createExplosion(position, asteroidRadius) {
+  // More particles, mix of fire and rock
+  const count = 30 + Math.floor(Math.random() * 22); // 30-51
+  const particles = [];
+  const baseHue = 0.07 + Math.random() * 0.05;
+
+  for (let i = 0; i < count; i++) {
+    const isFire = i < count * 0.4; // first 40% are fire particles
+    let geo, mat;
+
+    if (isFire) {
+      geo = fireGeo;
+      const fireHue = 0.04 + Math.random() * 0.1; // orange to yellow
+      const fireColor = new THREE.Color().setHSL(fireHue, 0.9, 0.4 + Math.random() * 0.5);
+      mat = new THREE.MeshBasicMaterial({
+        color: fireColor,
+        transparent: true,
+        opacity: 0.9,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+    } else {
+      const roll = Math.random();
+      if (roll < 0.35) geo = fragGeoSmall;
+      else if (roll < 0.75) geo = fragGeoMed;
+      else geo = fragGeoBig;
+      const rockColor = new THREE.Color().setHSL(baseHue, 0.08, 0.25 + Math.random() * 0.35);
+      mat = new THREE.MeshStandardMaterial({
+        color: rockColor,
+        roughness: 0.55,
+        metalness: 0.25,
+        flatShading: true,
+        emissive: new THREE.Color(0x221100),
+        emissiveIntensity: 0.5
+      });
+    }
+
+    const frag = new THREE.Mesh(geo, mat);
+    frag.position.copy(position).add(
+      new THREE.Vector3(
+        (Math.random() - 0.5) * asteroidRadius * 0.8,
+        (Math.random() - 0.5) * asteroidRadius * 0.8,
+        (Math.random() - 0.5) * asteroidRadius * 0.8
+      )
+    );
+
+    const s = isFire ? (0.45 + Math.random() * 0.9) : (0.5 + Math.random() * 1.3);
+    frag.scale.setScalar(s);
+
+    const dir = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+    const speed = isFire ? (5 + Math.random() * 18) : (3 + Math.random() * 16);
+    const life = isFire ? (0.25 + Math.random() * 0.4) : (0.5 + Math.random() * 0.9);
+    const maxLife = life;
+
+    scene.add(frag);
+    particles.push({
+      mesh: frag,
+      vel: dir.multiplyScalar(speed),
+      life,
+      maxLife,
+      isFire,
+      radius: isFire ? s * 0.15 : s * 0.3
+    });
+  }
+
+  // Track rock chunks for chain-reaction collisions
+  for (const p of particles) {
+    if (!p.isFire && p.radius > 0.2) {
+      debrisChunks.push({
+        mesh: p.mesh,
+        velocity: p.vel,
+        life: p.life,
+        maxLife: p.maxLife,
+        radius: p.radius
+      });
+    }
+  }
+
+  explosions.push({ particles, age: 0 });
+
+  // Louder explosion for bigger asteroids
+  if (asteroidRadius > 2.0) {
+    sfxBigExplosion();
+  } else {
+    sfxExplosion();
+  }
+
+  // Bright flash sphere for big explosions
+  if (asteroidRadius > 1.5) {
+    const flashGeo = new THREE.SphereGeometry(asteroidRadius * 0.8, 8, 8);
+    const flashMat = new THREE.MeshBasicMaterial({
+      color: 0xff8844,
+      transparent: true,
+      opacity: 0.8,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+    const flashSphere = new THREE.Mesh(flashGeo, flashMat);
+    flashSphere.position.copy(position);
+    flashSphere.userData = { life: 0.2, maxLife: 0.2 };
+    scene.add(flashSphere);
+    // Add to explosions as a special particle
+    explosions[explosions.length - 1].particles.push({
+      mesh: flashSphere,
+      vel: new THREE.Vector3(),
+      life: 0.2,
+      maxLife: 0.2,
+      isFire: true,
+      radius: 0
+    });
+  }
+}
+
+// ─── Destroy helpers ─────────────────────────────
+function destroyAsteroid(ast, byPlayer) {
+  const idx = asteroids.indexOf(ast);
+  if (idx < 0) return;
+  createExplosion(ast.mesh.position.clone(), ast.radius);
+  scene.remove(ast.mesh);
+  ast.mesh.geometry.dispose();
+  ast.mesh.material.dispose();
+  asteroids.splice(idx, 1);
+  if (byPlayer) {
+    kills++;
+    score += 100;
+  }
+}
+
+function destroyAsteroidByDebris(ast) {
+  // Debris-triggered destruction — still rewards player
+  const idx = asteroids.indexOf(ast);
+  if (idx < 0) return;
+  createExplosion(ast.mesh.position.clone(), ast.radius);
+  scene.remove(ast.mesh);
+  ast.mesh.geometry.dispose();
+  ast.mesh.material.dispose();
+  asteroids.splice(idx, 1);
+  kills++;
+  score += 50; // Half points for chain reactions
+}
+
+// ─── Restart ─────────────────────────────────────
+function restartGame() {
+  for (const a of asteroids) {
+    scene.remove(a.mesh);
+    a.mesh.geometry.dispose();
+    a.mesh.material.dispose();
+  }
+  asteroids.length = 0;
+
+  for (const r of rockets) {
+    scene.remove(r);
+    r.traverse(child => {
+      if (child.geometry && child.geometry !== rocketBodyGeo &&
+          child.geometry !== rocketNoseGeo && child.geometry !== rocketNozzleGeo &&
+          child.geometry !== rocketFlameGeo && child.geometry.type !== 'BoxGeometry') {
+        child.geometry.dispose();
+      }
+      if (child.material) {
+        if (Array.isArray(child.material)) {
+          child.material.forEach(m => m.dispose());
+        } else {
+          child.material.dispose();
+        }
+      }
+    });
+  }
+  rockets.length = 0;
+
+  for (const ex of explosions) {
+    for (const p of ex.particles) {
+      scene.remove(p.mesh);
+      if (p.mesh.geometry && p.mesh.geometry !== fragGeoSmall &&
+          p.mesh.geometry !== fragGeoMed && p.mesh.geometry !== fragGeoBig &&
+          p.mesh.geometry !== fireGeo) {
+        p.mesh.geometry.dispose();
+      }
+      if (p.mesh.material) {
+        if (Array.isArray(p.mesh.material)) {
+          p.mesh.material.forEach(m => m.dispose());
+        } else {
+          p.mesh.material.dispose();
+        }
+      }
+    }
+  }
+  explosions.length = 0;
+
+  for (const d of debrisChunks) {
+    // Already handled by explosions cleanup
+  }
+  debrisChunks.length = 0;
+
+  for (const t of trailParticles) {
+    scene.remove(t);
+    t.geometry.dispose();
+    t.material.dispose();
+  }
+  trailParticles.length = 0;
+
+  gameOver = false;
+  score = 0;
+  kills = 0;
+  timeSurvived = 0;
+  playerSpeed = baseSpeed;
+  spawnInterval = 0.85;
+  spawnTimer = 0;
+  rocketCooldown = 0;
+  camera.position.set(0, 0, 0);
+  camera.rotation.set(0, 0, 0);
+
+  gameoverEl.classList.remove('show');
+  damageFlash.style.opacity = '0';
+  document.getElementById('crosshair').style.display = '';
+  lockOverlay.classList.remove('hidden');
+}
+
+// ─── Trigger game over ───────────────────────────
+function triggerGameOver() {
+  if (gameOver) return;
+  gameOver = true;
+  sfxGameOver();
+  damageFlash.style.opacity = '1';
+  setTimeout(() => { damageFlash.style.opacity = '0'; }, 150);
+  finalScoreEl.textContent = score + Math.floor(timeSurvived * 10);
+  finalKillsEl.textContent = kills;
+  document.getElementById('crosshair').style.display = 'none';
+  gameoverEl.classList.add('show');
+  controls.unlock();
+  lockOverlay.classList.add('hidden');
+}
+
+// ─── Main update ─────────────────────────────────
+const _forwardVec = new THREE.Vector3();
+const _rightVec = new THREE.Vector3();
+const _upVec = new THREE.Vector3();
+const _tmpVec = new THREE.Vector3();
+const _debrisToAsteroid = new THREE.Vector3();
+
+function update(delta) {
+  if (gameOver) {
+    updateExplosions(delta);
+    updateDebrisChunks(delta);
+    updateTrailParticles(delta);
+    return;
+  }
+
+  const dt = Math.min(delta, 0.15);
+
+  // difficulty scaling
+  timeSurvived += dt;
+  const diffFactor = Math.min(timeSurvived / 120, 1.0);
+  playerSpeed = baseSpeed + diffFactor * (maxSpeed - baseSpeed);
+  spawnInterval = Math.max(0.22, 0.85 - diffFactor * 0.6);
+
+  // score from survival
+  score += Math.floor(dt * 10);
+
+  // get camera orientation vectors
+  _forwardVec.set(0, 0, -1).applyQuaternion(camera.quaternion);
+  _rightVec.set(1, 0, 0).applyQuaternion(camera.quaternion);
+  _upVec.set(0, 1, 0).applyQuaternion(camera.quaternion);
+
+  // keyboard steering
+  const turnRate = 2.0 * dt;
+  if (keys['ArrowLeft'] || keys['KeyA']) camera.rotateY(turnRate);
+  if (keys['ArrowRight'] || keys['KeyD']) camera.rotateY(-turnRate);
+  if (keys['ArrowUp'] || keys['KeyW']) camera.rotateX(-turnRate * 0.7);
+  if (keys['ArrowDown'] || keys['KeyS']) camera.rotateX(turnRate * 0.7);
+  const pitch = Math.asin(Math.max(-1, Math.min(1, _forwardVec.y)));
+  if (pitch > 1.45) camera.rotateX(1.45 - pitch);
+  if (pitch < -1.45) camera.rotateX(-1.45 - pitch);
+
+  _forwardVec.set(0, 0, -1).applyQuaternion(camera.quaternion);
+  _rightVec.set(1, 0, 0).applyQuaternion(camera.quaternion);
+  _upVec.set(0, 1, 0).applyQuaternion(camera.quaternion);
+
+  // move player forward
+  camera.position.add(_forwardVec.clone().multiplyScalar(playerSpeed * dt));
+
+  // shooting rockets
+  rocketCooldown -= dt;
+  if ((keys['Space'] || keys['KeyF']) && rocketCooldown <= 0) {
+    fireRocket();
+    rocketCooldown = ROCKET_COOLDOWN_TIME;
+  }
+
+  // spawn asteroids
+  spawnTimer -= dt;
+  if (spawnTimer <= 0) {
+    spawnAsteroidBatch();
+    spawnTimer = spawnInterval * (0.7 + Math.random() * 0.6);
+  }
+
+  // update asteroids
+  for (const ast of asteroids) {
+    ast.mesh.position.x += ast.velocity.x * dt;
+    ast.mesh.position.y += ast.velocity.y * dt;
+    ast.mesh.position.z += ast.velocity.z * dt;
+    ast.mesh.rotateX(ast.rotSpeed.x * dt);
+    ast.mesh.rotateY(ast.rotSpeed.y * dt);
+    ast.mesh.rotateZ(ast.rotSpeed.z * dt);
+  }
+
+  // update rockets
+  for (let i = rockets.length - 1; i >= 0; i--) {
+    const rocket = rockets[i];
+    const dir = rocket.userData.direction;
+    rocket.position.x += dir.x * ROCKET_SPEED * dt;
+    rocket.position.y += dir.y * ROCKET_SPEED * dt;
+    rocket.position.z += dir.z * ROCKET_SPEED * dt;
+    rocket.userData.life -= dt;
+
+    // Animate flame
+    const flame = rocket.getObjectByName('flame');
+    if (flame) {
+      const flicker = 0.7 + Math.random() * 0.3;
+      flame.scale.setScalar(flicker);
+      flame.material.color.setHSL(0.1, 1, 0.4 + Math.random() * 0.4);
+    }
+
+    // Trail particles
+    rocket.userData.trailTimer -= dt;
+    if (rocket.userData.trailTimer <= 0) {
+      spawnTrailParticle(rocket.position.clone());
+      rocket.userData.trailTimer = 0.03;
+    }
+
+    if (rocket.userData.life <= 0) {
+      // Remove rocket
+      rocket.traverse(child => {
+        if (child.material) {
+          if (Array.isArray(child.material)) {
+            child.material.forEach(m => m.dispose());
+          } else {
+            child.material.dispose();
+          }
+        }
+      });
+      scene.remove(rocket);
+      rockets.splice(i, 1);
+    }
+  }
+
+  // rocket-asteroid collision
+  for (let ri = rockets.length - 1; ri >= 0; ri--) {
+    const rocket = rockets[ri];
+    let hit = false;
+    for (let ai = asteroids.length - 1; ai >= 0; ai--) {
+      const ast = asteroids[ai];
+      const dist = rocket.position.distanceTo(ast.mesh.position);
+      if (dist < ast.radius + 0.5) {
+        destroyAsteroid(ast, true);
+        hit = true;
+        break;
+      }
+    }
+    if (hit) {
+      rocket.traverse(child => {
+        if (child.material) {
+          if (Array.isArray(child.material)) {
+            child.material.forEach(m => m.dispose());
+          } else {
+            child.material.dispose();
+          }
+        }
+      });
+      scene.remove(rocket);
+      rockets.splice(ri, 1);
+    }
+  }
+
+  // player-asteroid collision
+  for (const ast of asteroids) {
+    const dist = camera.position.distanceTo(ast.mesh.position);
+    if (dist < ast.radius + PLAYER_RADIUS) {
+      triggerGameOver();
+      break;
+    }
+  }
+
+  // cleanup far-behind asteroids
+  for (let i = asteroids.length - 1; i >= 0; i--) {
+    const ast = asteroids[i];
+    _tmpVec.copy(ast.mesh.position).sub(camera.position);
+    const dot = _forwardVec.dot(_tmpVec);
+    if (dot < -25 || _tmpVec.length() > 120) {
+      scene.remove(ast.mesh);
+      ast.mesh.geometry.dispose();
+      ast.mesh.material.dispose();
+      asteroids.splice(i, 1);
+    }
+  }
+
+  // update dust
+  updateDust(dt, playerSpeed, _forwardVec, _rightVec, _upVec, camera.position);
+
+  // update explosions
+  updateExplosions(dt);
+
+  // update debris chunks (chain reactions)
+  updateDebrisChunks(dt);
+
+  // update trail particles
+  updateTrailParticles(dt);
+
+  // update HUD
+  scoreEl.textContent = score + Math.floor(timeSurvived * 10);
+  killsEl.textContent = kills;
+  speedEl.textContent = (playerSpeed / baseSpeed).toFixed(1);
+}
+
+function updateExplosions(dt) {
+  for (let ei = explosions.length - 1; ei >= 0; ei--) {
+    const ex = explosions[ei];
+    ex.age += dt;
+    let allDead = true;
+    for (const p of ex.particles) {
+      p.life -= dt;
+      if (p.life > 0) {
+        allDead = false;
+        p.mesh.position.x += p.vel.x * dt;
+        p.mesh.position.y += p.vel.y * dt;
+        p.mesh.position.z += p.vel.z * dt;
+        p.vel.multiplyScalar(0.96);
+        const s = Math.max(0.01, p.life / p.maxLife);
+        p.mesh.scale.setScalar(p.isFire ? s * 1.5 : s);
+        if (p.mesh.material && p.mesh.material.opacity !== undefined) {
+          p.mesh.material.opacity = Math.min(1, s * 2);
+        }
+        if (p.isFire && p.mesh.material.color) {
+          // Fire shifts from yellow to red as it fades
+          const t = 1 - (p.life / p.maxLife);
+          p.mesh.material.color.setHSL(0.04 + t * 0.06, 0.9, 0.3 + (1 - t) * 0.5);
+        }
+      }
+    }
+    if (allDead || ex.age > 3.0) {
+      for (const p of ex.particles) {
+        scene.remove(p.mesh);
+        if (p.mesh.geometry && p.mesh.geometry !== fragGeoSmall &&
+            p.mesh.geometry !== fragGeoMed && p.mesh.geometry !== fragGeoBig &&
+            p.mesh.geometry !== fireGeo) {
+          p.mesh.geometry.dispose();
+        }
+        if (p.mesh.material) {
+          if (Array.isArray(p.mesh.material)) {
+            p.mesh.material.forEach(m => m.dispose());
+          } else {
+            p.mesh.material.dispose();
+          }
+        }
+      }
+      explosions.splice(ei, 1);
+    }
+  }
+}
+
+function updateDebrisChunks(dt) {
+  for (let di = debrisChunks.length - 1; di >= 0; di--) {
+    const chunk = debrisChunks[di];
+    chunk.life -= dt;
+    if (chunk.life <= 0) {
+      debrisChunks.splice(di, 1);
+      continue;
+    }
+    // Move chunk
+    chunk.mesh.position.x += chunk.velocity.x * dt;
+    chunk.mesh.position.y += chunk.velocity.y * dt;
+    chunk.mesh.position.z += chunk.velocity.z * dt;
+    chunk.velocity.multiplyScalar(0.96);
+
+    // Check collision with asteroids
+    for (let ai = asteroids.length - 1; ai >= 0; ai--) {
+      const ast = asteroids[ai];
+      _debrisToAsteroid.copy(chunk.mesh.position).sub(ast.mesh.position);
+      const dist = _debrisToAsteroid.length();
+      if (dist < ast.radius + chunk.radius) {
+        // Chain reaction!
+        destroyAsteroidByDebris(ast);
+        chunk.life = 0;
+        break;
+      }
+    }
+  }
+}
+
+function updateTrailParticles(dt) {
+  for (let i = trailParticles.length - 1; i >= 0; i--) {
+    const t = trailParticles[i];
+    t.userData.life -= dt;
+    if (t.userData.life <= 0) {
+      scene.remove(t);
+      t.geometry.dispose();
+      t.material.dispose();
+      trailParticles.splice(i, 1);
+    } else {
+      const s = t.userData.life / t.userData.maxLife;
+      t.material.opacity = s * 0.9;
+      t.scale.setScalar(s);
+    }
+  }
+}
+
+// ─── Render loop ─────────────────────────────────
+let lastTime = performance.now();
+function animate(timestamp) {
+  requestAnimationFrame(animate);
+  const dt = (timestamp - lastTime) / 1000;
+  lastTime = timestamp;
+  update(dt);
+  renderer.render(scene, camera);
+}
+
+// ─── Event listeners ─────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyR' && gameOver) {
+    restartGame();
+  }
+});
+
+// ─── Start ───────────────────────────────────────
+for (let i = 0; i < 8; i++) {
+  const fwd = new THREE.Vector3(0, 0, -1);
+  const rgt = new THREE.Vector3(1, 0, 0);
+  const up = new THREE.Vector3(0, 1, 0);
+  const dist = 15 + Math.random() * 55;
+  const lat = (Math.random() - 0.5) * 40;
+  const vert = (Math.random() - 0.5) * 30;
+  const pos = new THREE.Vector3().add(fwd.multiplyScalar(dist)).add(rgt.multiplyScalar(lat)).add(up.multiplyScalar(vert));
+  spawnAsteroid(pos, new THREE.Vector3((Math.random()-0.5)*3, (Math.random()-0.5)*3, (Math.random()-0.5)*3));
+}
+
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
