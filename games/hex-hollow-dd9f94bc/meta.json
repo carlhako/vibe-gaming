@@ -1,0 +1,14 @@
+{
+  "game_id": "dd9f94bcac08414d95c208f6b9ab2dcb",
+  "parent_game_id": "5f05709e0df548788d58e5336a5a49d9",
+  "root_game_id": "5f05709e0df548788d58e5336a5a49d9",
+  "title": "Hex & Hollow",
+  "description": "Third-person 3D dungeon crawler roguelite: buy weapons in a stone lobby, battle waves of ghosts/zombies/skeletons in a torchlit arena, and keep your weapons on death.",
+  "requested_by": "admin",
+  "created_at": "2026-08-01T23:48:22.800218Z",
+  "version": 2,
+  "prompt": "explode: split single-file game into multi-file modules (behavior-preserving)",
+  "format": "multi-file",
+  "engine": "three",
+  "engine_version": "0.185.1"
+}
