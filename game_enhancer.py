@@ -279,7 +279,8 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
 
     result["message"] = format_report(result)
     if result["success"]:
-        gg._safe_emit(emit, "final", result["notes"] or "Enhancement ready.", {"url": result["url"]})
+        gg._safe_emit(emit, "final", result["notes"] or "Enhancement ready.",
+                      {"url": f"/play/{result['slug']}"})
     else:
         gg._safe_emit(emit, "error", result["error"])
     return result

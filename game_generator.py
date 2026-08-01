@@ -763,7 +763,8 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
 
     result["message"] = format_report(result)
     if result["success"]:
-        _safe_emit(emit, "final", result["notes"] or "New game ready.", {"url": result["url"]})
+        _safe_emit(emit, "final", result["notes"] or "New game ready.",
+                   {"url": f"/play/{result['slug']}"})
     else:
         _safe_emit(emit, "error", result["error"])
     return result
