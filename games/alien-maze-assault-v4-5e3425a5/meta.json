@@ -7,5 +7,7 @@
   "requested_by": "web:e5ce15ea9cd7",
   "created_at": "2026-07-20T03:31:24.007638Z",
   "version": 1,
-  "prompt": "the player has to gun visible on the screen, shot a big ass powerful looking futuristic laser shooter at the bottom of the screen like you would see in doom."
+  "prompt": "the player has to gun visible on the screen, shot a big ass powerful looking futuristic laser shooter at the bottom of the screen like you would see in doom.",
+  "engine": "three",
+  "engine_version": "0.185.1"
 }

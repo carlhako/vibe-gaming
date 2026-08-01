@@ -7,5 +7,7 @@
   "requested_by": "web:e5ce15ea9cd7",
   "created_at": "2026-07-20T07:59:59.595842Z",
   "version": 1,
-  "prompt": "Make a flight simulator where the goal is to fly through rings in the sky. You start off up high in the sky, the plane tracks the mouse cursor so you move the mouse around to direct the plane. The game will be a 3d rendered game and add clouds."
+  "prompt": "Make a flight simulator where the goal is to fly through rings in the sky. You start off up high in the sky, the plane tracks the mouse cursor so you move the mouse around to direct the plane. The game will be a 3d rendered game and add clouds.",
+  "engine": "three",
+  "engine_version": "0.185.1"
 }

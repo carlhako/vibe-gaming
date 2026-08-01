@@ -6,6 +6,7 @@ from unittest import mock
 
 import ai_client as ai
 import db
+import engines
 import game_enhancer as ge
 import game_generator as gg
 
@@ -155,3 +156,53 @@ def test_compactness_note_injected_for_large_games():
     assert "## Size" in prompt
     # Still sits before the embedded source, like the other prompt sections.
     assert prompt.index("## Size") < prompt.index("## Current game")
+
+
+# --- engine inheritance: a fork of a 3D game is a 3D game ------------------
+
+_MODULE_GAME = (
+    '<!doctype html><html><head><title>g</title></head><body>'
+    '<script type="module">import * as THREE from "three"; new THREE.Scene();</script>'
+    "</body></html>"
+)
+
+
+def test_fork_of_a_3d_game_inherits_engine_and_uses_the_3d_prompt(isolated_db, games_dir):
+    """The engine belongs to the lineage: it is read off the source game's
+    meta.json, never chosen per request, so an enhance can't silently drop a
+    game's 3D-ness (which would strip its import map and break it)."""
+    with mock.patch.object(ai, "ask_with_tools",
+                           return_value=_submission("Orbit", _MODULE_GAME)), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        origin = gg.generate_game("a 3d thing", "web:t", CONFIG,
+                                  games_dir=games_dir, engine="three")
+    assert origin["success"], origin.get("error")
+
+    seen = {}
+
+    def capture(messages, **kwargs):
+        seen["system"] = messages[0]["content"]
+        return _submission("Orbit v2", _MODULE_GAME)
+
+    with mock.patch.object(ai, "ask_with_tools", side_effect=capture), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        fork = ge.enhance_game(origin["game_id"], "add a boost", "web:t", CONFIG,
+                               games_dir=games_dir)
+    assert fork["success"], fork.get("error")
+
+    assert "3D with three.js" in seen["system"]
+    meta = json.loads((games_dir / fork["slug"] / "meta.json").read_text())
+    assert meta["engine"] == "three"
+    assert meta["engine_version"] == engines.DEFAULT_THREE_VERSION
+    built = (games_dir / fork["slug"] / "index.html").read_text()
+    assert built.count('type="importmap"') == 1
+
+
+def test_fork_of_a_2d_game_stays_2d(isolated_db, games_dir):
+    with mock.patch.object(ai, "ask_with_tools", return_value=_submission("Flat")), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        origin = gg.generate_game("a 2d thing", "web:t", CONFIG, games_dir=games_dir)
+        fork = ge.enhance_game(origin["game_id"], "more", "web:t", CONFIG,
+                               games_dir=games_dir)
+    meta = json.loads((games_dir / fork["slug"] / "meta.json").read_text())
+    assert "engine" not in meta

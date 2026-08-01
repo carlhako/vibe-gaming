@@ -7,5 +7,7 @@
   "requested_by": "web:170441a61873",
   "created_at": "2026-07-20T03:24:47.606897Z",
   "version": 1,
-  "prompt": "fix the players weapon, make a big ass gun for wrecking aliens. animate the gun when firing with fire out of the end and animate the bullet too. Secondly the aliens dont die when they are shot, animate the aliens when they are hit and make them die after a few hits."
+  "prompt": "fix the players weapon, make a big ass gun for wrecking aliens. animate the gun when firing with fire out of the end and animate the bullet too. Secondly the aliens dont die when they are shot, animate the aliens when they are hit and make them die after a few hits.",
+  "engine": "three",
+  "engine_version": "0.185.1"
 }
