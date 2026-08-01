@@ -1,0 +1,19 @@
+three.js 0.185.1 — vendored by scripts/vendor_three.py
+Re-verify with: python3 scripts/vendor_three.py --verify
+
+three.module.min.js
+  url    https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.min.js
+  sha256 86bcee248b64f44bcfc23c331ae74619061957d59cab040171dcb6fb5900beb6
+  bytes  365552
+three.core.min.js
+  url    https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.core.min.js
+  sha256 05b2609338c76cd65daf74f3ac515bc9a5045e1b3b33edc07d8c9bd55250fa90
+  bytes  385386
+addons/controls/OrbitControls.js
+  url    https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/controls/OrbitControls.js
+  sha256 faabb4e8dfd9235ee4a9fd7c9a3d75f90f1689dbd4944bd6fd32117dacec5f93
+  bytes  40504
+addons/controls/PointerLockControls.js
+  url    https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/controls/PointerLockControls.js
+  sha256 40d58db8018b85038939d4d8bff7112d4b8a0ad0367b37ae6f969eeee4310c25
+  bytes  5890

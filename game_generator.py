@@ -54,6 +54,7 @@ from typing import Callable
 import ai_client as ai
 import content_moderation
 import db
+import engines
 import safety
 import smoke_test
 
@@ -321,12 +322,16 @@ def build_play_url(slug: str, config: dict) -> str:
 # Prompt builders
 # ---------------------------------------------------------------------------
 
-def _build_system_prompt() -> str:
+def _build_system_prompt(engine: str | None = None) -> str:
     allowed_hosts = ", ".join(sorted(safety.ALLOWED_CDN_HOSTS))
+    three_section = (
+        engines.three_contract() if engine == engines.ENGINE_THREE else ""
+    )
     return (
         "You are generating a new browser game for an arcade site that "
         "hosts single-file HTML5/JavaScript games.\n\n"
-        "## Contract\n"
+        + three_section
+        + "## Contract\n"
         "Reply with exactly ONE self-contained index.html file — all HTML, "
         "CSS, and JavaScript inline in that one file. Canvas or plain DOM, "
         "whatever suits the game. You may load external JavaScript modules "
@@ -408,6 +413,8 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
                              root_game_id: str | None = None,
                              title_override: str | None = None,
                              version_override: int = 1,
+                             engine: str | None = None,
+                             engine_version: str = engines.DEFAULT_THREE_VERSION,
                              emit: Callable | None = None) -> dict:
     """Drive the submit -> safety-scan -> mint id/slug -> write ->
     smoke-test loop shared by a brand-new game and an enhancement fork,
@@ -590,7 +597,16 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
         try:
             parsed = parse_submission(submission.arguments)
 
-            violations = safety.scan(parsed["game_html"])
+            # Normalize BEFORE scanning, so the scan sees exactly the bytes
+            # that get written: for a 3D game this replaces whatever import map
+            # the model wrote (or didn't) with the canonical one, which is then
+            # what safety.scan enforces.
+            try:
+                game_html = engines.normalize(parsed["game_html"], engine, engine_version)
+            except engines.EngineError as exc:
+                raise GameGenerationError(f"engine setup failed: {exc}") from None
+
+            violations = safety.scan(game_html, engine, engine_version)
             if violations:
                 raise GameGenerationError("safety violation: " + "; ".join(violations))
 
@@ -612,9 +628,13 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
                 "version": version_override,
                 "prompt": description,
             }
-            game_dir = write_game_files(candidate_slug, parsed["game_html"], meta, games_dir)
+            if engine:
+                meta["engine"] = engine
+                meta["engine_version"] = engine_version
+            game_dir = write_game_files(candidate_slug, game_html, meta, games_dir)
 
-            passed, detail = smoke_test.run_smoke_test(game_dir / "index.html", smoke_timeout)
+            passed, detail = smoke_test.run_smoke_test(
+                game_dir / "index.html", smoke_timeout, engine=engine)
             if not passed:
                 rollback_game_files(game_dir)
                 raise GameGenerationError(f"smoke test failed: {detail}")
@@ -671,13 +691,18 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
 
 def generate_game(description: str, requested_by: str, config: dict, db_conn=None,
                    games_dir: Path | None = None, job_id: str | None = None,
-                   creator_uid: str | None = None) -> dict:
+                   creator_uid: str | None = None, engine: str | None = None) -> dict:
     """Drive the full generate -> validate -> smoke-test retry loop and
     return a result dict (result["message"] is ready to display; DB
-    registration is already performed once, on success, before returning)."""
+    registration is already performed once, on success, before returning).
+
+    `engine` ("three" or None) selects the prompt variant and the runtime the
+    game is built against; it is recorded in meta.json and inherited by every
+    fork, since the engine belongs to the lineage rather than to a request."""
     games_dir = Path(games_dir) if games_dir is not None else GAMES_DIR
     cfg = config.get("newaiwebgame", {})
-    system_prompt = _build_system_prompt()
+    engine = engine if engine in engines.VALID_ENGINES else None
+    system_prompt = _build_system_prompt(engine)
     emit = _make_emitter(job_id, db_conn)
 
     t0 = time.monotonic()
@@ -685,7 +710,7 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
         description=description, requested_by=requested_by, system_prompt=system_prompt,
         initial_user_prompt=_build_user_prompt(description),
         cfg=cfg, games_dir=games_dir, job_id=job_id, db_conn=db_conn,
-        emit=emit,
+        engine=engine, emit=emit,
     )
     duration = time.monotonic() - t0
 

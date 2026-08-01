@@ -2,6 +2,7 @@
 CSS url(), meta-refresh, and script navigation — plus regression coverage
 for every pre-existing banned pattern."""
 
+import engines
 import safety
 
 
@@ -114,3 +115,87 @@ def test_flags_off_allowlist_script_src():
 def test_does_not_flag_allowlisted_script_src():
     html = '<script src="https://cdn.jsdelivr.net/npm/foo/bar.js"></script>'
     assert safety.scan(html) == []
+
+
+# --- import maps: the class of ref the src=/href= checks cannot see ---------
+
+def _canonical_map():
+    return engines.importmap_html(engines.DEFAULT_THREE_VERSION)
+
+
+def test_flags_importmap_in_a_non_engine_game():
+    """Four pre-existing games pulled three.js through an import map and were
+    never seen by this scanner: the URLs are JSON values, not attributes."""
+    assert _flagged(_canonical_map(), "import map")
+
+
+def test_accepts_the_canonical_importmap_for_a_3d_game():
+    html = "<html><head>" + _canonical_map() + "</head><body></body></html>"
+    assert safety.scan(html, "three", engines.DEFAULT_THREE_VERSION) == []
+
+
+def test_flags_a_tampered_importmap_for_a_3d_game():
+    tampered = _canonical_map().replace(
+        "/vendor/three/", "https://evil.tld/vendor/three/")
+    violations = safety.scan(tampered, "three", engines.DEFAULT_THREE_VERSION)
+    assert any("non-canonical import map" in v for v in violations)
+
+
+def test_flags_importmap_pinning_a_version_other_than_the_games_own():
+    other = engines.importmap_html("0.0.1")
+    violations = safety.scan(other, "three", engines.DEFAULT_THREE_VERSION)
+    assert any("non-canonical import map" in v for v in violations)
+
+
+# --- local refs: nothing but index.html is served from a game directory ----
+
+def test_flags_local_script_ref():
+    assert _flagged('<script src="core.js"></script>', "local script reference")
+
+
+def test_flags_local_stylesheet_ref_regardless_of_attribute_order():
+    assert _flagged('<link href="game.css" rel="stylesheet">', "local stylesheet reference")
+
+
+def test_allows_vendor_ref_in_a_3d_game():
+    html = f'<script src="/vendor/three/{engines.DEFAULT_THREE_VERSION}/three.module.min.js"></script>'
+    assert safety.scan(html, "three", engines.DEFAULT_THREE_VERSION) == []
+
+
+def test_flags_vendor_ref_in_a_2d_game():
+    html = f'<script src="/vendor/three/{engines.DEFAULT_THREE_VERSION}/three.module.min.js"></script>'
+    assert _flagged(html, "local script reference")
+
+
+def test_does_not_flag_fragment_or_image_refs():
+    assert safety.scan('<a href="#restart">r</a><img src="sprite.png">') == []
+
+
+# --- a 3D game's engine is served here, not fetched from a CDN -------------
+
+def test_flags_cdn_three_script_in_a_3d_game_even_though_the_host_is_allowlisted():
+    """The generic CDN allowance in the prompts is enough to talk a model into
+    a jsdelivr <script> tag; every other check waves it through."""
+    html = '<script src="https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.min.js"></script>'
+    violations = safety.scan(html, "three", engines.DEFAULT_THREE_VERSION)
+    assert any("3D game loads an external script" in v for v in violations)
+
+
+def test_still_allows_cdn_script_in_a_2d_game():
+    html = '<script src="https://cdn.jsdelivr.net/npm/foo/bar.js"></script>'
+    assert safety.scan(html) == []
+
+
+# --- game_csp ---------------------------------------------------------------
+
+def test_game_csp_scopes_the_vendor_allowance_to_a_path_prefix():
+    csp = safety.game_csp("https://arcade.example")
+    assert "https://arcade.example/vendor/three/" in csp
+    # Not a blanket allowance for the whole origin.
+    assert "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://arcade.example;" not in csp
+
+
+def test_game_csp_still_blocks_runtime_egress():
+    csp = safety.game_csp("https://arcade.example")
+    assert "connect-src 'self'" in csp
+    assert "form-action 'none'" in csp

@@ -11,6 +11,7 @@ import pytest
 import ai_client as ai
 import content_moderation
 import db
+import engines
 import game_enhancer as ge
 import game_generator as gg
 
@@ -381,3 +382,83 @@ def test_generate_game_fails_cleanly_when_ai_disabled(isolated_db, games_dir):
     assert "disabled" in result["error"]
     assert "Game generation failed:" in result["message"]
     assert not any(games_dir.iterdir()), "no half-written directory may survive"
+
+
+# --- 3D games: the import map is injected, never taken from the model ------
+
+def _run_3d(games_dir, responses, max_attempts=3):
+    seen = []
+
+    def scripted(messages, **kwargs):
+        seen.append(copy.deepcopy(messages))
+        return responses[len(seen) - 1]
+
+    cfg = dict(CONFIG["newaiwebgame"], max_attempts=max_attempts)
+    with mock.patch.object(ai, "ask_with_tools", side_effect=scripted), \
+         mock.patch("smoke_test.run_smoke_test", return_value=(True, "ok")):
+        outcome = gg.run_generation_attempts(
+            description="desc", requested_by="web:t",
+            system_prompt="system", initial_user_prompt="make a 3d game",
+            cfg=cfg, games_dir=games_dir, engine="three",
+        )
+    return outcome, seen
+
+
+_MODULE_GAME = (
+    '<html><head><title>g</title></head><body>'
+    '<script type="module">import * as THREE from "three"; new THREE.Scene();</script>'
+    "</body></html>"
+)
+
+
+def test_3d_submission_gets_exactly_one_canonical_importmap(isolated_db, games_dir):
+    outcome, _ = _run_3d(games_dir, [_submission(_game_args(_MODULE_GAME))])
+    assert outcome["success"], outcome["error"]
+    written = (games_dir / outcome["slug"] / "index.html").read_text()
+    assert written.count('type="importmap"') == 1
+    assert engines.importmap_html(engines.DEFAULT_THREE_VERSION) in written
+
+
+def test_a_model_written_importmap_is_replaced_not_stacked(isolated_db, games_dir):
+    hand_written = _MODULE_GAME.replace(
+        "<head>",
+        '<head><script type="importmap">'
+        '{"imports":{"three":"https://cdn.jsdelivr.net/npm/three/build/three.module.js"}}'
+        "</script>")
+    outcome, _ = _run_3d(games_dir, [_submission(_game_args(hand_written))])
+    assert outcome["success"], outcome["error"]
+    written = (games_dir / outcome["slug"] / "index.html").read_text()
+    assert written.count('type="importmap"') == 1
+    assert "cdn.jsdelivr.net" not in written
+
+
+def test_3d_game_records_its_engine_in_meta(isolated_db, games_dir):
+    outcome, _ = _run_3d(games_dir, [_submission(_game_args(_MODULE_GAME))])
+    meta = json.loads((games_dir / outcome["slug"] / "meta.json").read_text())
+    assert meta["engine"] == "three"
+    assert meta["engine_version"] == engines.DEFAULT_THREE_VERSION
+
+
+def test_2d_game_records_no_engine(isolated_db, games_dir):
+    outcome, _ = _run(games_dir, [_submission(_game_args("<html><body>hi</body></html>"))])
+    meta = json.loads((games_dir / outcome["slug"] / "meta.json").read_text())
+    assert "engine" not in meta
+
+
+def test_3d_submission_without_a_head_is_fed_back_for_repair(isolated_db, games_dir):
+    """normalize() has nowhere to inject, and the message has to name a fix
+    the model can actually make — so it comes back as a tool result."""
+    outcome, seen = _run_3d(games_dir, [
+        _submission(_game_args("<html><body>no head</body></html>"), tool_call_id="c1"),
+        _submission(_game_args(_MODULE_GAME), tool_call_id="c2"),
+    ])
+    assert outcome["success"], outcome["error"]
+    feedback = [m for m in seen[-1] if m.get("role") == "tool"]
+    assert any("<head>" in m["content"] for m in feedback)
+
+
+def test_engine_selects_the_3d_system_prompt():
+    three = gg._build_system_prompt("three")
+    plain = gg._build_system_prompt()
+    assert "3D with three.js" in three
+    assert "3D with three.js" not in plain

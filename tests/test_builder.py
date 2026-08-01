@@ -255,3 +255,177 @@ def _has_chromium():
 def test_fixture_passes_real_smoke_test():
     passed, detail = smoke_test.run_smoke_test(FIXTURE_DIR / "index.html")
     assert passed, detail
+
+
+# --- 3D games: one merged module instead of sibling classic scripts --------
+
+def _write_3d_src(tmp_path, index_html, **modules):
+    game_dir = tmp_path / "game"
+    src = game_dir / "src"
+    src.mkdir(parents=True)
+    (game_dir / "meta.json").write_text(json.dumps(
+        {"format": "multi-file", "engine": "three", "engine_version": "0.185.1"}))
+    (src / "index.html").write_text(index_html)
+    for name, body in modules.items():
+        (src / name.replace("__", ".")).write_text(body)
+    return game_dir
+
+
+def test_merges_every_local_script_into_one_module(tmp_path):
+    game_dir = _write_3d_src(
+        tmp_path,
+        '<html><head><title>t</title></head><body>'
+        '<script src="a.js"></script><script src="b.js"></script>'
+        '<script src="c.js"></script></body></html>',
+        a__js="const A = 1;", b__js="const B = 2;", c__js="const C = 3;",
+    )
+    out = builder.build_game(game_dir / "src", "three")
+    assert out.count('<script type="module">') == 1
+    assert "<script>" not in out
+    # Document order preserved, header first.
+    assert out.index("import * as THREE") < out.index("const A") < out.index("const B") < out.index("const C")
+
+
+def test_merged_module_lands_where_the_first_script_was(tmp_path):
+    game_dir = _write_3d_src(
+        tmp_path,
+        '<html><head></head><body><div id="hud"></div>'
+        '<script src="a.js"></script><footer>f</footer>'
+        '<script src="b.js"></script></body></html>',
+        a__js="const A = 1;", b__js="const B = 2;",
+    )
+    out = builder.build_game(game_dir / "src", "three")
+    assert out.index("hud") < out.index('<script type="module">') < out.index("<footer>")
+
+
+def test_stylesheets_still_inline_separately_in_3d(tmp_path):
+    game_dir = _write_3d_src(
+        tmp_path,
+        '<html><head><link rel="stylesheet" href="style.css"></head><body>'
+        '<script src="a.js"></script></body></html>',
+        style__css="body{margin:0}", a__js="const A = 1;",
+    )
+    out = builder.build_game(game_dir / "src", "three")
+    assert "<style>body{margin:0}</style>" in out
+
+
+def test_cdn_refs_are_still_left_alone_in_3d(tmp_path):
+    game_dir = _write_3d_src(
+        tmp_path,
+        '<html><head><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=X">'
+        '</head><body><script src="a.js"></script></body></html>',
+        a__js="const A = 1;",
+    )
+    out = builder.build_game(game_dir / "src", "three")
+    assert "https://fonts.googleapis.com/css2?family=X" in out
+
+
+def test_module_carrying_its_own_import_is_rejected(tmp_path):
+    game_dir = _write_3d_src(
+        tmp_path,
+        '<html><head></head><body><script src="a.js"></script></body></html>',
+        a__js="import * as THREE from 'three';\nconst A = 1;",
+    )
+    with pytest.raises(builder.BuildError) as exc:
+        builder.build_game(game_dir / "src", "three")
+    assert "a.js line 1" in str(exc.value)
+    assert "import" in str(exc.value)
+
+
+def test_module_carrying_an_export_is_rejected(tmp_path):
+    game_dir = _write_3d_src(
+        tmp_path,
+        '<html><head></head><body><script src="a.js"></script></body></html>',
+        a__js="const A = 1;\nexport { A };",
+    )
+    with pytest.raises(builder.BuildError):
+        builder.build_game(game_dir / "src", "three")
+
+
+def test_dynamic_import_and_the_word_import_do_not_trip_the_gate(tmp_path):
+    game_dir = _write_3d_src(
+        tmp_path,
+        '<html><head></head><body><script src="a.js"></script></body></html>',
+        a__js="// we import nothing\nconst load = () => import('./x.js');\nconst s = 'export this';",
+    )
+    assert '<script type="module">' in builder.build_game(game_dir / "src", "three")
+
+
+def test_2d_build_is_unchanged_by_the_3d_code_path(tmp_path):
+    game_dir = _write_3d_src(
+        tmp_path,
+        '<html><head></head><body><script src="a.js"></script>'
+        '<script src="b.js"></script></body></html>',
+        a__js="const A = 1;", b__js="const B = 2;",
+    )
+    out = builder.build_game(game_dir / "src")
+    assert out.count("<script>") == 2
+    assert 'type="module"' not in out
+
+
+# --- engine resolution: explicit override beats (absent) meta.json ---------
+
+def test_read_engine_reads_meta_json(tmp_path):
+    game_dir = _write_3d_src(
+        tmp_path, "<html><head></head><body></body></html>")
+    assert builder.read_engine(game_dir) == ("three", "0.185.1")
+
+
+def test_read_engine_defaults_to_2d_without_meta(tmp_path):
+    (tmp_path / "bare").mkdir()
+    assert builder.read_engine(tmp_path / "bare")[0] is None
+
+
+def test_build_and_verify_honours_the_engine_override_when_meta_is_absent(tmp_path):
+    """A fork in progress has no meta.json — _stage_fork doesn't copy one and
+    explode writes one only on success — so without the override a 3D game
+    would verify as 2D for the whole run."""
+    game_dir = tmp_path / "fork"
+    src = game_dir / "src"
+    src.mkdir(parents=True)
+    (src / "index.html").write_text(
+        '<html><head><title>t</title></head><body><script src="a.js"></script></body></html>')
+    (src / "a.js").write_text("const A = 1;")
+
+    built = builder.build_game(src, "three")
+    assert '<script type="module">' in built
+    # …and with no engine at all it would have been a classic script.
+    assert "<script>" in builder.build_game(src)
+
+
+@pytest.mark.skipif(not _has_chromium(), reason="Chromium not installed")
+def test_split_3d_game_builds_and_verifies_end_to_end(tmp_path):
+    """The multi-file 3D story in one test: modules split across files still
+    share one scope (main.js calls a function and reads consts declared in
+    scene.js), the build merges them into one module, and the result renders."""
+    game_dir = _write_3d_src(
+        tmp_path,
+        '<!DOCTYPE html><html><head><meta charset="utf-8"><title>split</title>'
+        '<link rel="stylesheet" href="style.css"></head><body>'
+        '<script src="scene.js"></script><script src="main.js"></script>'
+        "</body></html>",
+        style__css="body{margin:0;background:#111}",
+        scene__js=(
+            "const renderer = new THREE.WebGLRenderer();\n"
+            "renderer.setSize(200, 200);\n"
+            "document.body.appendChild(renderer.domElement);\n"
+            "const scene = new THREE.Scene();\n"
+            "const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 100);\n"
+            "camera.position.z = 4;\n"
+            "const controls = new OrbitControls(camera, renderer.domElement);\n"
+            "function makePlayer() {\n"
+            "  return new THREE.Mesh(new THREE.IcosahedronGeometry(1),\n"
+            "                        new THREE.MeshBasicMaterial({color: 0x66ccff}));\n"
+            "}\n"
+        ),
+        main__js=(
+            "const player = makePlayer();\n"
+            "scene.add(player);\n"
+            "controls.update();\n"
+            "renderer.render(scene, camera);\n"
+        ),
+    )
+    passed, detail, built = builder.build_and_verify(game_dir)
+    assert passed, detail
+    assert built.count('<script type="module">') == 1
+    assert 'type="importmap"' in (game_dir / "index.html").read_text()

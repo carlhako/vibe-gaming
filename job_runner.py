@@ -64,7 +64,7 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
             result = game_generator.generate_game(
                 job["prompt"], job["requested_by"], config,
                 db_conn=conn, games_dir=games_dir, job_id=job_id,
-                creator_uid=job.get("creator_uid"),
+                creator_uid=job.get("creator_uid"), engine=job.get("engine"),
             )
         elif job["kind"] == "enhance":
             # agent.enhance_game_auto_format is the single dispatch point:
