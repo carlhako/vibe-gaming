@@ -1097,3 +1097,37 @@ def test_the_agent_default_does_not_leak_into_the_single_file_pipelines(
     import ai_client
     assert ai_client.MODEL_DEFAULT == "deepseek-v4-flash"
     assert agent.DEFAULT_AGENT_MODEL != ai_client.MODEL_DEFAULT
+
+
+# --- 3D games: the merged-module variant of the shared-scope contract ------
+
+def test_explode_prompt_describes_the_merged_module_for_a_3d_game():
+    three = agent._build_explode_system_prompt("T", "<html></html>", 120000, "three")
+    plain = agent._build_explode_system_prompt("T", "<html></html>", 120000, None)
+
+    assert 'ONE <script type="module">' in three
+    assert "sibling <script> blocks" in plain
+    # The rules that still apply must survive verbatim in the 3D variant.
+    assert "EXACTLY ONCE" in three
+    assert "Never drop code to fit" in three
+
+
+def test_3d_explode_prompt_drops_the_window_collision_rename_rule():
+    """Module scope is not global scope, so a top-level `const name` never
+    shadows window.name — asking for a rename there would be busywork."""
+    three = agent._build_explode_system_prompt("T", "<html></html>", 120000, "three")
+    plain = agent._build_explode_system_prompt("T", "<html></html>", 120000, None)
+    assert "toScreenX" not in three
+    assert "toScreenX" in plain
+
+
+def test_declaration_parity_ignores_the_ambient_engine_names():
+    """THREE/OrbitControls arrive via import, not a const/function/class
+    declaration, so they never enter the declared set on either side and the
+    parity gate has nothing to false-positive on."""
+    source = ('<script type="module">import * as THREE from "three";\n'
+              "const scene = new THREE.Scene();\nfunction tick(){ scene.add(1); }\n</script>")
+    built = ('<script type="module">import * as THREE from "three";\n\n'
+             "const scene = new THREE.Scene();\n\nfunction tick(){ scene.add(1); }\n</script>")
+    assert "THREE" not in agent._declared_names(source)
+    assert agent._explode_declaration_check(source)(None, built) is None

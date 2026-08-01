@@ -56,7 +56,10 @@ def test_flags_onload_fetch_to_disallowed_host(tmp_path):
     )
     passed, detail = smoke_test.run_smoke_test(str(html), timeout_seconds=10)
     assert passed is False
-    assert "blocked network request" in detail
+    # Deliberately not asserting *which* guard caught it. The page is served
+    # under the real game CSP now, so connect-src 'self' refuses the fetch
+    # before the request watcher ever sees it; both paths reject the attempt
+    # and both name the host, which is the part that has to hold.
     assert "evil-exfil-test.invalid" in detail
 
 
@@ -78,7 +81,7 @@ def test_flags_onclick_exfiltration_via_synthetic_click(tmp_path):
     )
     passed, detail = smoke_test.run_smoke_test(str(html), timeout_seconds=10)
     assert passed is False
-    assert "blocked network request" in detail
+    assert "evil-onclick-test.invalid" in detail
 
 
 def test_onclick_exfiltration_not_caught_without_synthetic_interaction(tmp_path):
@@ -109,3 +112,47 @@ def test_onclick_exfiltration_not_caught_without_synthetic_interaction(tmp_path)
         finally:
             browser.close()
     assert errors == []
+
+
+# --- the smoke server's own origin is exempt, by origin not by host --------
+
+def test_blocked_host_exempts_the_smoke_servers_own_origin():
+    assert smoke_test._blocked_host(
+        "http://127.0.0.1:8931/vendor/three/x.js", "http://127.0.0.1:8931") is None
+
+
+def test_blocked_host_still_reports_other_local_services():
+    """Exempting all of 127.0.0.1 would let a game probe whatever else is
+    listening on the box; only the smoke server's exact origin is waived."""
+    assert smoke_test._blocked_host(
+        "http://127.0.0.1:5432/x", "http://127.0.0.1:8931") == "127.0.0.1"
+
+
+# --- 3D: the whole vendored-engine path, in a real browser ----------------
+
+def test_three_js_game_loads_and_renders(tmp_path):
+    """The load-bearing end-to-end check: ES modules resolve through the
+    injected import map, the vendored engine is served over the smoke server,
+    the game CSP permits it, and WebGL works on the software GPU headless
+    Chromium falls back to. Any one of those breaking fails every 3D game."""
+    import engines
+
+    html = tmp_path / "index.html"
+    html.write_text(engines.normalize(
+        '<!DOCTYPE html><html><head><title>3d</title></head><body>'
+        '<script type="module">'
+        'import * as THREE from "three";'
+        'import { OrbitControls } from "three/addons/controls/OrbitControls.js";'
+        'const r = new THREE.WebGLRenderer(); r.setSize(200, 200);'
+        'document.body.appendChild(r.domElement);'
+        'const s = new THREE.Scene();'
+        'const c = new THREE.PerspectiveCamera(70, 1, 0.1, 100); c.position.z = 3;'
+        'new OrbitControls(c, r.domElement);'
+        's.add(new THREE.Mesh(new THREE.BoxGeometry(),'
+        ' new THREE.MeshBasicMaterial({color: 0xff0000})));'
+        'r.render(s, c);'
+        "</script></body></html>", "three"), encoding="utf-8")
+
+    passed, detail = smoke_test.run_smoke_test(
+        str(html), timeout_seconds=20, engine="three")
+    assert passed, detail

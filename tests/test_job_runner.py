@@ -151,3 +151,19 @@ def test_run_job_skips_push_when_git_sync_disabled(isolated_db, games_dir):
     mock_push.assert_not_called()
     updated = db.get_generation_request(job_id, conn=conn)
     assert updated["git_push_status"] is None
+
+
+def test_engine_is_forwarded_to_generate_game(isolated_db, games_dir):
+    job_id = "e" * 32
+    db.create_generation_request(
+        job_id=job_id, kind="create", prompt="a 3d racer", requested_by="web:x",
+        engine="three",
+    )
+    conn = db.get_connection()
+    job = db.get_generation_request(job_id, conn=conn)
+
+    with mock.patch.object(game_generator, "generate_game",
+                           return_value=_success_result()) as mock_generate:
+        job_runner._run_job(conn, job, CONFIG, games_dir)
+
+    assert mock_generate.call_args.kwargs["engine"] == "three"

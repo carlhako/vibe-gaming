@@ -41,7 +41,9 @@ import re
 import time
 from pathlib import Path
 
+import builder
 import db
+import engines
 import game_generator as gg
 import safety
 
@@ -103,15 +105,20 @@ def resolve_target(game_id: str, games_dir: Path, conn=None) -> dict:
 # Prompt builders
 # ---------------------------------------------------------------------------
 
-def _build_system_prompt(source_title: str, existing_game_html: str) -> str:
+def _build_system_prompt(source_title: str, existing_game_html: str,
+                          engine: str | None = None) -> str:
     allowed_hosts = ", ".join(sorted(safety.ALLOWED_CDN_HOSTS))
+    three_section = (
+        engines.three_contract() if engine == engines.ENGINE_THREE else ""
+    )
     return (
         f"You are creating an enhanced/fixed version of an existing browser "
         f"game in the arcade, currently titled '{source_title}'. This "
         "produces a NEW game entry — the original is left completely "
         "untouched and stays in the arcade unchanged; you are producing "
         "revised content for a new entry that forks from it.\n\n"
-        "## Contract\n"
+        + three_section
+        + "## Contract\n"
         "Reply with exactly ONE self-contained index.html file — all HTML, "
         "CSS, and JavaScript inline in that one file, same as the original. "
         "Canvas or plain DOM, whatever suits the game. You may load "
@@ -213,7 +220,10 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
         base_title = re.sub(r"\s*\(v\d+\)$", "", source_row["title"]).strip()
         title_override = f"{base_title} (v{n})"
 
-    system_prompt = _build_system_prompt(source_row["title"], existing_game_html)
+    # The engine belongs to the lineage: a fork of a 3D game is a 3D game, and
+    # there is no way to opt in or out of one on an enhance.
+    engine, engine_version = builder.read_engine(games_dir / source_row["slug"])
+    system_prompt = _build_system_prompt(source_row["title"], existing_game_html, engine)
     emit = gg._make_emitter(job_id, db_conn)
 
     outcome = gg.run_generation_attempts(
@@ -223,6 +233,7 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
         parent_game_id=source_row["game_id"], root_game_id=source_row["root_game_id"],
         title_override=title_override,
         version_override=(source_row["version"] or 1) + 1,
+        engine=engine, engine_version=engine_version,
         emit=emit,
     )
     duration = time.monotonic() - t0

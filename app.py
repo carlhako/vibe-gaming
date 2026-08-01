@@ -35,6 +35,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import agent
 import builder
 import db
+import engines
 import game_generator
 import safety
 
@@ -42,22 +43,11 @@ load_dotenv()  # so ADMIN_TOKEN (and anything else in .env) is set before any re
 
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
 
-# Content-Security-Policy for served game HTML (/play/<slug> only — untrusted
-# generated content). Host list is derived from safety.ALLOWED_CDN_HOSTS
-# rather than duplicated here, so the CSP and the generation-time CDN
-# allowlist can never drift apart.
-_CDN_ORIGINS = " ".join(f"https://{host}" for host in sorted(safety.ALLOWED_CDN_HOSTS))
-_GAME_CSP = (
-    "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' " + _CDN_ORIGINS + "; "
-    "style-src 'self' 'unsafe-inline' " + _CDN_ORIGINS + "; "
-    "font-src 'self' " + _CDN_ORIGINS + "; "
-    "img-src 'self' data: blob:; "
-    "connect-src 'self'; "
-    "form-action 'none'; "
-    "frame-ancestors 'self'; "
-    "base-uri 'none';"
-)
+# The Content-Security-Policy for served game HTML (/play/<slug> only —
+# untrusted generated content) is built by safety.game_csp(), which the smoke
+# test also calls, so a game is verified under the same policy it ships under.
+# It takes the serving origin because a 3D game's vendored three.js allowance
+# is an explicit origin + path prefix rather than 'self' — see that function.
 _GAME_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _BASE_DIR = Path(__file__).parent
 _VG_UID_COOKIE = "vg_uid"
@@ -702,7 +692,28 @@ def create_app(games_dir=None) -> Flask:
                 conn=conn,
             )
         response = send_from_directory(game_dir, "index.html")
-        response.headers["Content-Security-Policy"] = _GAME_CSP
+        response.headers["Content-Security-Policy"] = safety.game_csp(
+            request.host_url.rstrip("/"))
+        return response
+
+    @app.get("/vendor/three/<version>/<path:filename>")
+    def vendor_three(version, filename):
+        """The self-hosted three.js runtime for 3D games.
+
+        Access-Control-Allow-Origin is required, not decorative: module
+        scripts always fetch with CORS, and a game runs in a sandbox with no
+        allow-same-origin, so its requests carry `Origin: null`. Without this
+        header every 3D game fails to load its own engine.
+
+        The version is part of the path and validated against what is actually
+        vendored, so games pin the tree they were generated against and a
+        future three.js upgrade can never retroactively change one.
+        """
+        if version not in engines.available_versions():
+            abort(404)
+        response = send_from_directory(engines.vendor_dir(version), filename)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return response
 
     @app.get("/games/<game_id>/download")
@@ -780,6 +791,11 @@ def create_app(games_dir=None) -> Flask:
             ), 503
 
         prompt = (request.form.get("prompt") or "").strip()
+        # Whitelisted, never passed through: this value selects a prompt
+        # variant and a vendored runtime, so an unrecognised one becomes a
+        # plain 2D game rather than an error or an engine we can't serve.
+        engine = (request.form.get("engine") or "").strip()
+        engine = engine if engine in engines.VALID_ENGINES else None
         if not prompt:
             return render_template(
                 "new_game.html", error="Please describe the game you want.", ai_enabled=True,
@@ -807,7 +823,8 @@ def create_app(games_dir=None) -> Flask:
         job_id = uuid.uuid4().hex
         db.create_generation_request(
             job_id=job_id, kind="create", prompt=prompt, requested_by=requested_by,
-            creator_uid=vg_uid, ip_address=request.remote_addr or "unknown", conn=get_db(),
+            creator_uid=vg_uid, ip_address=request.remote_addr or "unknown",
+            engine=engine, conn=get_db(),
         )
 
         resp = redirect(url_for("job_status_page", job_id=job_id))
@@ -1251,7 +1268,9 @@ def create_app(games_dir=None) -> Flask:
 
     @app.after_request
     def _log_access(response):
-        if request.path.startswith("/static/"):
+        # /vendor/ joins /static/ here: it's immutable engine bytes, so logging
+        # it would add three rows per 3D game load and tell us nothing.
+        if request.path.startswith(("/static/", "/vendor/")):
             return response
         try:
             duration_ms = (time.monotonic() - getattr(g, "_t0", time.monotonic())) * 1000

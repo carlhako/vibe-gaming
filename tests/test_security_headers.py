@@ -3,6 +3,7 @@
 import re
 
 import app as app_module
+import engines
 import safety
 
 
@@ -78,3 +79,32 @@ def test_csp_script_src_hosts_match_allowed_cdn_hosts_exactly(isolated_db, games
     hosts_in_csp = set(re.findall(r"https://([a-z0-9.\-]+)", script_src))
 
     assert hosts_in_csp == safety.ALLOWED_CDN_HOSTS
+
+
+def test_csp_allows_the_vendored_three_js_tree_on_this_origin(isolated_db, games_dir):
+    """A 3D game resolves `three` to /vendor/three/<version>/…. 'self' cannot
+    be relied on there — the game runs in a sandbox with an opaque origin — so
+    the allowance is an explicit origin with a path prefix."""
+    write_game(games_dir, "block-dodge", {"title": "Block Dodge", "game_id": "a" * 32})
+    client = make_client(games_dir)
+
+    csp = client.get("/play/block-dodge").headers["Content-Security-Policy"]
+    assert "http://localhost/vendor/three/" in csp
+
+
+def test_vendor_route_serves_three_with_cors_and_immutable_cache(isolated_db, games_dir):
+    """Module scripts always fetch with CORS and a sandboxed game sends
+    Origin: null, so without ACAO every 3D game fails to load its engine."""
+    client = make_client(games_dir)
+    version = engines.DEFAULT_THREE_VERSION
+
+    resp = client.get(f"/vendor/three/{version}/three.module.min.js")
+    assert resp.status_code == 200
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"
+    assert "immutable" in resp.headers["Cache-Control"]
+    assert "javascript" in resp.headers["Content-Type"]
+
+
+def test_vendor_route_rejects_an_unvendored_version(isolated_db, games_dir):
+    client = make_client(games_dir)
+    assert client.get("/vendor/three/9.9.9/three.module.min.js").status_code == 404

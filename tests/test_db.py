@@ -489,3 +489,17 @@ def test_count_active_generation_requests_counts_queued_and_generating_only(isol
     conn.commit()
 
     assert db.count_active_generation_requests(conn=conn) == 2
+
+
+def test_engine_round_trips_through_a_generation_request(isolated_db):
+    db.create_generation_request(
+        job_id="e1", kind="create", prompt="a 3d racer",
+        requested_by="web:x", engine="three",
+    )
+    assert db.get_generation_request("e1")["engine"] == "three"
+
+
+def test_engine_defaults_to_null_for_a_2d_request(isolated_db):
+    db.create_generation_request(
+        job_id="e2", kind="create", prompt="a maze", requested_by="web:x")
+    assert db.get_generation_request("e2")["engine"] is None

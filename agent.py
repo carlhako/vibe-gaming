@@ -65,6 +65,7 @@ from typing import Callable, NamedTuple
 import ai_client as ai
 import builder
 import db
+import engines
 import game_enhancer as ge
 import game_generator as gg
 import safety
@@ -1518,14 +1519,20 @@ def _summarize_observation(tc_name: str, path: str | None, observation: str) -> 
 # ---------------------------------------------------------------------------
 
 def _build_system_prompt(source_title: str,
-                          snapshot: SourceSnapshot | None = None) -> str:
+                          snapshot: SourceSnapshot | None = None,
+                          engine: str | None = None) -> str:
     """The enhance pass's system message.
 
     Everything in it must be stable per source game — no timestamp, job id or
     fork slug — because that stability is what lets a second enhance of the
     same source hit DeepSeek's prefix cache on the whole block, snapshot
-    included (Sprint 6a)."""
+    included (Sprint 6a). `engine` is a property of the source game, not of
+    the run, so it does not break that stability."""
     allowed_hosts = ", ".join(sorted(safety.ALLOWED_CDN_HOSTS))
+    three_section = (
+        engines.three_contract(multi_file=True)
+        if engine == engines.ENGINE_THREE else ""
+    )
     has_snapshot = snapshot is not None and snapshot.text is not None
     if has_snapshot:
         # Say what is still true, then name the exceptions. Never a bare
@@ -1608,7 +1615,8 @@ def _build_system_prompt(source_title: str,
         "- finish(summary) — call once you're done. Triggers a build + "
         "safety scan + smoke test; a failure comes back as this call's "
         "result so you can keep editing and call finish again.\n\n"
-        "## Contract\n"
+        + three_section
+        + "## Contract\n"
         "All HTML/CSS/JS stays inline within the src/ files (no separate "
         "asset files). You may load external JavaScript modules or "
         "stylesheets via <script>/<link> tags ONLY from these CDN hosts: "
@@ -2245,7 +2253,8 @@ def _explode_target_module_count(source_bytes: int) -> int:
 
 
 def _build_explode_system_prompt(source_title: str, source_html: str,
-                                  max_module_bytes: int = DEFAULT_EXPLODE_MAX_MODULE_BYTES) -> str:
+                                  max_module_bytes: int = DEFAULT_EXPLODE_MAX_MODULE_BYTES,
+                                  engine: str | None = None) -> str:
     """Sprint 5's explode pass (docs/multifile-agent/05-migration-and-pilot.md
     Part A): the model is handed the ENTIRE original single-file game as
     plain input context (reading it costs input tokens only, never subject
@@ -2254,12 +2263,15 @@ def _build_explode_system_prompt(source_title: str, source_html: str,
     one whole-game submission — the same trick that lets explode work even
     on a game already too large to ever be resubmitted whole."""
     allowed_hosts = ", ".join(sorted(safety.ALLOWED_CDN_HOSTS))
+    is_three = engine == engines.ENGINE_THREE
+    three_section = engines.three_contract(multi_file=True) if is_three else ""
     return (
         f"You are converting an existing single-file browser game, "
         f"currently titled '{source_title}', into this arcade's multi-file "
         "format. This produces a NEW game entry — the original single-file "
         "game is left completely untouched.\n\n"
-        "## Task\n"
+        + three_section
+        + "## Task\n"
         "Split the single index.html below into a shell src/index.html "
         "plus src/style.css and SEVERAL cohesive src/*.js modules, and "
         "author game.md (a prose description of the game plus a table of "
@@ -2311,12 +2323,20 @@ def _build_explode_system_prompt(source_title: str, source_html: str,
         "result; a failure comes back as this call's result so you can "
         "keep editing and call finish again.\n\n"
         "## One shared scope — read this before you split anything\n"
-        "The build concatenates your modules into sibling <script> blocks in "
-        "the order src/index.html lists them. There is no module system, no "
-        "import/export, and NO per-file scope: every module's top-level "
-        "declarations land in one shared global scope. That makes four rules "
-        "non-negotiable.\n"
-        "1. If the original wraps its whole program in one IIFE — "
+        + (
+            "The build concatenates your modules into ONE "
+            "<script type=\"module\"> in the order src/index.html lists them, "
+            "under the import header shown above. There is NO per-file scope: "
+            "every module's top-level declarations land in one shared module "
+            "scope. That makes these rules non-negotiable.\n"
+            if is_three else
+            "The build concatenates your modules into sibling <script> blocks in "
+            "the order src/index.html lists them. There is no module system, no "
+            "import/export, and NO per-file scope: every module's top-level "
+            "declarations land in one shared global scope. That makes four rules "
+            "non-negotiable.\n"
+        )
+        + "1. If the original wraps its whole program in one IIFE — "
         "`(function () { ... })();` around everything — DELETE that single "
         "outer wrapper and distribute its body across your modules "
         "unchanged. Do not give each module its own IIFE: names declared "
@@ -2341,18 +2361,28 @@ def _build_explode_system_prompt(source_title: str, source_html: str,
         "everything has loaded, but a top-level const/let must be declared "
         "before the first module that reads it while loading. Put the entry "
         "point — the module that actually starts the game — last.\n"
-        "5. Dropping the outer IIFE puts every name into global scope, where "
-        "a few collide with read-only Window built-ins: screenX, screenY, "
-        "name, status, length, top, self, closed, origin, history, location, "
-        "focus, close, open, event. If the original declares one of those, "
-        "RENAME it (e.g. screenX -> toScreenX) at its declaration AND at "
-        "every call site. Never resolve such a collision by deleting the "
-        "declaration: the name still resolves — to the built-in — so nothing "
-        "fails on load and the game breaks only once that code actually "
-        "runs. Renaming is fully expected here and verification allows it — "
-        "it checks that no name is left referenced without a declaration, "
-        "not that the original spelling survived.\n\n"
-        "## Never drop code to fit\n"
+        + (
+            # Module scope is not global scope, so the Window-collision rule
+            # that rule 5 exists for cannot arise here: a top-level `const
+            # name` in a module never touches window.name.
+            "5. The merged module's scope is NOT the global scope, so a "
+            "top-level declaration never collides with a Window built-in "
+            "(screenX, name, status, length, top, …). Keep the original "
+            "spelling; there is nothing to rename.\n\n"
+            if is_three else
+            "5. Dropping the outer IIFE puts every name into global scope, where "
+            "a few collide with read-only Window built-ins: screenX, screenY, "
+            "name, status, length, top, self, closed, origin, history, location, "
+            "focus, close, open, event. If the original declares one of those, "
+            "RENAME it (e.g. screenX -> toScreenX) at its declaration AND at "
+            "every call site. Never resolve such a collision by deleting the "
+            "declaration: the name still resolves — to the built-in — so nothing "
+            "fails on load and the game breaks only once that code actually "
+            "runs. Renaming is fully expected here and verification allows it — "
+            "it checks that no name is left referenced without a declaration, "
+            "not that the original spelling survived.\n\n"
+        )
+        + "## Never drop code to fit\n"
         "This conversion is behavior-preserving, and the module ceiling is "
         "never a reason to omit anything. If a subsystem's code exceeds the "
         "ceiling, SPLIT it across two modules (render_world.js + "
@@ -2590,7 +2620,9 @@ def _await_step_approval(*, job_id: str, db_conn, emit: Callable | None,
 def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                      cfg: dict, job_id: str | None, db_conn, emit: Callable | None = None,
                      extra_verify: Callable | None = None,
-                     snapshot_paths: frozenset | None = None) -> dict:
+                     snapshot_paths: frozenset | None = None,
+                     engine: str | None = None,
+                     engine_version: str | None = None) -> dict:
     """Drive the read_map/list_files/read_file/search/write_file/finish loop
     against game_dir until finish() passes build->scan->smoke, the
     verification-retry budget is exhausted, or the step budget runs out.
@@ -2778,7 +2810,8 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         both for a finish() the model asked for and for the forced last-ditch
         attempt below; `forced` only changes the wording."""
         nonlocal verification_attempts
-        passed, detail, built_html = builder.build_and_verify(game_dir)
+        passed, detail, built_html = builder.build_and_verify(
+            game_dir, engine=engine, engine_version=engine_version)
         if passed and extra_verify is not None:
             extra_detail = extra_verify(game_dir, built_html)
             if extra_detail:
@@ -3390,12 +3423,17 @@ def enhance_multifile_game(source_game_id: str, description: str, requested_by: 
          "bytes": snapshot.total_bytes, "included": snapshot.text is not None},
     )
 
+    # From the source game: the staged fork has no meta.json of its own yet,
+    # and the engine is inherited, never chosen per enhancement.
+    engine, engine_version = builder.read_engine(source_dir)
+
     outcome = _run_react_loop(
         game_dir=dest_dir,
-        system_prompt=_build_system_prompt(source_row["title"], snapshot),
+        system_prompt=_build_system_prompt(source_row["title"], snapshot, engine),
         user_prompt=_build_user_prompt(description),
         cfg=cfg, job_id=job_id, db_conn=db_conn, emit=emit,
         snapshot_paths=snapshot.paths if snapshot.text is not None else None,
+        engine=engine, engine_version=engine_version,
     )
     duration = time.monotonic() - t0
 
@@ -3428,6 +3466,9 @@ def enhance_multifile_game(source_game_id: str, description: str, requested_by: 
         "prompt": description,
         "format": "multi-file",
     }
+    if engine:
+        meta["engine"] = engine
+        meta["engine_version"] = engine_version
     (dest_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     result = {
@@ -3545,14 +3586,19 @@ def explode_game(source_game_id: str, requested_by: str, config: dict, db_conn=N
     )
     explode_cfg = dict(cfg, max_module_bytes=explode_max_module_bytes)
 
+    # Inherited from the game being split — the fork's own meta.json is only
+    # written once the run succeeds, so the loop has to be told directly.
+    engine, engine_version = builder.read_engine(source_dir)
+
     outcome = _run_react_loop(
         game_dir=dest_dir,
         system_prompt=_build_explode_system_prompt(
-            source_row["title"], source_html, explode_max_module_bytes
+            source_row["title"], source_html, explode_max_module_bytes, engine
         ),
         user_prompt=_build_explode_user_prompt(),
         cfg=explode_cfg, job_id=job_id, db_conn=db_conn, emit=emit,
         extra_verify=_explode_declaration_check(source_html),
+        engine=engine, engine_version=engine_version,
     )
     duration = time.monotonic() - t0
 
@@ -3585,6 +3631,9 @@ def explode_game(source_game_id: str, requested_by: str, config: dict, db_conn=N
         "prompt": "explode: split single-file game into multi-file modules (behavior-preserving)",
         "format": "multi-file",
     }
+    if engine:
+        meta["engine"] = engine
+        meta["engine_version"] = engine_version
     (dest_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     result = {

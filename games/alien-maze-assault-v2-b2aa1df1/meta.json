@@ -7,5 +7,7 @@
   "requested_by": "web:170441a61873",
   "created_at": "2026-07-20T01:18:45.693201Z",
   "version": 1,
-  "prompt": "the maze is too dark put a texture on the walls and make it brighter so i can see where im going."
+  "prompt": "the maze is too dark put a texture on the walls and make it brighter so i can see where im going.",
+  "engine": "three",
+  "engine_version": "0.185.1"
 }
