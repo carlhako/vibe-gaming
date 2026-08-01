@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><script type="importmap">{"imports":{"three":"/vendor/three/0.185.1/three.module.min.js","three/addons/":"/vendor/three/0.185.1/addons/"}}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Asteroid Drift</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; background: #000; font-family: 'Segoe UI', system-ui, sans-serif; user-select: none; -webkit-user-select: none; }
+  canvas { display: block; }
+
+  #hud {
+    position: fixed; top: 20px; left: 24px; z-index: 10; pointer-events: none;
+    color: #fff; font-size: 16px; text-shadow: 0 0 10px rgba(255,255,255,0.5);
+    line-height: 1.6;
+  }
+  #hud .val { font-weight: 700; color: #ffd740; }
+
+  #crosshair {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    z-index: 10; pointer-events: none;
+    width: 22px; height: 22px;
+  }
+  #crosshair::before, #crosshair::after {
+    content: ''; position: absolute; background: rgba(255,255,255,0.8);
+  }
+  #crosshair::before { width: 2px; height: 100%; left: 50%; transform: translateX(-50%); }
+  #crosshair::after { width: 100%; height: 2px; top: 50%; transform: translateY(-50%); }
+
+  #lock-overlay {
+    position: fixed; inset: 0; z-index: 20;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.55); cursor: pointer;
+    transition: opacity 0.3s;
+  }
+  #lock-overlay.hidden { opacity: 0; pointer-events: none; }
+  #lock-overlay .box {
+    text-align: center; color: #fff;
+    background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 12px; padding: 32px 40px;
+  }
+  #lock-overlay h2 { font-size: 28px; margin-bottom: 12px; }
+  #lock-overlay p { font-size: 14px; opacity: 0.8; margin: 4px 0; }
+
+  #gameover {
+    position: fixed; inset: 0; z-index: 30;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.75);
+  }
+  #gameover.show { display: flex; }
+  #gameover .box {
+    text-align: center; color: #fff;
+    background: rgba(20,0,0,0.85); border: 2px solid #c62828;
+    border-radius: 14px; padding: 36px 44px;
+  }
+  #gameover h1 { font-size: 38px; color: #ef5350; margin-bottom: 10px; letter-spacing: 2px; }
+  #gameover .final-score { font-size: 22px; margin: 8px 0; }
+  #gameover .restart { font-size: 15px; opacity: 0.7; margin-top: 14px; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:0.5;} 50%{opacity:1;} }
+
+  #damage-flash {
+    position: fixed; inset: 0; z-index: 25; pointer-events: none;
+    background: #ff0000; opacity: 0; transition: opacity 0.08s;
+  }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div>SCORE <span class="val" id="score-val">0</span></div>
+  <div>DESTROYED <span class="val" id="kills-val">0</span></div>
+  <div>SPEED <span class="val" id="speed-val">1.0</span>x</div>
+</div>
+
+<div id="crosshair"></div>
+
+<div id="lock-overlay">
+  <div class="box">
+    <h2>🚀 ASTEROID DRIFT</h2>
+    <p><strong>Click</strong> to lock mouse &amp; start</p>
+    <p>Mouse or ←→↑↓ to steer</p>
+    <p><strong>Space</strong> to fire lasers</p>
+    <p style="opacity:0.5;margin-top:8px;">Survive as long as you can!</p>
+  </div>
+</div>
+
+<div id="damage-flash"></div>
+
+<div id="gameover">
+  <div class="box">
+    <h1>GAME OVER</h1>
+    <div class="final-score">Score: <strong id="final-score">0</strong></div>
+    <div style="opacity:0.6;">Asteroids destroyed: <span id="final-kills">0</span></div>
+    <div class="restart">Press <strong>R</strong> to restart</div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+// ─── DOM refs ────────────────────────────────────
+const scoreEl = document.getElementById('score-val');
+const killsEl = document.getElementById('kills-val');
+const speedEl = document.getElementById('speed-val');
+const lockOverlay = document.getElementById('lock-overlay');
+const gameoverEl = document.getElementById('gameover');
+const finalScoreEl = document.getElementById('final-score');
+const finalKillsEl = document.getElementById('final-kills');
+const damageFlash = document.getElementById('damage-flash');
+
+// ─── Scene, camera, renderer ────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x020210);
+scene.fog = new THREE.FogExp2(0x020210, 0.00008);
+
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.15, 200);
+camera.position.set(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = false;
+document.body.appendChild(renderer.domElement);
+
+// ─── PointerLock ────────────────────────────────
+const controls = new PointerLockControls(camera, document.body);
+
+controls.addEventListener('lock', () => {
+  lockOverlay.classList.add('hidden');
+});
+
+controls.addEventListener('unlock', () => {
+  if (!gameOver) {
+    lockOverlay.classList.remove('hidden');
+  }
+});
+
+lockOverlay.addEventListener('click', () => {
+  if (!gameOver) controls.lock();
+});
+
+// ─── Lighting ────────────────────────────────────
+const ambient = new THREE.AmbientLight(0x334466, 0.7);
+scene.add(ambient);
+
+const sun = new THREE.DirectionalLight(0xffeedd, 1.4);
+sun.position.set(30, 50, 20);
+scene.add(sun);
+
+const fill = new THREE.DirectionalLight(0x4466aa, 0.5);
+fill.position.set(-20, -10, -30);
+scene.add(fill);
+
+// ─── Starfield (child of camera) ─────────────────
+function createStarfield() {
+  const count = 1800;
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const r = 80 + Math.random() * 80;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+    positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+    positions[i * 3 + 2] = r * Math.cos(phi);
+    const brightness = 0.5 + Math.random() * 0.5;
+    const tint = Math.random();
+    if (tint < 0.1) { colors[i * 3] = 0.7; colors[i * 3 + 1] = 0.8; colors[i * 3 + 2] = 1.0; }
+    else if (tint < 0.2) { colors[i * 3] = 1.0; colors[i * 3 + 1] = 0.85; colors[i * 3 + 2] = 0.65; }
+    else { colors[i * 3] = brightness; colors[i * 3 + 1] = brightness; colors[i * 3 + 2] = brightness; }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  const mat = new THREE.PointsMaterial({ size: 0.25, vertexColors: true, blending: THREE.AdditiveBlending, depthWrite: false });
+  const stars = new THREE.Points(geo, mat);
+  stars.renderOrder = -1;
+  return stars;
+}
+const starfield = createStarfield();
+camera.add(starfield);
+scene.add(camera);
+
+// ─── Space dust (speed particles) ────────────────
+const DUST_COUNT = 280;
+const dustPositions = new Float32Array(DUST_COUNT * 3);
+const dustData = []; // { offset lateral, offset vertical, distance }
+for (let i = 0; i < DUST_COUNT; i++) {
+  dustData.push({
+    l: (Math.random() - 0.5) * 50,
+    v: (Math.random() - 0.5) * 35,
+    d: 3 + Math.random() * 70
+  });
+}
+const dustGeo = new THREE.BufferGeometry();
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPositions, 3));
+const dustMat = new THREE.PointsMaterial({
+  size: 0.12, color: 0xaaccff, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.7
+});
+const dustPoints = new THREE.Points(dustGeo, dustMat);
+dustPoints.renderOrder = 0;
+scene.add(dustPoints);
+
+function updateDust(dt, playerSpeed, forward, right, up, playerPos) {
+  for (let i = 0; i < DUST_COUNT; i++) {
+    const d = dustData[i];
+    d.d -= playerSpeed * dt;
+    if (d.d < 2) {
+      d.d = 40 + Math.random() * 60;
+      d.l = (Math.random() - 0.5) * 50;
+      d.v = (Math.random() - 0.5) * 35;
+    }
+    const wx = playerPos.x + forward.x * d.d + right.x * d.l + up.x * d.v;
+    const wy = playerPos.y + forward.y * d.d + right.y * d.l + up.y * d.v;
+    const wz = playerPos.z + forward.z * d.d + right.z * d.l + up.z * d.v;
+    dustPositions[i * 3] = wx;
+    dustPositions[i * 3 + 1] = wy;
+    dustPositions[i * 3 + 2] = wz;
+  }
+  dustGeo.attributes.position.needsUpdate = true;
+}
+
+// ─── Shared geometries / materials ───────────────
+const laserGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.7, 6);
+const laserMat = new THREE.MeshBasicMaterial({ color: 0xffff44 });
+const fragGeoSmall = new THREE.TetrahedronGeometry(0.2, 0);
+const fragGeoMed = new THREE.TetrahedronGeometry(0.35, 1);
+
+function createAsteroidMesh(radius) {
+  const detail = radius > 2.5 ? 3 : 2;
+  const geo = new THREE.IcosahedronGeometry(1, detail);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const len = Math.sqrt(x * x + y * y + z * z);
+    if (len < 0.001) continue;
+    const noise = 0.75 + Math.random() * 0.5;
+    pos.setXYZ(i, (x / len) * noise, (y / len) * noise, (z / len) * noise);
+  }
+  geo.computeVertexNormals();
+  const hue = 0.06 + Math.random() * 0.07;
+  const sat = 0.05 + Math.random() * 0.15;
+  const light = 0.22 + Math.random() * 0.28;
+  const mat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color().setHSL(hue, sat, light),
+    roughness: 0.78, metalness: 0.15, flatShading: true
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.scale.setScalar(radius);
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  return mesh;
+}
+
+// ─── Game state ──────────────────────────────────
+let gameOver = false;
+let score = 0;
+let kills = 0;
+let timeSurvived = 0;
+let playerSpeed = 14;
+let baseSpeed = 14;
+let maxSpeed = 28;
+let spawnInterval = 0.85;
+let spawnTimer = 0;
+let laserCooldown = 0;
+const LASER_COOLDOWN_TIME = 0.18;
+const LASER_SPEED = 70;
+const LASER_LIFETIME = 1.3;
+const PLAYER_RADIUS = 1.3;
+
+const asteroids = [];
+const lasers = [];
+const explosions = []; // { particles: [{mesh,vel,life,maxLife}], ... }
+
+// ─── Input ───────────────────────────────────────
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.code] = true; });
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ─── Audio ───────────────────────────────────────
+let audioCtx = null;
+function getAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function playSound(freq, endFreq, duration, type, vol) {
+  try {
+    const ctx = getAudio();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type || 'square';
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+    if (endFreq) osc.frequency.exponentialRampToValueAtTime(endFreq, ctx.currentTime + duration);
+    gain.gain.setValueAtTime(vol || 0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + duration);
+  } catch(e) { /* audio not available */ }
+}
+
+function sfxShoot() { playSound(900, 300, 0.09, 'square', 0.06); }
+function sfxExplosion() { playSound(60, 20, 0.35, 'sawtooth', 0.14); }
+function sfxGameOver() { playSound(200, 30, 0.7, 'sawtooth', 0.11); }
+
+// ─── Spawn helpers ───────────────────────────────
+function spawnAsteroid(overridePos, overrideVel) {
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+  const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+
+  let pos, vel;
+  if (overridePos) {
+    pos = overridePos.clone();
+  } else {
+    const dist = 35 + Math.random() * 50;
+    const lat = (Math.random() - 0.5) * 38;
+    const vert = (Math.random() - 0.5) * 28;
+    pos = camera.position.clone()
+      .add(forward.clone().multiplyScalar(dist))
+      .add(right.clone().multiplyScalar(lat))
+      .add(up.clone().multiplyScalar(vert));
+  }
+
+  if (overrideVel) {
+    vel = overrideVel.clone();
+  } else {
+    const r = Math.random();
+    if (r < 0.3) {
+      // head toward player's general path
+      const toward = camera.position.clone().add(forward.clone().multiplyScalar(20)).sub(pos).normalize();
+      vel = toward.multiplyScalar(2 + Math.random() * 6);
+    } else if (r < 0.65) {
+      vel = new THREE.Vector3((Math.random()-0.5)*6, (Math.random()-0.5)*5, (Math.random()-0.5)*6);
+    } else {
+      vel = new THREE.Vector3((Math.random()-0.5)*2, (Math.random()-0.5)*2, (Math.random()-0.5)*2);
+    }
+  }
+
+  const radius = 0.9 + Math.random() * 3.8;
+  const mesh = createAsteroidMesh(radius);
+  mesh.position.copy(pos);
+  const rotSpeed = new THREE.Vector3(
+    (Math.random() - 0.5) * 2.5,
+    (Math.random() - 0.5) * 2.5,
+    (Math.random() - 0.5) * 2.5
+  );
+
+  scene.add(mesh);
+  asteroids.push({ mesh, radius, velocity: vel, rotSpeed });
+}
+
+function spawnAsteroidBatch() {
+  const count = 1 + Math.floor(Math.random() * (timeSurvived > 90 ? 4 : timeSurvived > 40 ? 3 : 2));
+  for (let i = 0; i < count; i++) spawnAsteroid();
+}
+
+function fireLaser() {
+  if (gameOver) return;
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  const laser = new THREE.Mesh(laserGeo, laserMat.clone());
+  laser.position.copy(camera.position).add(forward.clone().multiplyScalar(0.8));
+  laser.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), forward);
+  laser.userData = { direction: forward.clone(), life: LASER_LIFETIME };
+  scene.add(laser);
+  lasers.push(laser);
+  sfxShoot();
+
+  // muzzle flash point
+  const flashGeo = new THREE.SphereGeometry(0.15, 8, 8);
+  const flashMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const flash = new THREE.Mesh(flashGeo, flashMat);
+  flash.position.copy(camera.position).add(forward.clone().multiplyScalar(0.5));
+  scene.add(flash);
+  setTimeout(() => { scene.remove(flash); flashGeo.dispose(); flashMat.dispose(); }, 50);
+}
+
+function createExplosion(position, asteroidRadius) {
+  const count = 14 + Math.floor(Math.random() * 16);
+  const particles = [];
+  const fragColor = new THREE.Color().setHSL(0.08 + Math.random() * 0.06, 0.1, 0.35 + Math.random() * 0.4);
+  for (let i = 0; i < count; i++) {
+    const geo = Math.random() < 0.5 ? fragGeoSmall : fragGeoMed;
+    const mat = new THREE.MeshStandardMaterial({
+      color: fragColor.clone().multiplyScalar(0.7 + Math.random() * 0.3),
+      roughness: 0.6, metalness: 0.3, flatShading: true, emissive: new THREE.Color(0x331100), emissiveIntensity: 0.6
+    });
+    const frag = new THREE.Mesh(geo, mat);
+    frag.position.copy(position).add(
+      new THREE.Vector3((Math.random()-0.5)*asteroidRadius, (Math.random()-0.5)*asteroidRadius, (Math.random()-0.5)*asteroidRadius)
+    );
+    frag.scale.setScalar(0.4 + Math.random() * 1.0);
+    const dir = new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5).normalize();
+    const speed = 4 + Math.random() * 14;
+    scene.add(frag);
+    particles.push({ mesh: frag, vel: dir.multiplyScalar(speed), life: 0.4 + Math.random() * 0.6, maxLife: 0.4 + Math.random() * 0.6 });
+  }
+  explosions.push({ particles, age: 0 });
+  sfxExplosion();
+}
+
+// ─── Destroy helpers ─────────────────────────────
+function destroyAsteroid(ast, byLaser) {
+  const idx = asteroids.indexOf(ast);
+  if (idx < 0) return;
+  createExplosion(ast.mesh.position.clone(), ast.radius);
+  scene.remove(ast.mesh);
+  ast.mesh.geometry.dispose();
+  ast.mesh.material.dispose();
+  asteroids.splice(idx, 1);
+  if (byLaser) {
+    kills++;
+    score += 100;
+  }
+}
+
+// ─── Restart ─────────────────────────────────────
+function restartGame() {
+  // clear asteroids
+  for (const a of asteroids) {
+    scene.remove(a.mesh);
+    a.mesh.geometry.dispose();
+    a.mesh.material.dispose();
+  }
+  asteroids.length = 0;
+
+  // clear lasers
+  for (const l of lasers) {
+    scene.remove(l);
+    l.geometry && l.geometry.dispose();
+    l.material && l.material.dispose();
+  }
+  lasers.length = 0;
+
+  // clear explosions
+  for (const ex of explosions) {
+    for (const p of ex.particles) {
+      scene.remove(p.mesh);
+      p.mesh.geometry.dispose();
+      p.mesh.material.dispose();
+    }
+  }
+  explosions.length = 0;
+
+  // reset state
+  gameOver = false;
+  score = 0;
+  kills = 0;
+  timeSurvived = 0;
+  playerSpeed = baseSpeed;
+  spawnInterval = 0.85;
+  spawnTimer = 0;
+  laserCooldown = 0;
+  camera.position.set(0, 0, 0);
+  camera.rotation.set(0, 0, 0);
+
+  gameoverEl.classList.remove('show');
+  damageFlash.style.opacity = '0';
+  document.getElementById('crosshair').style.display = '';
+  lockOverlay.classList.remove('hidden');
+}
+
+// ─── Trigger game over ───────────────────────────
+function triggerGameOver() {
+  if (gameOver) return;
+  gameOver = true;
+  sfxGameOver();
+  damageFlash.style.opacity = '1';
+  setTimeout(() => { damageFlash.style.opacity = '0'; }, 150);
+  finalScoreEl.textContent = score + Math.floor(timeSurvived * 10);
+  finalKillsEl.textContent = kills;
+  document.getElementById('crosshair').style.display = 'none';
+  gameoverEl.classList.add('show');
+  controls.unlock();
+  lockOverlay.classList.add('hidden');
+}
+
+// ─── Main update ─────────────────────────────────
+const _forwardVec = new THREE.Vector3();
+const _rightVec = new THREE.Vector3();
+const _upVec = new THREE.Vector3();
+const _tmpVec = new THREE.Vector3();
+
+function update(delta) {
+  if (gameOver) {
+    // still update explosions
+    updateExplosions(delta);
+    return;
+  }
+
+  const dt = Math.min(delta, 0.15);
+
+  // difficulty scaling
+  timeSurvived += dt;
+  const diffFactor = Math.min(timeSurvived / 120, 1.0);
+  playerSpeed = baseSpeed + diffFactor * (maxSpeed - baseSpeed);
+  spawnInterval = Math.max(0.22, 0.85 - diffFactor * 0.6);
+
+  // score from survival
+  score += Math.floor(dt * 10);
+
+  // get camera orientation vectors
+  _forwardVec.set(0, 0, -1).applyQuaternion(camera.quaternion);
+  _rightVec.set(1, 0, 0).applyQuaternion(camera.quaternion);
+  _upVec.set(0, 1, 0).applyQuaternion(camera.quaternion);
+
+  // keyboard steering (works with or without pointer lock)
+  const turnRate = 2.0 * dt;
+  if (keys['ArrowLeft'] || keys['KeyA']) camera.rotateY(turnRate);
+  if (keys['ArrowRight'] || keys['KeyD']) camera.rotateY(-turnRate);
+  if (keys['ArrowUp'] || keys['KeyW']) camera.rotateX(-turnRate * 0.7);
+  if (keys['ArrowDown'] || keys['KeyS']) camera.rotateX(turnRate * 0.7);
+  // clamp pitch to ±85° to avoid full flips
+  const pitch = Math.asin(Math.max(-1, Math.min(1, _forwardVec.y)));
+  if (pitch > 1.45) camera.rotateX(1.45 - pitch);
+  if (pitch < -1.45) camera.rotateX(-1.45 - pitch);
+
+  // re-compute orientation after keyboard input
+  _forwardVec.set(0, 0, -1).applyQuaternion(camera.quaternion);
+  _rightVec.set(1, 0, 0).applyQuaternion(camera.quaternion);
+  _upVec.set(0, 1, 0).applyQuaternion(camera.quaternion);
+
+  // move player forward
+  camera.position.add(_forwardVec.clone().multiplyScalar(playerSpeed * dt));
+
+  // shooting
+  laserCooldown -= dt;
+  if ((keys['Space'] || keys['KeyF']) && laserCooldown <= 0) {
+    fireLaser();
+    laserCooldown = LASER_COOLDOWN_TIME;
+  }
+
+  // spawn asteroids
+  spawnTimer -= dt;
+  if (spawnTimer <= 0) {
+    spawnAsteroidBatch();
+    spawnTimer = spawnInterval * (0.7 + Math.random() * 0.6);
+  }
+
+  // update asteroids
+  for (const ast of asteroids) {
+    ast.mesh.position.x += ast.velocity.x * dt;
+    ast.mesh.position.y += ast.velocity.y * dt;
+    ast.mesh.position.z += ast.velocity.z * dt;
+    ast.mesh.rotateX(ast.rotSpeed.x * dt);
+    ast.mesh.rotateY(ast.rotSpeed.y * dt);
+    ast.mesh.rotateZ(ast.rotSpeed.z * dt);
+  }
+
+  // update lasers
+  for (let i = lasers.length - 1; i >= 0; i--) {
+    const laser = lasers[i];
+    const dir = laser.userData.direction;
+    laser.position.x += dir.x * LASER_SPEED * dt;
+    laser.position.y += dir.y * LASER_SPEED * dt;
+    laser.position.z += dir.z * LASER_SPEED * dt;
+    laser.userData.life -= dt;
+    if (laser.userData.life <= 0) {
+      scene.remove(laser);
+      laser.geometry.dispose();
+      laser.material.dispose();
+      lasers.splice(i, 1);
+    }
+  }
+
+  // laser-asteroid collision
+  for (let li = lasers.length - 1; li >= 0; li--) {
+    const laser = lasers[li];
+    let hit = false;
+    for (let ai = asteroids.length - 1; ai >= 0; ai--) {
+      const ast = asteroids[ai];
+      const dist = laser.position.distanceTo(ast.mesh.position);
+      if (dist < ast.radius + 0.4) {
+        destroyAsteroid(ast, true);
+        hit = true;
+        break;
+      }
+    }
+    if (hit) {
+      scene.remove(laser);
+      laser.geometry.dispose();
+      laser.material.dispose();
+      lasers.splice(li, 1);
+    }
+  }
+
+  // player-asteroid collision
+  for (const ast of asteroids) {
+    const dist = camera.position.distanceTo(ast.mesh.position);
+    if (dist < ast.radius + PLAYER_RADIUS) {
+      triggerGameOver();
+      break;
+    }
+  }
+
+  // cleanup far-behind asteroids
+  for (let i = asteroids.length - 1; i >= 0; i--) {
+    const ast = asteroids[i];
+    _tmpVec.copy(ast.mesh.position).sub(camera.position);
+    const dot = _forwardVec.dot(_tmpVec);
+    if (dot < -25 || _tmpVec.length() > 120) {
+      scene.remove(ast.mesh);
+      ast.mesh.geometry.dispose();
+      ast.mesh.material.dispose();
+      asteroids.splice(i, 1);
+    }
+  }
+
+  // update dust
+  updateDust(dt, playerSpeed, _forwardVec, _rightVec, _upVec, camera.position);
+
+  // update explosions
+  updateExplosions(dt);
+
+  // update HUD
+  scoreEl.textContent = score + Math.floor(timeSurvived * 10);
+  killsEl.textContent = kills;
+  speedEl.textContent = (playerSpeed / baseSpeed).toFixed(1);
+}
+
+function updateExplosions(dt) {
+  for (let ei = explosions.length - 1; ei >= 0; ei--) {
+    const ex = explosions[ei];
+    ex.age += dt;
+    let allDead = true;
+    for (const p of ex.particles) {
+      p.life -= dt;
+      if (p.life > 0) {
+        allDead = false;
+        p.mesh.position.x += p.vel.x * dt;
+        p.mesh.position.y += p.vel.y * dt;
+        p.mesh.position.z += p.vel.z * dt;
+        p.vel.multiplyScalar(0.96);
+        const s = Math.max(0.01, p.life / p.maxLife);
+        p.mesh.scale.setScalar(s);
+        p.mesh.material.opacity = s;
+        p.mesh.material.transparent = true;
+      }
+    }
+    if (allDead || ex.age > 2.5) {
+      for (const p of ex.particles) {
+        scene.remove(p.mesh);
+        p.mesh.geometry.dispose();
+        p.mesh.material.dispose();
+      }
+      explosions.splice(ei, 1);
+    }
+  }
+}
+
+// ─── Render loop ─────────────────────────────────
+let lastTime = performance.now();
+function animate(timestamp) {
+  requestAnimationFrame(animate);
+  const dt = (timestamp - lastTime) / 1000;
+  lastTime = timestamp;
+  update(dt);
+  renderer.render(scene, camera);
+}
+
+// ─── Event listeners ─────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyR' && gameOver) {
+    restartGame();
+  }
+});
+
+// ─── Start ───────────────────────────────────────
+// initial batch of asteroids so the world isn't empty
+for (let i = 0; i < 8; i++) {
+  const fwd = new THREE.Vector3(0, 0, -1);
+  const rgt = new THREE.Vector3(1, 0, 0);
+  const up = new THREE.Vector3(0, 1, 0);
+  const dist = 15 + Math.random() * 55;
+  const lat = (Math.random() - 0.5) * 40;
+  const vert = (Math.random() - 0.5) * 30;
+  const pos = new THREE.Vector3().add(fwd.multiplyScalar(dist)).add(rgt.multiplyScalar(lat)).add(up.multiplyScalar(vert));
+  spawnAsteroid(pos, new THREE.Vector3((Math.random()-0.5)*3, (Math.random()-0.5)*3, (Math.random()-0.5)*3));
+}
+
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
