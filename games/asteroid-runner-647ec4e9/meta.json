@@ -1,0 +1,13 @@
+{
+  "game_id": "647ec4e9c47c4b8dae77493245517400",
+  "parent_game_id": null,
+  "root_game_id": "647ec4e9c47c4b8dae77493245517400",
+  "title": "Asteroid Runner",
+  "description": "First-person asteroid dodger: fly forward through a field of tumbling rocks, steer with mouse or arrow keys, shoot lasers with spacebar, and survive as long as you can.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-08-01T22:48:46.900447Z",
+  "version": 1,
+  "prompt": "A first-person asteroid dodger/shooter: fly forward through a field of tumbling rocks, steer with the mouse or arrow keys, score climbs the longer you survive, and you get a clear game-over with a restart key. Pressing space or hitting spacebar shoots lasers, when a laser hits a asteroid it explodes.",
+  "engine": "three",
+  "engine_version": "0.185.1"
+}
