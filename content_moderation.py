@@ -75,7 +75,7 @@ def check_game(html: str, description: str, notes: str) -> dict:
             prompt,
             system_prompt=_SYSTEM_PROMPT,
             model=ai.MODEL_DEFAULT,  # pin to the cheap/fast model regardless of what "default" means elsewhere
-            effort=None,  # non-thinking: no reasoning tokens for a pass this cheap and frequent
+            effort="high",  # thinking mode on — same posture as every other pipeline (2026-08)
             temperature=0.0,
             response_format={"type": "json_object"},
         )

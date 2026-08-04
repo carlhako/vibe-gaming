@@ -15,7 +15,7 @@ import job_runner
 from html_sanitize import sanitize_answer_html
 
 CONFIG = {
-    "askaiwebgame": {"model": None, "effort": None, "timeout_seconds": 5, "max_tokens": 500},
+    "askaiwebgame": {"model": None, "effort": "high", "timeout_seconds": 5, "max_tokens": 500},
 }
 
 
@@ -160,7 +160,7 @@ def test_answer_question_success_sanitizes_and_shapes_result(isolated_db, games_
     ask_result = ai.AskResult(
         text="<p>The boss deals <b>50</b> damage.</p><script>evil()</script>",
         input_tokens=100, output_tokens=20, model="deepseek-v4-flash",
-        effort=None, raw_response={"id": "x"}, cached_tokens=5,
+        effort="high", raw_response={"id": "x"}, cached_tokens=5,
     )
     with mock.patch.object(ai, "ask", return_value=ask_result) as mocked:
         result = ai_qa.answer_question(
@@ -217,7 +217,7 @@ def test_answer_question_multi_file_game_uses_builder(isolated_db, games_dir):
 
     ask_result = ai.AskResult(
         text="<p>ok</p>", input_tokens=1, output_tokens=1,
-        model="deepseek-v4-flash", effort=None, raw_response={},
+        model="deepseek-v4-flash", effort="high", raw_response={},
     )
     with mock.patch("builder.build_game", return_value="<html>combined</html>") as mocked_build, \
          mock.patch.object(ai, "ask", return_value=ask_result) as mocked_ask:
@@ -246,7 +246,7 @@ def test_run_job_dispatches_ask_and_persists_answer_on_success(isolated_db, game
 
     fake_result = {
         "success": True, "game_id": None, "answer": "<p>ok</p>", "attempts": 1,
-        "model": "deepseek-v4-flash", "effort": None, "duration_seconds": 0.1,
+        "model": "deepseek-v4-flash", "effort": "high", "duration_seconds": 0.1,
         "input_tokens": 5, "output_tokens": 2, "tokens_used": 7, "cached_tokens": 0,
         "error": None,
     }
@@ -271,7 +271,7 @@ def test_run_job_dispatches_ask_and_persists_error_on_failure(isolated_db, games
 
     fake_result = {
         "success": False, "game_id": None, "answer": None, "attempts": 1,
-        "model": None, "effort": None, "duration_seconds": 0.1,
+        "model": None, "effort": "high", "duration_seconds": 0.1,
         "input_tokens": None, "output_tokens": None, "tokens_used": None,
         "cached_tokens": None, "error": "DeepSeek timed out",
     }

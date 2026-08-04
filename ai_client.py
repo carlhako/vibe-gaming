@@ -35,11 +35,16 @@ provider toggle (db.get_ai_provider returns "deepseek" or "minimax"):
 
   * **minimax** — api.minimax.io/v1 via the same `openai` SDK. Requires
     `MINIMAX_API_KEY` in the environment. The model id sent on the wire
-    is `MiniMax-M3`. Same `effort`-as-thinking-mode semantics are NOT
-    applied here — minimax's API does not (as of writing) document the
-    DeepSeek-style thinking toggle, so `effort` is silently ignored for
-    minimax calls and the request goes through without a `thinking` /
-    `reasoning_effort` override.
+    is `MiniMax-M3`. Accepts the same `thinking` per-request toggle as
+    DeepSeek but with different wire values — `"adaptive"` (thinking on,
+    server picks reasoning depth per-call) vs `"disabled"`. The
+    per-pipeline `effort` semantic is identical on both providers;
+    `_resolve_thinking` maps `effort in ("high", "max")` to the
+    provider's "thinking on" wire string (`enabled` for deepseek,
+    `adaptive` for minimax). The top-level `reasoning_effort` kwarg is
+    forwarded unconditionally — DeepSeek accepts it; M3's behavior on
+    it has not been verified live in this environment (no
+    `MINIMAX_API_KEY` configured); see the TODO in `_resolve_thinking`.
 
 Missing-key handling: `_client()` raises `AIError("Error: <VAR> is not set
 (see .env.example)")` before opening any connection, so a flip to a
@@ -208,10 +213,8 @@ def _resolve_model(model: str | None) -> str:
     """Resolve the model id passed on the wire. An explicit per-pipeline
     `model=` is honored only when it matches the active provider's known
     model set; otherwise we fall back to the active provider's default and
-    log a WARNING — same posture as _resolve_thinking silently ignoring
-    `effort` on minimax (the docstring's "Same `effort`-as-thinking-mode
-    semantics are NOT applied here — minimax's API does not (as of writing)
-    document the DeepSeek-style thinking toggle").
+    log a WARNING. See `_resolve_thinking` for the parallel per-provider
+    mapping of `effort` onto each provider's `thinking.type` wire string.
 
     Why the fallback and not a hard raise: the admin provider toggle
     (`db.set_ai_provider` via /admin/stats) overrides per-pipeline defaults
@@ -244,25 +247,61 @@ def _resolve_model(model: str | None) -> str:
     return MINIMAX_MODEL if provider == "minimax" else MODEL_DEFAULT
 
 
+def _thinking_type_on(provider: str) -> str:
+    """The wire value of `thinking.type` that means "thinking on" for the
+    given provider. DeepSeek uses "enabled" (the caller picks reasoning
+    depth via the separate `reasoning_effort` kwarg); M3 uses "adaptive"
+    — server picks reasoning depth per-call rather than via a caller
+    knob (verified live 2026-08 by the 400 returned when we send
+    "enabled": `invalid thinking.type: "enabled" (allowed: adaptive,
+    disabled) (2013)`). Used by `_resolve_tool_choice` to detect
+    thinking-on regardless of which provider's schema produced the
+    extra_body. Both branches must stay in sync with `_resolve_thinking`."""
+    if provider == "minimax":
+        return "adaptive"
+    return "enabled"
+
+
 def _resolve_thinking(
     effort: str | None, temperature: float | None
 ) -> tuple[dict, str | None, str, float | None]:
-    """Map `effort` onto DeepSeek V4's per-request thinking-mode toggle.
+    """Map `effort` onto the active provider's per-request thinking-mode
+    toggle.
 
-    "high"/"max" enable thinking mode: `thinking` goes in `extra_body` (no
-    native SDK field for it), while `reasoning_effort` is returned separately
-    to be passed as its own top-level kwarg — matching DeepSeek's documented
-    example (https://api-docs.deepseek.com/guides/thinking_mode) rather than
-    relying on extra_body's top-level merge to carry it. temperature is
-    documented as a no-op in thinking mode, so it's only forwarded if the
-    caller set one explicitly. Anything else disables thinking and defaults
-    temperature to 0.0 — DeepSeek's own recommendation for code/math — unless
-    the caller overrode it.
+    "high"/"max" enable thinking mode; anything else disables it. The
+    `thinking` payload goes in `extra_body` (no native SDK field for it).
+    The wire string for "thinking on" is provider-specific: DeepSeek V4
+    accepts `"enabled"` (https://api-docs.deepseek.com/guides/thinking_mode),
+    M3 accepts only `"adaptive"` — see `_thinking_type_on` for the
+    per-provider mapping and the verification citation.
 
-    Returns (extra_body, reasoning_effort_kwarg, resolved_effort_label, resolved_temperature).
+    The per-pipeline `effort` semantic is identical on both providers;
+    only the API wire string differs. The `resolved_effort` label
+    returned to callers stays provider-agnostic so `AskResult.effort` /
+    `ToolAskResult.effort` and log payloads render uniformly.
+
+    `reasoning_effort` is returned separately to be passed as its own
+    top-level kwarg — matching DeepSeek's documented example rather than
+    relying on extra_body's top-level merge to carry it. M3's API is not
+    (as of writing) documented to accept `reasoning_effort`; we forward
+    it anyway because M3's silent drop is friendlier than a 400 in the
+    unlikely case the provider rejects unknown kwargs. TODO(probe-with-
+    minimax-key): verify this against a live M3 call before relying on
+    the forward; if M3 400s on `reasoning_effort`, gate it on provider
+    in `ask()` / `ask_with_tools()` where the kwarg is forwarded.
+
+    temperature is documented as a no-op in thinking mode, so it's only
+    forwarded if the caller set one explicitly. Anything else disables
+    thinking and defaults temperature to 0.0 — DeepSeek's own
+    recommended setting for code/math — unless the caller overrode it.
+
+    Returns (extra_body, reasoning_effort_kwarg, resolved_effort_label,
+    resolved_temperature).
     """
-    if effort in ("high", "max"):
-        extra_body = {"thinking": {"type": "enabled"}}
+    provider = db.get_ai_provider()
+    thinking_on = effort in ("high", "max")
+    if thinking_on:
+        extra_body = {"thinking": {"type": _thinking_type_on(provider)}}
         return extra_body, effort, effort, temperature
     extra_body = {"thinking": {"type": "disabled"}}
     return extra_body, None, "non-thinking", (0.0 if temperature is None else temperature)
@@ -347,6 +386,11 @@ def ask(
     )
     if max_tokens is not None:
         create_kwargs["max_tokens"] = max_tokens
+    # TODO(probe-with-minimax-key): the top-level reasoning_effort kwarg below
+    # is DeepSeek's documented parameter. M3's 400 on `thinking.type=enabled`
+    # suggests it may also reject unknown kwargs — verify with a live call
+    # before relying on this path. If M3 400s on `reasoning_effort`, gate this
+    # on `db.get_ai_provider() != "minimax"`.
     if reasoning_effort is not None:
         create_kwargs["reasoning_effort"] = reasoning_effort
     if resolved_temperature is not None:
@@ -388,10 +432,15 @@ def _resolve_tool_choice(tool_choice, extra_body: dict):
     """DeepSeek's thinking mode (verified live, 2026-07-20) accepts `tools`
     but 400s on any forcing tool_choice — both "required" and a named
     {"type": "function", ...} — while accepting "auto"/"none"/omitted.
-    Downgrade a forcing choice to "auto" when thinking is enabled so
-    callers can always request the forced behavior and still run at
-    effort "high"/"max"."""
-    thinking_on = (extra_body.get("thinking") or {}).get("type") == "enabled"
+    M3's thinking mode is expected to share this behavior, but it has
+    not been probed live (no `MINIMAX_API_KEY` is configured in this
+    environment). Downgrade a forcing choice to "auto" when thinking is
+    on — regardless of which provider's wire string for "thinking on"
+    (`enabled` for deepseek, `adaptive` for minimax, via
+    `_thinking_type_on`) the extra_body carries — so callers can always
+    request the forced behavior and still run at effort "high"/"max"."""
+    provider = db.get_ai_provider()
+    thinking_on = (extra_body.get("thinking") or {}).get("type") == _thinking_type_on(provider)
     if thinking_on and tool_choice not in (None, "auto", "none"):
         return "auto"
     return tool_choice
@@ -436,6 +485,8 @@ def ask_with_tools(
         create_kwargs["max_tokens"] = max_tokens
     if tool_choice is not None:
         create_kwargs["tool_choice"] = tool_choice
+    # TODO(probe-with-minimax-key): see same comment in ask() above. If M3
+    # 400s on `reasoning_effort`, gate on provider here too.
     if reasoning_effort is not None:
         create_kwargs["reasoning_effort"] = reasoning_effort
     if resolved_temperature is not None:
@@ -459,6 +510,12 @@ def ask_with_tools(
         raise AIError("Error: response contained no choices")
 
     message_dict = choice.message.model_dump(exclude_none=True)
+    # TODO(probe-with-minimax-key): the strip above is None-safe and harmless
+    # if M3 doesn't return the field — but M3 may actively reject echoing
+    # `reasoning_content` back the way DeepSeek does. The current code does
+    # the right thing in both cases (strip when present, no-op when absent),
+    # so no change needed unless M3 returns `reasoning_content` and the
+    # follow-up request 400s despite our strip — probe to confirm.
     message_dict.pop("reasoning_content", None)
 
     tool_calls = [

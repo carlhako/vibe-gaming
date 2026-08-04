@@ -13,6 +13,14 @@
 # provider default is used unconditionally with no warning. The cost
 # column on /admin/stats is computed per-model from pricing.py; override
 # any model's rates via the PRICING_JSON env var.
+#
+# `effort: "high"` (thinking mode on) is the new default for every
+# pipeline including ask_ai. The `effort` semantic is provider-agnostic
+# (high/max enable thinking, anything else disables it); only the API
+# wire string for "thinking on" differs by provider — DeepSeek emits
+# `thinking.type=enabled`, M3 emits `thinking.type=adaptive` (server
+# picks reasoning depth per-call). The mapping lives in
+# ai_client._resolve_thinking / _thinking_type_on.
 
 game_web:
   host: "0.0.0.0"
@@ -172,10 +180,12 @@ multifile_agent:
 # much lower than newaiwebgame/enhanceaiwebgame above. Its own rate_limit
 # block keeps it from competing with real game generation's queue/budget
 # (db.count_recent_generation_requests/count_active_generation_requests take
-# a kind= filter for exactly this).
+# a kind= filter for exactly this). Thinking mode is on (effort: "high")
+# here too — same as every other pipeline; the cheaper-rate-limit block
+# above is what bounds spend, not skipping thinking.
 askaiwebgame:
   model: null                # null -> ai_client.MODEL_DEFAULT (deepseek-v4-pro)
-  effort: null                # null -> fast non-thinking path; a lookup/summarize task doesn't need chain-of-thought
+  effort: "high"             # thinking mode on — same posture as new/enhance/MFA (2026-08)
   timeout_seconds: 90
   max_tokens: 4000            # answers are short; bounds cost/latency
   rate_limit:

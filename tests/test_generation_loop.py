@@ -235,6 +235,55 @@ def test_forcing_tool_choice_downgraded_only_in_thinking_mode():
     assert ai._resolve_tool_choice("required", non_thinking) == "required"
 
 
+def test_forcing_tool_choice_downgraded_on_minimax_thinking(monkeypatch):
+    """M3's thinking-mode wire string is `adaptive` (not `enabled`). The
+    forcing-tool_choice downgrade must fire for M3's `adaptive` too, so
+    the generation loop's documented "always request the forced choice
+    and tolerate the occasional no-tool-call reply" contract holds under
+    either provider. The DeepSeek regression above pins the DeepSeek
+    branch; this pins the M3 branch (without it, the helper would
+    silently treat M3's adaptive as thinking-off and the downgrade would
+    never fire)."""
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "minimax")
+    forced = {"type": "function", "function": {"name": "submit_game"}}
+    thinking = {"thinking": {"type": "adaptive"}}
+    non_thinking = {"thinking": {"type": "disabled"}}
+
+    assert ai._resolve_tool_choice(forced, thinking) == "auto"
+    assert ai._resolve_tool_choice("required", thinking) == "auto"
+    assert ai._resolve_tool_choice("auto", thinking) == "auto"
+    assert ai._resolve_tool_choice(None, thinking) is None
+    # Regression: non-thinking path on M3 still passes forcing choices
+    # through unchanged.
+    assert ai._resolve_tool_choice(forced, non_thinking) == forced
+    assert ai._resolve_tool_choice("required", non_thinking) == "required"
+
+
+def test_resolve_tool_choice_provider_aware_no_cross_talk(monkeypatch):
+    """A thinking-on extra_body from one provider must NOT count as
+    thinking-on for the other. Specifically: a `thinking.type=enabled`
+    extra_body under the M3 provider toggle (which would be a
+    misconfiguration — M3 400s on `enabled` before it ever reaches this
+    code, but defensive parity matters) must NOT trigger the downgrade,
+    because M3's `thinking_on` value is `adaptive`. And vice versa:
+    `adaptive` under deepseek must NOT trigger the downgrade."""
+    forced = {"type": "function", "function": {"name": "submit_game"}}
+
+    # `enabled` extra_body under minimax provider — NOT thinking-on.
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "minimax")
+    assert (
+        ai._resolve_tool_choice(forced, {"thinking": {"type": "enabled"}})
+        == forced
+    )
+
+    # `adaptive` extra_body under deepseek provider — NOT thinking-on.
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "deepseek")
+    assert (
+        ai._resolve_tool_choice(forced, {"thinking": {"type": "adaptive"}})
+        == forced
+    )
+
+
 # ---------------------------------------------------------------------------
 # Sprint 4 Part A: automated content-moderation pass, hooked into
 # generate_game()'s success branch (run_generation_attempts itself is

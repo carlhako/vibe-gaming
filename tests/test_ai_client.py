@@ -146,3 +146,106 @@ def test_model_default_constant_is_v4_pro():
 def test_minimax_constants():
     assert ai_client.MINIMAX_BASE_URL == "https://api.minimax.io/v1"
     assert ai_client.MINIMAX_MODEL == "MiniMax-M3"
+
+
+# ---------------------------------------------------------------------------
+# ai_client._resolve_thinking / _thinking_type_on — per-provider wire-schema
+# mapping (M3 400s on DeepSeek's "enabled"; the wire string for "thinking on"
+# is provider-specific).
+# ---------------------------------------------------------------------------
+
+def test_thinking_type_on_per_provider():
+    """The 'thinking on' wire string is provider-specific. DeepSeek uses
+    'enabled' (caller picks reasoning depth via reasoning_effort); M3 uses
+    'adaptive' (server picks per-call). Both must be returned by the same
+    helper, so callers that detect thinking-on via dict comparison stay
+    correct under either provider's extra_body."""
+    assert ai_client._thinking_type_on("deepseek") == "enabled"
+    assert ai_client._thinking_type_on("minimax") == "adaptive"
+    # Unknown provider must default to DeepSeek's value — same posture as
+    # _client() / _resolve_model treating unknown providers as deepseek.
+    assert ai_client._thinking_type_on("unknown-provider") == "enabled"
+
+
+def test_resolve_thinking_deepseek_high_enables(monkeypatch):
+    """Regression: DeepSeek + effort='high' still emits the legacy wire
+    string. _resolve_thinking has been provider-aware since 2026-08; this
+    pins the DeepSeek branch to its old behavior."""
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "deepseek")
+    extra_body, reasoning_effort, resolved_effort, temperature = (
+        ai_client._resolve_thinking("high", None)
+    )
+    assert extra_body == {"thinking": {"type": "enabled"}}
+    assert reasoning_effort == "high"
+    assert resolved_effort == "high"
+    # temperature forwarded unchanged in thinking mode (documented no-op).
+    assert temperature is None
+
+
+def test_resolve_thinking_deepseek_none_disables(monkeypatch):
+    """Regression: DeepSeek + effort=None still disables thinking with
+    temperature defaulted to 0.0."""
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "deepseek")
+    extra_body, reasoning_effort, resolved_effort, temperature = (
+        ai_client._resolve_thinking(None, None)
+    )
+    assert extra_body == {"thinking": {"type": "disabled"}}
+    assert reasoning_effort is None
+    assert resolved_effort == "non-thinking"
+    assert temperature == 0.0
+
+
+def test_resolve_thinking_minimax_high_uses_adaptive(monkeypatch):
+    """M3 400s on 'enabled' (verified live 2026-08):
+        invalid thinking.type: "enabled" (allowed: adaptive, disabled) (2013)
+    so the M3 branch must emit 'adaptive' instead. reasoning_effort is
+    forwarded unchanged — whether M3 actually accepts it is unverified
+    (TODO(probe-with-minimax-key) in _resolve_thinking)."""
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "minimax")
+    extra_body, reasoning_effort, resolved_effort, temperature = (
+        ai_client._resolve_thinking("high", None)
+    )
+    assert extra_body == {"thinking": {"type": "adaptive"}}
+    assert reasoning_effort == "high"
+    assert resolved_effort == "high"
+    assert temperature is None
+
+
+def test_resolve_thinking_minimax_max_uses_adaptive(monkeypatch):
+    """M3 + effort='max' — server picks depth per-call, so the wire string
+    is the same as 'high'. The 'max' label still flows through to
+    resolved_effort so callers see what the caller asked for."""
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "minimax")
+    extra_body, reasoning_effort, resolved_effort, _temperature = (
+        ai_client._resolve_thinking("max", None)
+    )
+    assert extra_body == {"thinking": {"type": "adaptive"}}
+    assert reasoning_effort == "max"
+    assert resolved_effort == "max"
+
+
+def test_resolve_thinking_minimax_none_disables(monkeypatch):
+    """M3 + effort=None — disabled wire string is identical across
+    providers; only the 'on' value differs. temperature defaulted to 0.0."""
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "minimax")
+    extra_body, reasoning_effort, resolved_effort, temperature = (
+        ai_client._resolve_thinking(None, None)
+    )
+    assert extra_body == {"thinking": {"type": "disabled"}}
+    assert reasoning_effort is None
+    assert resolved_effort == "non-thinking"
+    assert temperature == 0.0
+
+
+def test_resolve_thinking_preserves_caller_temperature(monkeypatch):
+    """An explicit temperature must survive the resolve — DeepSeek's
+    documented no-op-in-thinking-mode applies; in non-thinking mode the
+    caller-supplied value flows through unchanged (no defaulting to 0.0
+    on top of a user-set value). Both providers, both modes."""
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "deepseek")
+    _, _, _, temperature = ai_client._resolve_thinking(None, 0.7)
+    assert temperature == 0.7
+
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "minimax")
+    _, _, _, temperature = ai_client._resolve_thinking(None, 0.7)
+    assert temperature == 0.7

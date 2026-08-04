@@ -174,9 +174,18 @@ MiniMax (`MINIMAX_API_KEY` + base URL `https://api.minimax.io/v1`, model
 id `MiniMax-M3`), selectable at runtime via the admin/stats provider
 toggle (db.get_ai_provider). When the toggle is `deepseek`,
 `ai_client.MODEL_DEFAULT` resolves to `deepseek-v4-pro`; when `minimax`,
-it resolves to `MiniMax-M3` and DeepSeek's thinking-mode toggling is not
-applied. Missing-key handling in `_client()` fails loudly with the
-relevant env-var name in the message before opening any connection.
+it resolves to `MiniMax-M3`. **Per-pipeline `effort: "high"` is on for
+every pipeline including ask_ai and content_moderation** (the "always
+thinking" posture, 2026-08). The `effort` semantic is identical on
+both providers; only the API wire string for "thinking on" differs:
+DeepSeek emits `thinking.type=enabled` (caller picks reasoning depth
+via `reasoning_effort`); M3 emits `thinking.type=adaptive` (server
+picks depth per-call, no caller knob). M3 400s on `enabled` with
+`invalid params, invalid thinking.type: "enabled" (allowed: adaptive,
+disabled) (2013)`. The mapping is in `_resolve_thinking` /
+`_thinking_type_on`. Missing-key handling in `_client()` fails loudly
+with the relevant env-var name in the message before opening any
+connection.
 
 `ai_client.ask_with_tools(messages, tools=..., tool_choice=..., ...)` is
 the multi-turn function-calling entry point the generation loop uses; the
@@ -185,9 +194,12 @@ strips `reasoning_content` from returned messages (DeepSeek rejects
 requests that echo it back). Verified live (2026-07-20): thinking mode
 accepts `tools` but 400s on any *forcing* `tool_choice` (named function
 or `"required"`), so `_resolve_tool_choice()` silently downgrades those
-to `"auto"` when thinking is enabled — the generation loop always asks
+to `"auto"` when thinking is on — the generation loop always asks
 for the forced choice and tolerates the occasional no-tool-call reply
-with a nudge. Non-thinking mode honors the forced choice.
+with a nudge. Non-thinking mode honors the forced choice. The
+`_resolve_tool_choice` "thinking on" detection is provider-aware
+(`enabled` for deepseek, `adaptive` for minimax) so the same downgrade
+fires under either provider's wire schema.
 
 Both `ask()` and `ask_with_tools()` pin `max_tokens` to
 `ai_client.MAX_OUTPUT_TOKENS` (150000 as of 2026-07-26 — see that
