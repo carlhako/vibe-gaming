@@ -1,0 +1,688 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no" />
+<title>Neon Pong</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #05060d;
+    color: #e8f6ff;
+    font-family: 'Courier New', ui-monospace, monospace;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+  }
+  #wrap {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  canvas {
+    display: block;
+    background: radial-gradient(ellipse at center, #0a1230 0%, #04050d 80%);
+    box-shadow: 0 0 60px rgba(0, 200, 255, 0.15), inset 0 0 80px rgba(0,0,0,0.6);
+    image-rendering: pixelated;
+    max-width: 100%;
+    max-height: 100%;
+  }
+  #hint {
+    position: fixed;
+    bottom: 8px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: #4a6b8a;
+    pointer-events: none;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="game" width="900" height="600"></canvas></div>
+<div id="hint">W/S or Arrow Keys &nbsp;•&nbsp; P to Pause &nbsp;•&nbsp; Space to Start/Restart</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------- Setup ----------
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // Logical resolution (we draw into W×H directly, no scaling needed)
+  const CX = W / 2;
+  const CY = H / 2;
+
+  // ---------- Audio (synthesized, no assets) ----------
+  let audioCtx = null;
+  function ensureAudio() {
+    if (!audioCtx) {
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) audioCtx = new AC();
+      } catch (e) { /* ignore */ }
+    }
+    return audioCtx;
+  }
+
+  function beep(freq, dur, type = 'square', gain = 0.08, slide = 0) {
+    const ac = ensureAudio();
+    if (!ac) return;
+    const t0 = ac.currentTime;
+    const osc = ac.createOscillator();
+    const g = ac.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t0);
+    if (slide) osc.frequency.exponentialRampToValueAtTime(Math.max(40, freq + slide), t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(gain, t0 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(g).connect(ac.destination);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.02);
+  }
+
+  function sfxPaddle()  { beep(620, 0.06, 'square',   0.10, 80);  }
+  function sfxWall()    { beep(420, 0.05, 'triangle', 0.06, -40); }
+  function sfxScore()   { beep(180, 0.35, 'sawtooth', 0.10, -120); }
+  function sfxWin()     { beep(880, 0.10, 'square', 0.10, 0);
+                          setTimeout(()=>beep(1100, 0.10, 'square', 0.10, 0), 110);
+                          setTimeout(()=>beep(1320, 0.20, 'square', 0.10, 0), 230); }
+  function sfxLose()    { beep(220, 0.30, 'sawtooth', 0.10, -150); }
+
+  // ---------- Game State ----------
+  const STATE = { MENU: 0, PLAYING: 1, PAUSED: 2, POINT: 3, GAMEOVER: 4 };
+  let state = STATE.MENU;
+
+  const PADDLE_W = 14;
+  const PADDLE_H = 96;
+  const PADDLE_MARGIN = 32;
+  const PADDLE_SPEED = 520; // px/sec
+
+  const player = {
+    x: PADDLE_MARGIN,
+    y: CY - PADDLE_H / 2,
+    w: PADDLE_W,
+    h: PADDLE_H,
+    vy: 0,
+    score: 0,
+  };
+  const ai = {
+    x: W - PADDLE_MARGIN - PADDLE_W,
+    y: CY - PADDLE_H / 2,
+    w: PADDLE_W,
+    h: PADDLE_H,
+    vy: 0,
+    score: 0,
+  };
+
+  const ball = {
+    x: CX,
+    y: CY,
+    r: 9,
+    vx: 0,
+    vy: 0,
+    speed: 0,           // current speed magnitude
+    baseSpeed: 360,     // launch speed
+    speedInc: 18,       // added per paddle hit
+    maxSpeed: 900,
+    trail: [],
+  };
+
+  const WIN_SCORE = 7;
+
+  const keys = Object.create(null);
+
+  // particles for visual feedback
+  const particles = [];
+  let screenShake = 0;
+  let pointFlash = 0;
+  let winner = null; // 'player' | 'ai'
+  let lastTime = performance.now();
+  let pointDelay = 0;
+  let serveDelay = 0;
+  let menuT = 0;
+
+  // ---------- Input ----------
+  window.addEventListener('keydown', (e) => {
+    const k = e.key;
+    keys[k.toLowerCase()] = true;
+    // Prevent page scroll on space/arrows
+    if ([' ', 'ArrowUp', 'ArrowDown'].includes(k)) e.preventDefault();
+
+    if (k === ' ') {
+      if (state === STATE.MENU || state === STATE.GAMEOVER) {
+        startGame();
+      } else if (state === STATE.PAUSED) {
+        state = STATE.PLAYING;
+      }
+    } else if (k.toLowerCase() === 'p') {
+      if (state === STATE.PLAYING) state = STATE.PAUSED;
+      else if (state === STATE.PAUSED) state = STATE.PLAYING;
+    } else if (k === 'Enter' && state === STATE.GAMEOVER) {
+      startGame();
+    }
+  }, { passive: false });
+
+  window.addEventListener('keyup', (e) => {
+    keys[e.key.toLowerCase()] = false;
+  });
+
+  // Touch / mouse: tap canvas to start; drag finger / move mouse to control paddle
+  let mouseY = null;
+  let touching = false;
+
+  canvas.addEventListener('mousemove', (e) => {
+    const r = canvas.getBoundingClientRect();
+    const y = (e.clientY - r.top) * (H / r.height);
+    mouseY = y;
+  });
+  canvas.addEventListener('mousedown', () => {
+    touching = true;
+    if (state === STATE.MENU || state === STATE.GAMEOVER) startGame();
+  });
+  canvas.addEventListener('mouseup', () => { touching = false; });
+
+  canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    touching = true;
+    const r = canvas.getBoundingClientRect();
+    const t = e.touches[0];
+    const y = (t.clientY - r.top) * (H / r.height);
+    mouseY = y;
+    if (state === STATE.MENU || state === STATE.GAMEOVER) startGame();
+  }, { passive: false });
+  canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    const r = canvas.getBoundingClientRect();
+    const t = e.touches[0];
+    const y = (t.clientY - r.top) * (H / r.height);
+    mouseY = y;
+  }, { passive: false });
+  canvas.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    touching = false;
+  }, { passive: false });
+
+  // ---------- Game Flow ----------
+  function resetScores() {
+    player.score = 0;
+    ai.score = 0;
+    winner = null;
+  }
+
+  function startGame() {
+    ensureAudio();
+    resetScores();
+    state = STATE.PLAYING;
+    serveBall(Math.random() < 0.5 ? 1 : -1);
+  }
+
+  function serveBall(dir) {
+    ball.x = CX;
+    ball.y = CY;
+    ball.speed = ball.baseSpeed;
+    // Random angle between -25 and 25 degrees, biased slightly toward vertical
+    const angle = (Math.random() * 0.6 - 0.3) * Math.PI; // -0.3π..0.3π
+    ball.vx = Math.cos(angle) * ball.speed * dir;
+    ball.vy = Math.sin(angle) * ball.speed;
+    ball.trail.length = 0;
+    serveDelay = 0.0; // ball moves immediately
+  }
+
+  function spawnParticles(x, y, color, count = 14, speed = 220) {
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = speed * (0.5 + Math.random() * 0.8);
+      particles.push({
+        x, y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s,
+        life: 0.6 + Math.random() * 0.3,
+        maxLife: 0.6 + Math.random() * 0.3,
+        color,
+        size: 2 + Math.random() * 2,
+      });
+    }
+  }
+
+  // ---------- Update ----------
+  function update(dt) {
+    // Global timers
+    if (screenShake > 0) screenShake = Math.max(0, screenShake - dt * 30);
+    if (pointFlash > 0) pointFlash = Math.max(0, pointFlash - dt * 2);
+    if (pointDelay > 0) pointDelay = Math.max(0, pointDelay - dt);
+
+    // Particles always animate
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.96;
+      p.vy *= 0.96;
+      p.life -= dt;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+
+    menuT += dt;
+
+    if (state === STATE.MENU || state === STATE.GAMEOVER) return;
+
+    if (state === STATE.PAUSED) return;
+
+    if (state === STATE.PLAYING) {
+      updatePlay(dt);
+    }
+  }
+
+  function updatePlay(dt) {
+    // Player paddle control
+    let pInput = 0;
+    if (keys['w'] || keys['arrowup']) pInput -= 1;
+    if (keys['s'] || keys['arrowdown']) pInput += 1;
+
+    if (pInput !== 0) {
+      player.vy = pInput * PADDLE_SPEED;
+      mouseY = null; // keyboard overrides mouse
+    } else if (mouseY != null && (touching || true)) {
+      // Direct paddle tracking via mouse/touch when no key pressed
+      const target = mouseY - player.h / 2;
+      const diff = target - player.y;
+      const maxStep = PADDLE_SPEED * dt;
+      if (Math.abs(diff) <= maxStep) player.y = target;
+      else player.y += Math.sign(diff) * maxStep;
+      player.vy = (target - player.y) / dt;
+    } else {
+      player.vy *= 0.85;
+      if (Math.abs(player.vy) < 1) player.vy = 0;
+    }
+
+    player.y += player.vy * dt;
+    if (player.y < 4) { player.y = 4; player.vy = 0; }
+    if (player.y + player.h > H - 4) { player.y = H - 4 - player.h; player.vy = 0; }
+
+    // AI paddle: tracks ball with a speed cap that grows with the rally
+    // Speed cap scales with ball speed and a base reaction factor.
+    const aiReaction = 0.86 + Math.min(0.12, (ball.speed - ball.baseSpeed) / 4000);
+    const aiMaxSpeed = Math.min(720, 320 + (ball.speed - ball.baseSpeed) * 0.9);
+    const aiTarget = ball.y - ai.h / 2;
+    const aiDiff = aiTarget - ai.y;
+    const aiStep = Math.sign(aiDiff) * Math.min(Math.abs(aiDiff), aiMaxSpeed * dt);
+    // Only move if the prediction is reasonably far — feels more natural
+    if (Math.abs(aiDiff) > 6) {
+      ai.y += aiStep * aiReaction;
+    } else {
+      ai.vy *= 0.8;
+    }
+    ai.vy = (aiStep / Math.max(dt, 1e-6));
+    if (ai.y < 4) ai.y = 4;
+    if (ai.y + ai.h > H - 4) ai.y = H - 4 - ai.h;
+
+    // Ball movement
+    const prevX = ball.x;
+    ball.x += ball.vx * dt;
+    ball.y += ball.vy * dt;
+
+    // Trail
+    ball.trail.push({ x: ball.x, y: ball.y, life: 0.25 });
+    if (ball.trail.length > 14) ball.trail.shift();
+    for (let i = ball.trail.length - 1; i >= 0; i--) {
+      ball.trail[i].life -= dt;
+      if (ball.trail[i].life <= 0) ball.trail.splice(i, 1);
+    }
+
+    // Wall collisions
+    if (ball.y - ball.r < 4) {
+      ball.y = 4 + ball.r;
+      ball.vy = Math.abs(ball.vy);
+      sfxWall();
+      spawnParticles(ball.x, 4, '#8ad8ff', 8, 160);
+    } else if (ball.y + ball.r > H - 4) {
+      ball.y = H - 4 - ball.r;
+      ball.vy = -Math.abs(ball.vy);
+      sfxWall();
+      spawnParticles(ball.x, H - 4, '#8ad8ff', 8, 160);
+    }
+
+    // Paddle collisions (AABB-circle approximation)
+    if (ball.vx < 0 && ball.x - ball.r < player.x + player.w &&
+        ball.x + ball.r > player.x &&
+        ball.y > player.y && ball.y < player.y + player.h &&
+        ball.x > player.x) {
+      handlePaddleHit(player, 1);
+    }
+    if (ball.vx > 0 && ball.x + ball.r > ai.x &&
+        ball.x - ball.r < ai.x + ai.w &&
+        ball.y > ai.y && ball.y < ai.y + ai.h &&
+        ball.x < ai.x + ai.w) {
+      handlePaddleHit(ai, -1);
+    }
+
+    // Scoring
+    if (pointDelay <= 0) {
+      if (ball.x + ball.r < 0) {
+        scorePoint('ai');
+      } else if (ball.x - ball.r > W) {
+        scorePoint('player');
+      }
+    }
+  }
+
+  function handlePaddleHit(p, dir) {
+    // Reflect horizontally and add angular component based on where on the paddle it hit
+    const rel = ((ball.y - (p.y + p.h / 2)) / (p.h / 2)); // -1..1
+    const maxAngle = Math.PI / 3; // 60 degrees max deflection
+    const angle = rel * maxAngle;
+
+    ball.speed = Math.min(ball.maxSpeed, ball.speed + ball.speedInc);
+    ball.vx = Math.cos(angle) * ball.speed * dir;
+    ball.vy = Math.sin(angle) * ball.speed;
+
+    // Push ball outside paddle to prevent sticking
+    if (dir === 1) ball.x = p.x + p.w + ball.r + 0.1;
+    else          ball.x = p.x - ball.r - 0.1;
+
+    sfxPaddle();
+    spawnParticles(ball.x, ball.y, dir === 1 ? '#7cffd0' : '#ff7c9c', 16, 260);
+    screenShake = 4;
+  }
+
+  function scorePoint(who) {
+    if (who === 'player') {
+      player.score++;
+      sfxScore();
+      screenShake = 8;
+      pointFlash = 1;
+      spawnParticles(CX, CY, '#7cffd0', 40, 380);
+    } else {
+      ai.score++;
+      sfxScore();
+      screenShake = 8;
+      pointFlash = 1;
+      spawnParticles(CX, CY, '#ff7c9c', 40, 380);
+    }
+
+    if (player.score >= WIN_SCORE || ai.score >= WIN_SCORE) {
+      winner = player.score >= WIN_SCORE ? 'player' : 'ai';
+      if (winner === 'player') sfxWin(); else sfxLose();
+      state = STATE.GAMEOVER;
+      return;
+    }
+
+    // Small pause then serve toward the player who just got scored on (standard rule)
+    state = STATE.PAUSED; // freeze briefly
+    pointDelay = 0;
+    setTimeout(() => {
+      if (state === STATE.GAMEOVER) return;
+      state = STATE.PLAYING;
+      // After AI scores, serve toward player (vx negative). After player scores, toward AI (vx positive).
+      serveBall(who === 'player' ? 1 : -1);
+    }, 650);
+  }
+
+  // ---------- Render ----------
+  function draw() {
+    // Screen shake transform
+    let sx = 0, sy = 0;
+    if (screenShake > 0) {
+      sx = (Math.random() - 0.5) * screenShake;
+      sy = (Math.random() - 0.5) * screenShake;
+    }
+
+    ctx.save();
+    ctx.translate(sx, sy);
+
+    // Background grid
+    drawBackground();
+
+    // Center dashed line
+    drawCenterLine();
+
+    // Scores
+    drawScores();
+
+    // Paddles
+    drawPaddle(player, '#7cffd0');
+    drawPaddle(ai, '#ff7c9c');
+
+    // Ball + trail
+    drawBall();
+
+    // Particles
+    drawParticles();
+
+    // Point flash overlay
+    if (pointFlash > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${pointFlash * 0.12})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    ctx.restore();
+
+    // Overlays (no shake)
+    if (state === STATE.MENU) drawMenu();
+    else if (state === STATE.PAUSED) drawPause();
+    else if (state === STATE.GAMEOVER) drawGameOver();
+  }
+
+  function drawBackground() {
+    // Subtle horizontal scanlines
+    ctx.fillStyle = '#04060f';
+    ctx.fillRect(0, 0, W, H);
+
+    // Vignette
+    const grad = ctx.createRadialGradient(CX, CY, 100, CX, CY, Math.max(W, H) * 0.7);
+    grad.addColorStop(0, 'rgba(20, 50, 90, 0.25)');
+    grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    // Scanlines
+    ctx.fillStyle = 'rgba(255,255,255,0.025)';
+    for (let y = 0; y < H; y += 3) ctx.fillRect(0, y, W, 1);
+  }
+
+  function drawCenterLine() {
+    ctx.fillStyle = 'rgba(140, 180, 230, 0.25)';
+    const dashH = 14;
+    const gap = 10;
+    for (let y = 6; y < H - 6; y += dashH + gap) {
+      ctx.fillRect(CX - 1, y, 2, dashH);
+    }
+  }
+
+  function drawScores() {
+    ctx.font = 'bold 88px "Courier New", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+
+    // Player score (left side, cyan)
+    ctx.fillStyle = 'rgba(124, 255, 208, 0.12)';
+    ctx.fillText(String(player.score), CX - 80 + 4, 24 + 4);
+    ctx.fillStyle = '#7cffd0';
+    ctx.fillText(String(player.score), CX - 80, 24);
+
+    // AI score (right side, pink)
+    ctx.fillStyle = 'rgba(255, 124, 156, 0.12)';
+    ctx.fillText(String(ai.score), CX + 80 + 4, 24 + 4);
+    ctx.fillStyle = '#ff7c9c';
+    ctx.fillText(String(ai.score), CX + 80, 24);
+
+    // Small labels
+    ctx.font = 'bold 12px "Courier New", monospace';
+    ctx.fillStyle = 'rgba(180,200,220,0.5)';
+    ctx.fillText('P1', CX - 80, 14);
+    ctx.fillText('CPU', CX + 80, 14);
+  }
+
+  function drawPaddle(p, color) {
+    // Glow
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = color;
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.shadowBlur = 0;
+
+    // Inner highlight
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillRect(p.x + 2, p.y + 2, Math.max(2, p.w / 4), p.h - 4);
+  }
+
+  function drawBall() {
+    // Trail
+    for (let i = 0; i < ball.trail.length; i++) {
+      const t = ball.trail[i];
+      const a = (t.life / 0.25) * 0.5;
+      const r = ball.r * (0.6 + (t.life / 0.25) * 0.4);
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(180, 230, 255, ${a * 0.5})`;
+      ctx.fill();
+    }
+
+    // Ball glow
+    ctx.shadowColor = '#ffffff';
+    ctx.shadowBlur = 24;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#dff6ff';
+    ctx.beginPath();
+    ctx.arc(ball.x - ball.r * 0.3, ball.y - ball.r * 0.3, ball.r * 0.45, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawParticles() {
+    for (const p of particles) {
+      const a = Math.max(0, p.life / p.maxLife);
+      ctx.globalAlpha = a;
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    }
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+  }
+
+  function drawMenu() {
+    // Dim
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // Title with pulsing glow
+    const pulse = 0.6 + 0.4 * Math.sin(menuT * 3);
+    ctx.shadowColor = '#7cffd0';
+    ctx.shadowBlur = 30 * pulse;
+    ctx.fillStyle = '#7cffd0';
+    ctx.font = 'bold 96px "Courier New", monospace';
+    ctx.fillText('NEON PONG', CX, CY - 90);
+
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#e8f6ff';
+    ctx.font = 'bold 18px "Courier New", monospace';
+    ctx.fillText('A RETRO ARCADE CLASSIC', CX, CY - 30);
+
+    ctx.fillStyle = '#9bb3cc';
+    ctx.font = '14px "Courier New", monospace';
+    ctx.fillText('First to ' + WIN_SCORE + ' points wins', CX, CY + 10);
+
+    // Blinking prompt
+    if (Math.floor(menuT * 1.6) % 2 === 0) {
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 22px "Courier New", monospace';
+      ctx.fillText('PRESS SPACE OR TAP TO START', CX, CY + 70);
+    }
+
+    ctx.fillStyle = '#5d7896';
+    ctx.font = '12px "Courier New", monospace';
+    ctx.fillText('W / S or Arrow Keys to move   •   P to pause   •   Mouse / Touch works too', CX, CY + 130);
+  }
+
+  function drawPause() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#7cffd0';
+    ctx.shadowColor = '#7cffd0';
+    ctx.shadowBlur = 20;
+    ctx.font = 'bold 64px "Courier New", monospace';
+    ctx.fillText('PAUSED', CX, CY - 10);
+
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#9bb3cc';
+    ctx.font = '16px "Courier New", monospace';
+    ctx.fillText('Press P or Space to resume', CX, CY + 40);
+  }
+
+  function drawGameOver() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const isWin = winner === 'player';
+    const headline = isWin ? 'VICTORY' : 'DEFEAT';
+    const color = isWin ? '#7cffd0' : '#ff7c9c';
+
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 30;
+    ctx.fillStyle = color;
+    ctx.font = 'bold 88px "Courier New", monospace';
+    ctx.fillText(headline, CX, CY - 80);
+
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#e8f6ff';
+    ctx.font = 'bold 22px "Courier New", monospace';
+    ctx.fillText(`Final:  ${player.score}  -  ${ai.score}`, CX, CY);
+
+    if (Math.floor(performance.now() / 500) % 2 === 0) {
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 20px "Courier New", monospace';
+      ctx.fillText('PRESS SPACE OR TAP TO PLAY AGAIN', CX, CY + 70);
+    }
+  }
+
+  // ---------- Main Loop ----------
+  function loop(now) {
+    const dt = Math.min(0.033, (now - lastTime) / 1000); // cap dt to avoid huge steps
+    lastTime = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  lastTime = performance.now();
+  requestAnimationFrame(loop);
+
+  // Idle ball motion on menu (gentle drift) so the screen isn't fully static
+  setInterval(() => {
+    if (state === STATE.MENU) {
+      ball.x = CX + Math.cos(menuT * 0.7) * 40;
+      ball.y = CY + Math.sin(menuT * 0.9) * 20;
+    }
+  }, 16);
+
+})();
+</script>
+</body>
+</html>
