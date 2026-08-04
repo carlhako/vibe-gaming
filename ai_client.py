@@ -71,6 +71,15 @@ MINIMAX_MODEL = "MiniMax-M3"
 MODEL_DEFAULT = "deepseek-v4-pro"  # 1.6T total / 49B active MoE, 1M ctx — best quality; was deepseek-v4-flash before 2026-07
 MODEL_PRO = "deepseek-v4-pro"      # alias kept for callers that named it explicitly
 
+# Per-provider known model sets. _resolve_model uses these to decide whether
+# an explicit per-pipeline `model=` pin is honored or silently swapped for
+# the provider default (see _resolve_model's docstring). Update in lockstep
+# with each provider's `GET /models` if a new model ships — a model not in
+# the active provider's set will fall back to the provider default on the
+# admin toggle, which is friendlier than a 400 from the API.
+_DEEPSEEK_MODELS = frozenset({"deepseek-v4-pro", "deepseek-v4-flash"})
+_MINIMAX_MODELS = frozenset({MINIMAX_MODEL})
+
 # DeepSeek V4's per-response completion ceiling, pinned explicitly so it's
 # stable and the generation loop's finish_reason == "length" truncation
 # handling has a known number to reason about. In thinking mode this budget
@@ -197,15 +206,42 @@ def _cached_tokens(usage) -> int:
 
 def _resolve_model(model: str | None) -> str:
     """Resolve the model id passed on the wire. An explicit per-pipeline
-    `model=` wins (so a config.yaml that still names deepseek-v4-flash
-    stays honored); otherwise we fall back to the active provider's
-    default — deepseek-v4-pro on the deepseek provider, MiniMax-M3 on the
-    minimax provider."""
-    if model:
+    `model=` is honored only when it matches the active provider's known
+    model set; otherwise we fall back to the active provider's default and
+    log a WARNING — same posture as _resolve_thinking silently ignoring
+    `effort` on minimax (the docstring's "Same `effort`-as-thinking-mode
+    semantics are NOT applied here — minimax's API does not (as of writing)
+    document the DeepSeek-style thinking toggle").
+
+    Why the fallback and not a hard raise: the admin provider toggle
+    (`db.set_ai_provider` via /admin/stats) overrides per-pipeline defaults
+    without editing config.yaml. config.yaml.example hardcodes
+    `model: "deepseek-v4-pro"` in newaiwebgame / enhanceaiwebgame /
+    multifile_agent, so a fresh clone whose only M3 action is to flip the
+    toggle would 400 with `unknown model 'deepseek-v4-pro'` on every
+    enhance, generate, ask, and content-moderation call — the worst UX
+    this code can deliver. The fallback makes the toggle "just work";
+    a user who pinned a deepseek model deliberately and then flipped the
+    toggle sees a log warning they can grep for, instead of a hidden
+    routing change.
+
+    None / empty `model` falls through to the provider default, unchanged.
+    """
+    provider = db.get_ai_provider()
+    known = _MINIMAX_MODELS if provider == "minimax" else _DEEPSEEK_MODELS
+    if model and model in known:
         return model
-    if db.get_ai_provider() == "minimax":
-        return MINIMAX_MODEL
-    return MODEL_DEFAULT
+    if model:
+        fallback = MINIMAX_MODEL if provider == "minimax" else MODEL_DEFAULT
+        _logger.warning(
+            "ai_client: model %r is not in the %s provider's known model set %s; "
+            "falling back to the provider default %r. "
+            "Update the pipeline's `model:` in config.yaml, set it to null to get "
+            "this default unconditionally, or flip the admin provider toggle back.",
+            model, provider, sorted(known), fallback,
+        )
+        return fallback
+    return MINIMAX_MODEL if provider == "minimax" else MODEL_DEFAULT
 
 
 def _resolve_thinking(

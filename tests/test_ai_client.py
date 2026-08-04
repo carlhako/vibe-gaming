@@ -67,14 +67,72 @@ def test_resolve_model_picks_provider_default(monkeypatch):
     assert ai_client._resolve_model(None) == "MiniMax-M3"
 
 
-def test_resolve_model_explicit_pin_still_wins(monkeypatch):
-    """A per-pipeline `model="deepseek-v4-flash"` override on the deepseek
-    provider still flows through (and survives the provider toggle)."""
+def test_resolve_model_pin_honored_on_matching_provider(monkeypatch):
+    """An explicit per-pipeline `model=` is honored when it matches the
+    active provider's known model set. Both directions, both providers:
+    deepseek-v4-flash on deepseek, MiniMax-M3 on minimax, and v4-pro on
+    deepseek — all should flow through unchanged."""
+    # deepseek provider, deepseek-flash pin
     monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "deepseek")
     assert ai_client._resolve_model("deepseek-v4-flash") == "deepseek-v4-flash"
-    # Even on the minimax provider, an explicit override wins.
+    assert ai_client._resolve_model("deepseek-v4-pro") == "deepseek-v4-pro"
+    # minimax provider, MiniMax-M3 pin
     monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "minimax")
-    assert ai_client._resolve_model("deepseek-v4-flash") == "deepseek-v4-flash"
+    assert ai_client._resolve_model("MiniMax-M3") == "MiniMax-M3"
+
+
+def test_resolve_model_cross_provider_falls_back(monkeypatch, caplog):
+    """A pin that names a model the active provider doesn't expose falls
+    back to the provider default and logs a WARNING — the friendly
+    counterpart of the 400 the API would otherwise return. Both
+    directions: deepseek pin on minimax, and minimax pin on deepseek.
+    Without this, a config.yaml that still names `deepseek-v4-pro` after
+    the admin flipped the toggle to MiniMax would 400 with `unknown
+    model 'deepseek-v4-pro'` on every enhance / generate / ask /
+    moderation call (job failing case, 2026-07-28)."""
+    import logging
+    caplog.set_level(logging.WARNING, logger="ai_client")
+
+    # deepseek model name on the minimax provider -> MiniMax-M3
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "minimax")
+    assert ai_client._resolve_model("deepseek-v4-pro") == "MiniMax-M3"
+    assert any(
+        "deepseek-v4-pro" in rec.getMessage() and "minimax" in rec.getMessage()
+        for rec in caplog.records
+    ), "expected a WARNING naming both the rejected model and the active provider"
+    caplog.clear()
+
+    # minimax model name on the deepseek provider -> deepseek-v4-pro
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "deepseek")
+    assert ai_client._resolve_model("MiniMax-M3") == "deepseek-v4-pro"
+    assert any(
+        "MiniMax-M3" in rec.getMessage() and "deepseek" in rec.getMessage()
+        for rec in caplog.records
+    ), "expected a WARNING naming both the rejected model and the active provider"
+
+
+def test_resolve_model_none_falls_through_to_provider_default(monkeypatch, caplog):
+    """A None / empty model arg still falls through to the provider default
+    without a WARNING — only explicit-but-incompatible pins warn."""
+    import logging
+    caplog.set_level(logging.WARNING, logger="ai_client")
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "deepseek")
+    assert ai_client._resolve_model(None) == "deepseek-v4-pro"
+    assert ai_client._resolve_model("") == "deepseek-v4-pro"
+    assert caplog.records == []
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "minimax")
+    assert ai_client._resolve_model(None) == "MiniMax-M3"
+    assert caplog.records == []
+
+
+def test_known_model_sets_cover_current_catalog():
+    """Sanity check: the frozensets _DEEPSEEK_MODELS and _MINIMAX_MODELS in
+    ai_client.py match the model ids the rest of this test file and
+    config.yaml.example actually pass around. A drift here means a new
+    model shipped and the cross-provider fallback would mask it
+    silently."""
+    assert ai_client._DEEPSEEK_MODELS == frozenset({"deepseek-v4-pro", "deepseek-v4-flash"})
+    assert ai_client._MINIMAX_MODELS == frozenset({"MiniMax-M3"})
 
 
 def test_model_default_constant_is_v4_pro():

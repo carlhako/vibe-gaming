@@ -3,10 +3,16 @@
 # (see .env.example).
 #
 # The active AI provider is selected at runtime via the admin/stats
-# provider toggle (DeepSeek / M3) — it overrides the per-pipeline `model:`
-# defaults below when the toggle moves off DeepSeek. The cost column on
-# /admin/stats is computed per-model from pricing.py; override any model's
-# rates via the PRICING_JSON env var.
+# provider toggle (DeepSeek / M3). Per-pipeline `model:` pins below are
+# honored only when they name a model the active provider exposes —
+# otherwise ai_client._resolve_model logs a WARNING and silently falls
+# back to the provider default (MiniMax-M3 on minimax, deepseek-v4-pro
+# on deepseek). That keeps the toggle "just working" out of the box on
+# a fresh clone whose config.yaml still names `deepseek-v4-pro`; if
+# you'd rather opt out, set `model: null` in the pipeline block and the
+# provider default is used unconditionally with no warning. The cost
+# column on /admin/stats is computed per-model from pricing.py; override
+# any model's rates via the PRICING_JSON env var.
 
 game_web:
   host: "0.0.0.0"
@@ -36,7 +42,7 @@ game_web:
 # mapped to.
 
 newaiwebgame:
-  model: "deepseek-v4-pro"
+  model: "deepseek-v4-pro"      # honored on DeepSeek; falls back to provider default (with a WARNING) if the admin toggle is on MiniMax — set null to skip the pin
   # model: "deepseek-v4-flash"    # still pin-able per pipeline if you need the cheaper fast model
   # model: "deepseek-chat"        # DEPRECATED, retires 2026-07-24 — use deepseek-v4-flash + effort other than high/max
   # model: "deepseek-reasoner"    # DEPRECATED, retires 2026-07-24 — use deepseek-v4-flash + effort: high
@@ -46,7 +52,7 @@ newaiwebgame:
   smoke_test_timeout_seconds: 20   # per generated-game Playwright headless load
 
 enhanceaiwebgame:
-  model: "deepseek-v4-pro"
+  model: "deepseek-v4-pro"      # same fallback semantics as newaiwebgame above
   # model: "deepseek-v4-flash"
   # model: "deepseek-chat"        # DEPRECATED, retires 2026-07-24
   # model: "deepseek-reasoner"    # DEPRECATED, retires 2026-07-24
@@ -77,7 +83,7 @@ multifile_agent:
   # is gitignored, so a config-only default would never reach prod. Uncomment
   # the flash line to opt back out.
   # model: "deepseek-v4-flash"
-  model: "deepseek-v4-pro"
+  model: "deepseek-v4-pro"     # same fallback semantics as newaiwebgame above
   effort: "high"
   timeout_seconds: 1800        # per ai_client.ask_with_tools() call
   max_steps: 60                # read/write/finish turns before the run pauses to ask
