@@ -1,5 +1,5 @@
 """
-ai_client — prompt DeepSeek from anywhere in this project.
+ai_client — prompt an OpenAI-compatible AI provider from anywhere in this project.
 
     import ai_client as ai
     answer = ai.ask("what is the capital of France?").text
@@ -13,28 +13,42 @@ Drop-in replacement for home-net's `irc_bot.libs.ai` (same `ask()` shape:
 game_generator.py / game_enhancer.py needed near-zero changes when ported
 out of that project.
 
-Talks to the DeepSeek API (OpenAI-compatible Chat Completions) via the
-`openai` SDK pointed at DeepSeek's base URL. Requires `DEEPSEEK_API_KEY` in
-the environment (see .env.example) — loaded via python-dotenv if a .env file
-is present.
+Two providers are supported, selectable at runtime via the admin/stats
+provider toggle (db.get_ai_provider returns "deepseek" or "minimax"):
 
-As of 2026-07, DeepSeek's own API (api.deepseek.com) exposes exactly two
-model families — `deepseek-v4-flash` and `deepseek-v4-pro` (confirmed via
-`GET /models`) — each with a "thinking" (chain-of-thought reasoning) mode
-that's toggled per-request rather than selected via a separate model name.
-The old `deepseek-chat` / `deepseek-reasoner` names (which used to be the
-way to pick fast-vs-reasoning) are legacy aliases for deepseek-v4-flash's
-non-thinking/thinking modes and are retired 2026-07-24 — do not use them.
+  * **deepseek** — api.deepseek.com via the `openai` SDK pointed at
+    DeepSeek's OpenAI-compatible base URL. Requires `DEEPSEEK_API_KEY` in
+    the environment (see .env.example). As of 2026-07, DeepSeek's own
+    API exposes two model families — `deepseek-v4-flash` and
+    `deepseek-v4-pro` (confirmed via `GET /models`) — each with a
+    "thinking" (chain-of-thought reasoning) mode that's toggled per-request
+    rather than selected via a separate model name. `effort` no longer
+    selects the model — `model` does (defaulting to deepseek-v4-pro). It
+    toggles thinking mode instead: "high" or "max" enables it (at that
+    reasoning depth, via the `thinking`/`reasoning_effort` request fields),
+    anything else runs the fast non-thinking path with temperature pinned
+    to 0.0 (DeepSeek's own recommended setting for code/math output — see
+    https://api-docs.deepseek.com/quick_start/parameter_settings), unless
+    the caller passes an explicit `temperature`. Pass `model` explicitly to
+    pin deepseek-v4-flash, deepseek-v4-pro, or (until retirement) a legacy
+    name.
 
-So unlike the old two-model scheme, `effort` no longer selects the model —
-`model` does (defaulting to deepseek-v4-flash). `effort` now toggles
-thinking mode instead: "high" or "max" enables it (at that reasoning depth,
-via the `thinking`/`reasoning_effort` request fields), anything else runs
-the fast non-thinking path with temperature pinned to 0.0 (DeepSeek's own
-recommended setting for code/math output — see
-https://api-docs.deepseek.com/quick_start/parameter_settings), unless the
-caller passes an explicit `temperature`. Pass `model` explicitly to pin
-deepseek-v4-pro or (until retirement) a legacy name.
+  * **minimax** — api.minimax.io/v1 via the same `openai` SDK. Requires
+    `MINIMAX_API_KEY` in the environment. The model id sent on the wire
+    is `MiniMax-M3`. Same `effort`-as-thinking-mode semantics are NOT
+    applied here — minimax's API does not (as of writing) document the
+    DeepSeek-style thinking toggle, so `effort` is silently ignored for
+    minimax calls and the request goes through without a `thinking` /
+    `reasoning_effort` override.
+
+Missing-key handling: `_client()` raises `AIError("Error: <VAR> is not set
+(see .env.example)")` before opening any connection, so a flip to a
+provider whose env var is unset fails loudly with a clear variable name
+rather than 401'ing silently mid-request.
+
+The active provider is read fresh inside `_client()` on every call (no
+in-process cache), so a gunicorn multi-worker process sees an admin toggle
+flip on the very next request — no restart needed.
 """
 
 import copy
@@ -51,8 +65,11 @@ import db
 load_dotenv()
 
 BASE_URL = "https://api.deepseek.com"
-MODEL_DEFAULT = "deepseek-v4-flash"  # 284B total / 13B active MoE, 1M ctx — fast + cheap
-MODEL_PRO = "deepseek-v4-pro"        # 1.6T total / 49B active MoE, 1M ctx — best quality
+MINIMAX_BASE_URL = "https://api.minimax.io/v1"
+MINIMAX_MODEL = "MiniMax-M3"
+
+MODEL_DEFAULT = "deepseek-v4-pro"  # 1.6T total / 49B active MoE, 1M ctx — best quality; was deepseek-v4-flash before 2026-07
+MODEL_PRO = "deepseek-v4-pro"      # alias kept for callers that named it explicitly
 
 # DeepSeek V4's per-response completion ceiling, pinned explicitly so it's
 # stable and the generation loop's finish_reason == "length" truncation
@@ -144,8 +161,26 @@ class ToolAskResult:
 
 
 def _client() -> OpenAI:
+    """Return an `openai.OpenAI` client pointed at the active provider's
+    endpoint. Reads db.get_ai_provider() on every call so an admin toggle
+    flip takes effect on the next request, no restart needed.
+
+    Missing-key handling: each provider checks its own env var and raises
+    `AIError` with the variable's name in the message, before opening any
+    connection — so a flip to a provider whose env var is unset fails
+    loudly with a clear, fixable error rather than 401'ing silently
+    mid-request."""
     if not db.is_ai_generation_enabled():
         raise AIError("Error: AI generation is currently disabled by an admin")
+    provider = db.get_ai_provider()
+    if provider == "minimax":
+        api_key = os.environ.get("MINIMAX_API_KEY")
+        if not api_key:
+            raise AIError("Error: MINIMAX_API_KEY is not set (see .env.example)")
+        return OpenAI(api_key=api_key, base_url=MINIMAX_BASE_URL)
+    # Default: "deepseek" (and any unknown provider, which db.get_ai_provider
+    # should never actually return — it validates on set and falls back to
+    # "deepseek" on read for unknown values).
     api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
         raise AIError("Error: DEEPSEEK_API_KEY is not set (see .env.example)")
@@ -161,7 +196,16 @@ def _cached_tokens(usage) -> int:
 
 
 def _resolve_model(model: str | None) -> str:
-    return model or MODEL_DEFAULT
+    """Resolve the model id passed on the wire. An explicit per-pipeline
+    `model=` wins (so a config.yaml that still names deepseek-v4-flash
+    stays honored); otherwise we fall back to the active provider's
+    default — deepseek-v4-pro on the deepseek provider, MiniMax-M3 on the
+    minimax provider."""
+    if model:
+        return model
+    if db.get_ai_provider() == "minimax":
+        return MINIMAX_MODEL
+    return MODEL_DEFAULT
 
 
 def _resolve_thinking(

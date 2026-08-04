@@ -52,14 +52,18 @@ def test_api_ai_status_default_enabled(isolated_db, games_dir, monkeypatch):
     client = make_client(games_dir, monkeypatch)
     resp = client.get("/api/ai-status")
     assert resp.status_code == 200
-    assert resp.get_json() == {"ai_generation_enabled": True}
+    body = resp.get_json()
+    assert body["ai_generation_enabled"] is True
+    assert body["ai_provider"] == "deepseek"
 
 
 def test_api_ai_status_reflects_toggle(isolated_db, games_dir, monkeypatch):
     db.set_ai_generation_enabled(False)
     client = make_client(games_dir, monkeypatch)
     resp = client.get("/api/ai-status")
-    assert resp.get_json() == {"ai_generation_enabled": False}
+    body = resp.get_json()
+    assert body["ai_generation_enabled"] is False
+    assert body["ai_provider"] == "deepseek"
 
 
 # ---------------------------------------------------------------------------

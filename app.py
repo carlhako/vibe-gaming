@@ -37,6 +37,7 @@ import builder
 import db
 import engines
 import game_generator
+import pricing
 import safety
 
 load_dotenv()  # so ADMIN_TOKEN (and anything else in .env) is set before any request
@@ -172,8 +173,7 @@ def _token_cost(tokens, cost_per_million):
     return tokens / 1_000_000 * cost_per_million
 
 
-def _attach_token_costs(rows, input_cost_per_million, output_cost_per_million,
-                        cached_input_cost_per_million=None):
+def _attach_token_costs(rows, pricing_table):
     """Mutates each history row in place, adding fresh_input_tokens plus
     input_cost/cached_input_cost/output_cost/total_cost (USD, or None when
     the corresponding token count is None) for the admin history page's
@@ -188,15 +188,23 @@ def _attach_token_costs(rows, input_cost_per_million, output_cost_per_million,
     ~4x and an 89%-cached explode by nearly 10x, which made the one number
     needed to judge that work useless.
 
+    Rates are looked up per-row by the row's recorded `model` name. A row
+    whose model isn't in `pricing_table` (e.g. a model id no longer
+    supported, or a brand new one not yet mapped) falls back to
+    `pricing.PRICING[DEFAULT_PRICING_KEY]` — better a slightly-wrong rate
+    than a blank cell, since blank cells hide the cost problem this whole
+    function exists to surface. Single source of truth for the rates
+    themselves is `pricing.PRICING` (overridable via the PRICING_JSON env
+    var) — see pricing.py's docstring.
+
     `cached_tokens` is DeepSeek's prompt_cache_hit_tokens: a SLICE of
     input_tokens, not an addition to it, so the fresh half is the difference
     (clamped, so a nonsensical row can't bill more cached tokens than it had
-    input). `cached_input_cost_per_million=None` bills cached tokens at the
-    full input rate — i.e. exactly this function's pre-Sprint-6a arithmetic,
-    which is what an unset DEEPSEEK_CACHED_INPUT_COST_PER_MILLION gets."""
-    if cached_input_cost_per_million is None:
-        cached_input_cost_per_million = input_cost_per_million
+    input)."""
     for row in rows:
+        input_rate, cached_input_rate, output_rate = pricing.rates_for(
+            row.get("model"), pricing_table,
+        )
         input_tokens = row.get("input_tokens")
         if input_tokens is None:
             fresh = cached = None
@@ -204,9 +212,9 @@ def _attach_token_costs(rows, input_cost_per_million, output_cost_per_million,
         else:
             cached = min(row.get("cached_tokens") or 0, input_tokens)
             fresh = input_tokens - cached
-            cached_cost = _token_cost(cached, cached_input_cost_per_million)
-            input_cost = _token_cost(fresh, input_cost_per_million) + cached_cost
-        output_cost = _token_cost(row.get("output_tokens"), output_cost_per_million)
+            cached_cost = _token_cost(cached, cached_input_rate)
+            input_cost = _token_cost(fresh, input_rate) + cached_cost
+        output_cost = _token_cost(row.get("output_tokens"), output_rate)
         row["fresh_input_tokens"] = fresh
         row["cached_input_cost"] = cached_cost
         row["input_cost"] = input_cost
@@ -680,11 +688,17 @@ def create_app(games_dir=None) -> Flask:
 
     @app.get("/api/ai-status")
     def api_ai_status():
-        """General-purpose "is AI generation enabled" flag — checked by
-        any page/feature gating an LLM-backed action (new_game, enhance,
-        and future AI features), not narrowly scoped to just these two
-        forms."""
-        return jsonify(ai_generation_enabled=db.is_ai_generation_enabled(conn=get_db()))
+        """General-purpose AI-status flags — checked by any page/feature
+        gating an LLM-backed action (new_game, enhance, and future AI
+        features), not narrowly scoped to just these two forms. Also
+        exposes the active provider so client-side UIs (status page
+        chat pane, future per-feature provider pickers) can render
+        model-aware labels without a second round-trip."""
+        conn = get_db()
+        return jsonify(
+            ai_generation_enabled=db.is_ai_generation_enabled(conn=conn),
+            ai_provider=db.get_ai_provider(conn=conn),
+        )
 
     @app.get("/play/<slug>")
     def play(slug):
@@ -1373,24 +1387,11 @@ def create_app(games_dir=None) -> Flask:
         history_page = min(history_page, history_pages)
         history_rows = db.get_generation_history(
             limit=history_per, offset=(history_page - 1) * history_per, conn=conn)
-        try:
-            input_cost_per_million = float(os.environ.get("DEEPSEEK_INPUT_COST_PER_MILLION", 0))
-        except ValueError:
-            input_cost_per_million = 0.0
-        try:
-            output_cost_per_million = float(os.environ.get("DEEPSEEK_OUTPUT_COST_PER_MILLION", 0))
-        except ValueError:
-            output_cost_per_million = 0.0
-        # Unset falls back to the full input rate, i.e. exactly the arithmetic
-        # this page used before Sprint 6a — nothing displayed moves until the
-        # var is actually set. See _attach_token_costs for why it matters.
-        try:
-            cached_input_cost_per_million = float(
-                os.environ["DEEPSEEK_CACHED_INPUT_COST_PER_MILLION"])
-        except (KeyError, ValueError):
-            cached_input_cost_per_million = input_cost_per_million
-        _attach_token_costs(history_rows, input_cost_per_million, output_cost_per_million,
-                            cached_input_cost_per_million)
+        # Per-model pricing table (see pricing.py): one row of rates per
+        # model id, with PRICING_JSON env var for partial overrides.
+        # _attach_token_costs looks up rates per row by its `model` field.
+        pricing_table = pricing.load_pricing()
+        _attach_token_costs(history_rows, pricing_table)
         _attach_engine(history_rows, games_by_id)
 
         plays_total = db.count_plays(conn=conn)
@@ -1406,8 +1407,7 @@ def create_app(games_dir=None) -> Flask:
             limit=ai_qa_per, offset=(ai_qa_page - 1) * ai_qa_per, kind="ask", conn=conn)
         # Ask-AI rows have no cached_tokens column at all, so the split is a
         # no-op for them and their figures are unchanged either way.
-        _attach_token_costs(ai_qa_rows, input_cost_per_million, output_cost_per_million,
-                            cached_input_cost_per_million)
+        _attach_token_costs(ai_qa_rows, pricing_table)
 
         def _stats_url(**overrides):
             params = dict(token=admin_token,
@@ -1446,6 +1446,15 @@ def create_app(games_dir=None) -> Flask:
             keep={"token": admin_token, "history_page": history_page, "history_per": history_per,
                   "plays_page": plays_page, "plays_per": plays_per})
 
+        # The History and AI-QA tabs' caveat paragraphs plus the
+        # explode-dialog data-attributes still render three scalar rates —
+        # these are the default-model rates (deepseek-v4-pro), since the
+        # per-row rate lives in the row's cost column itself and the caveat
+        # is a "what scale are we working at" hint rather than a per-model
+        # contract.
+        default_in, default_cached, default_out = pricing_table[
+            pricing.DEFAULT_PRICING_KEY
+        ]
         return render_template(
             "admin_stats.html",
             total_hits=total_hits, unique_clients=unique_clients, unique_ips=unique_ips,
@@ -1453,14 +1462,17 @@ def create_app(games_dir=None) -> Flask:
             all_games=all_games, admin_token=admin_token,
             all_users=all_users,
             history_rows=history_rows, history_pager=history_pager,
-            input_cost_per_million=input_cost_per_million,
-            output_cost_per_million=output_cost_per_million,
-            cached_input_cost_per_million=cached_input_cost_per_million,
+            input_cost_per_million=default_in,
+            output_cost_per_million=default_out,
+            cached_input_cost_per_million=default_cached,
+            pricing_table=pricing_table,
             plays_rows=plays_rows, plays_pager=plays_pager,
             ai_qa_rows=ai_qa_rows, ai_qa_pager=ai_qa_pager,
             page_sizes=_ADMIN_PAGE_SIZES,
             open_report_count=open_report_count,
             ai_generation_enabled=ai_generation_enabled,
+            ai_provider=db.get_ai_provider(conn=conn),
+            ai_providers=sorted(db._VALID_PROVIDERS),
         )
 
     @app.post("/admin/ai-generation-enabled")
@@ -1468,6 +1480,20 @@ def create_app(games_dir=None) -> Flask:
     def admin_set_ai_generation_enabled():
         enabled = request.form.get("enabled") == "1"
         db.set_ai_generation_enabled(enabled, conn=get_db())
+        return redirect(url_for("admin_stats", token=request.args.get("token")))
+
+    @app.post("/admin/ai-provider")
+    @require_admin_token
+    def admin_set_ai_provider():
+        """Set the active AI provider ("deepseek" or "minimax"). Validation
+        lives in db.set_ai_provider, which raises ValueError on an unknown
+        value rather than silently writing a typo (a typo'd provider would
+        make every subsequent AI call fail with AIError)."""
+        provider = (request.form.get("provider") or "").strip()
+        try:
+            db.set_ai_provider(provider, conn=get_db())
+        except ValueError as exc:
+            abort(400, description=str(exc))
         return redirect(url_for("admin_stats", token=request.args.get("token")))
 
     @app.get("/admin/games/download")

@@ -30,18 +30,18 @@ import json
 import sqlite3
 import sys
 
-# DeepSeek's published per-1M-token pricing, verified 2026-07-27 against
-# https://api-docs.deepseek.com/quick_start/pricing — (cache miss, cache hit,
-# output). RE-VERIFY before trusting these in new work: they are a vendor
-# pricing decision, not a constant, and this repo has already been burned once
-# by a number nobody re-checked (ai_client.MAX_OUTPUT_TOKENS). The whole reason
-# Sprint 6a exists is the 120:1 miss:hit ratio on pro; if that ratio moves, the
-# conclusions drawn from this report move with it.
-PRICING = {
-    "deepseek-v4-pro": (0.435, 0.003625, 0.870),
-    "deepseek-v4-flash": (0.140, 0.0028, 0.280),
-}
-DEFAULT_MODEL = "deepseek-v4-flash"
+import pricing
+
+# Pricing lives in pricing.py — single source of truth shared with
+# app.py's _attach_token_costs, so /admin/stats' cost column and this
+# offline report can never drift apart. The rates there were verified
+# 2026-07-27 against https://api-docs.deepseek.com/quick_start/pricing —
+# (cache miss, cache hit, output). RE-VERIFY before trusting them in new
+# work: they are a vendor pricing decision, not a constant, and this repo
+# has already been burned once by a number nobody re-checked
+# (ai_client.MAX_OUTPUT_TOKENS). The whole reason Sprint 6a exists is the
+# 120:1 miss:hit ratio on pro; if that ratio moves, the conclusions drawn
+# from this report move with it.
 
 
 def load_usage(conn, job_id):
@@ -71,7 +71,7 @@ def load_usage(conn, job_id):
 
 
 def rates(model):
-    return PRICING.get(model or "", PRICING[DEFAULT_MODEL])
+    return pricing.rates_for(model, pricing.load_pricing())
 
 
 def main(argv=None):

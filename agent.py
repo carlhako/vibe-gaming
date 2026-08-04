@@ -101,21 +101,15 @@ DEFAULT_MAX_MODULE_BYTES = ai.MAX_OUTPUT_TOKENS * 3
 # room for that fallback.
 DEFAULT_MODULE_WARN_RATIO = 0.5
 
-# The ReAct agent defaults to v4-pro where the rest of the app defaults to
-# ai.MODEL_DEFAULT (v4-flash) — this is the one pipeline with direct evidence
-# against flash. Exploding a 159KB single-IIFE game failed on flash four
-# times running, every time by failing to CONVERGE rather than by lacking
-# capability: it split the game sensibly and then audited its own modules
-# until the step budget ran out, never calling finish, so the run shipped
-# nothing. v4-pro reached verification in ~18 turns and passed, and cost less
-# per run ($0.35 vs $0.66) despite ~3.1x the token price.
-#
-# This is a CODE default rather than a config-only one on purpose: config.yaml
-# is gitignored, so anything set only there is invisible to every deployment
-# and every fresh clone — prod would silently run the configuration we have
-# four failed runs against. Same lesson as timeout_seconds' 120s -> 1800s.
-# cfg["model"] still wins, so flash remains one line away.
-DEFAULT_AGENT_MODEL = "deepseek-v4-pro"
+# The ReAct agent resolves its default through ai.MODEL_DEFAULT (= v4-pro
+# since 2026-07). Historical note: this was previously a separate
+# DEFAULT_AGENT_MODEL constant because at the time the rest of the app
+# defaulted to v4-flash and only the agent had direct evidence against it
+# (a 159KB single-IIFE game failed to CONVERGE on flash four times running).
+# Once ai.MODEL_DEFAULT itself flipped to v4-pro there was no longer a
+# meaningful split between "agent default" and "app default", so the
+# constant folded in. cfg["model"] still wins, so flash remains one line
+# away in config.yaml.
 
 # The explode pass needs a much tighter ceiling than an ordinary edit.
 # DEFAULT_MAX_MODULE_BYTES exists to stop a write that physically cannot be
@@ -194,7 +188,7 @@ def _finish_nudge_threshold(max_steps: int) -> int:
 # One shot, deliberately: a second prompt would mostly be asked of someone who
 # has already stopped watching, and the context guard is the backstop for a
 # run that genuinely needs more room than 100 turns. Both are CODE defaults
-# rather than config-only ones, for the DEFAULT_AGENT_MODEL reason —
+# rather than config-only ones, for the ai.MODEL_DEFAULT reason —
 # config.yaml is gitignored, so a config-only default never reaches a fresh
 # clone or a deployment. Set extra_steps_on_approval to 0 to disable the
 # prompt entirely, which is what a headless deployment wants.
@@ -227,7 +221,7 @@ _PRUNE_SENTINEL = "[context-pruned]"
 # it falls back to the manifest-only prompt rather than being truncated:
 # a partial snapshot is worse than none, because the model cannot tell which
 # half it is missing. Overridable via cfg["snapshot_max_bytes"]. A CODE
-# default, like DEFAULT_AGENT_MODEL, because config.yaml is gitignored.
+# default, like ai.MODEL_DEFAULT, because config.yaml is gitignored.
 DEFAULT_SNAPSHOT_MAX_BYTES = 400_000
 
 # The snapshot's file delimiters. Line-anchored and unmistakable, and
@@ -254,7 +248,7 @@ _SNAPSHOT_MARKER_RE = re.compile(r"^=====\s+(?:BEGIN|END)\b.*=====\s*$", re.M)
 # expressed as one exact match. Those are write_file in all but name, and get
 # write_file's treatment: removed outright (never a rewritten arguments slot,
 # see _compact_write_calls). Overridable via cfg["edit_compact_bytes"]; a CODE
-# default, like DEFAULT_AGENT_MODEL, because config.yaml is gitignored.
+# default, like ai.MODEL_DEFAULT, because config.yaml is gitignored.
 DEFAULT_EDIT_COMPACT_BYTES = 8_000
 
 # Sprint 6a made the conversation append-only, which means it only ever grows.
@@ -274,7 +268,7 @@ DEFAULT_EDIT_COMPACT_BYTES = 8_000
 # 400_000-byte snapshot (~100K tokens) plus several more turns of large tool
 # results, and the nudge needs room to be acted on, not just heard.
 # Overridable via cfg["context_soft_limit_tokens"]; a CODE default, like
-# DEFAULT_AGENT_MODEL, because config.yaml is gitignored.
+# ai.MODEL_DEFAULT, because config.yaml is gitignored.
 DEFAULT_CONTEXT_SOFT_LIMIT_TOKENS = 700_000
 
 # Fraction of ai.CONTEXT_WINDOW_TOKENS at which the run stops on its own. Not
@@ -2725,9 +2719,9 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
             "Remove the key from config.yaml."
         )
     # `or` rather than a get() default, so an explicitly blank model in a
-    # config still lands on the agent's own default instead of falling
-    # through to ai_client's app-wide one (see DEFAULT_AGENT_MODEL).
-    model = cfg.get("model") or DEFAULT_AGENT_MODEL
+    # config still lands on ai.MODEL_DEFAULT (= v4-pro) instead of becoming
+    # a literal empty string passed to the API.
+    model = cfg.get("model") or ai.MODEL_DEFAULT
     effort = cfg.get("effort", "high")
     # 1800s, matching config.yaml.example and the two single-file pipelines —
     # NOT ai_client's own 120s default. A config.yaml predating the

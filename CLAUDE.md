@@ -156,20 +156,27 @@ page; `job_runner.py`'s poll loop is what actually calls them.
 `enhanceaiwebgame:` control model/effort/attempts/timeouts;
 `job_runner:` controls worker thread count and poll interval.
 
-## ai_client.py — the DeepSeek swap
+## ai_client.py — the AI provider
 
 `ai_client.ask(prompt, system_prompt=None, model=None, effort=None,
 temperature=None, timeout=120)` mirrors the `AskResult`/`AIError` shape of
 the original Claude-CLI wrapper it replaced. As of 2026-07, DeepSeek's own
-API exposes exactly two model families — `deepseek-v4-flash` (default) and
-`deepseek-v4-pro` — each with a chain-of-thought "thinking" mode toggled
-per-request rather than picked via model name, so `effort` no longer
-selects the model (`model` does); instead `"high"`/`"max"` enable thinking
-mode at that depth, anything else runs the fast non-thinking path with
-temperature pinned to 0.0 (DeepSeek's documented recommendation for
-code/math) unless overridden. The old `deepseek-chat`/`deepseek-reasoner`
-names retire 2026-07-24 — don't reintroduce them. Requires
-`DEEPSEEK_API_KEY` in the environment (`.env`, loaded via python-dotenv).
+API exposes two model families — `deepseek-v4-flash` and `deepseek-v4-pro`
+(the latter is now the platform default, replacing v4-flash) — each with
+a chain-of-thought "thinking" mode toggled per-request rather than picked
+via model name, so `effort` no longer selects the model (`model` does);
+instead `"high"`/`"max"` enable thinking mode at that depth, anything else
+runs the fast non-thinking path with temperature pinned to 0.0 (DeepSeek's
+documented recommendation for code/math) unless overridden. The old
+`deepseek-chat`/`deepseek-reasoner` names retire 2026-07-24 — don't
+reintroduce them. The platform also supports a second provider,
+MiniMax (`MINIMAX_API_KEY` + base URL `https://api.minimax.io/v1`, model
+id `MiniMax-M3`), selectable at runtime via the admin/stats provider
+toggle (db.get_ai_provider). When the toggle is `deepseek`,
+`ai_client.MODEL_DEFAULT` resolves to `deepseek-v4-pro`; when `minimax`,
+it resolves to `MiniMax-M3` and DeepSeek's thinking-mode toggling is not
+applied. Missing-key handling in `_client()` fails loudly with the
+relevant env-var name in the message before opening any connection.
 
 `ai_client.ask_with_tools(messages, tools=..., tool_choice=..., ...)` is
 the multi-turn function-calling entry point the generation loop uses; the

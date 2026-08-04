@@ -18,19 +18,34 @@
         <a class="back-link" href="{{ url_for('index') }}">&larr; back to the shelf</a>
         <div class="stats-header">
           <h1>Access stats</h1>
-          <form class="visibility-form ai-toggle-form" method="post"
-                action="{{ url_for('admin_set_ai_generation_enabled', token=admin_token) }}">
-            <label>
-              <input type="radio" name="enabled" value="1" {{ 'checked' if ai_generation_enabled }}
-                     onchange="this.form.submit()">
-              AI generation ON
-            </label>
-            <label>
-              <input type="radio" name="enabled" value="0" {{ 'checked' if not ai_generation_enabled }}
-                     onchange="this.form.submit()">
-              OFF
-            </label>
-          </form>
+          <div class="ai-toggle-row">
+            <form class="visibility-form ai-toggle-form" method="post"
+                  action="{{ url_for('admin_set_ai_generation_enabled', token=admin_token) }}">
+              <label>
+                <input type="radio" name="enabled" value="1" {{ 'checked' if ai_generation_enabled }}
+                       onchange="this.form.submit()">
+                AI generation ON
+              </label>
+              <label>
+                <input type="radio" name="enabled" value="0" {{ 'checked' if not ai_generation_enabled }}
+                       onchange="this.form.submit()">
+                OFF
+              </label>
+            </form>
+            <form class="visibility-form ai-toggle-form ai-provider-form" method="post"
+                  action="{{ url_for('admin_set_ai_provider', token=admin_token) }}">
+              <label>
+                <input type="radio" name="provider" value="deepseek" {{ 'checked' if ai_provider == 'deepseek' }}
+                       onchange="this.form.submit()">
+                DeepSeek
+              </label>
+              <label>
+                <input type="radio" name="provider" value="minimax" {{ 'checked' if ai_provider == 'minimax' }}
+                       onchange="this.form.submit()">
+                M3
+              </label>
+            </form>
+          </div>
         </div>
 
         <p>
@@ -247,12 +262,12 @@
           {{ pager(history_pager) }}
           {% if history_rows %}
           <p class="form-hint">
-            Estimated cost assumes ${{ '%.2f'|format(input_cost_per_million) }} / 1M fresh
-            input tokens, ${{ '%.4f'|format(cached_input_cost_per_million) }} / 1M cached
-            input tokens and ${{ '%.2f'|format(output_cost_per_million) }} / 1M output tokens
-            (<code>DEEPSEEK_INPUT_COST_PER_MILLION</code> /
-            <code>DEEPSEEK_CACHED_INPUT_COST_PER_MILLION</code> /
-            <code>DEEPSEEK_OUTPUT_COST_PER_MILLION</code> in <code>.env</code>).
+            Estimated cost assumes the default-model rates
+            (${{ '%.2f'|format(input_cost_per_million) }} / 1M fresh input,
+            ${{ '%.4f'|format(cached_input_cost_per_million) }} / 1M cached input,
+            ${{ '%.2f'|format(output_cost_per_million) }} / 1M output) — rows whose
+            model differs use that model's own rates instead. Override any model's
+            rates via the <code>PRICING_JSON</code> env var (see <code>pricing.py</code>).
             Cached input is the slice of a request DeepSeek served from its prefix
             cache — for v4-pro that bills at 1/120th of a fresh token, so a long
             agent run costs far less than its raw input count suggests.
@@ -352,10 +367,9 @@
           {{ pager(ai_qa_pager) }}
           {% if ai_qa_rows %}
           <p class="form-hint">
-            Estimated cost assumes ${{ '%.2f'|format(input_cost_per_million) }} / 1M input
-            tokens and ${{ '%.2f'|format(output_cost_per_million) }} / 1M output tokens
-            (<code>DEEPSEEK_INPUT_COST_PER_MILLION</code> / <code>DEEPSEEK_OUTPUT_COST_PER_MILLION</code>
-            in <code>.env</code>).
+            Estimated cost uses the per-model rates from <code>pricing.PRICING</code>;
+            ask-AI rows are essentially all <code>deepseek-v4-pro</code> by default.
+            Override any model's rates via the <code>PRICING_JSON</code> env var.
           </p>
           <div class="table-scroll">
           <table class="stats-table">

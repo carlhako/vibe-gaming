@@ -254,6 +254,34 @@ def set_ai_generation_enabled(enabled: bool, conn=None) -> None:
     set_setting(AI_GENERATION_ENABLED_KEY, "1" if enabled else "0", conn=conn)
 
 
+AI_PROVIDER_KEY = "ai_provider"
+_VALID_PROVIDERS = frozenset({"deepseek", "minimax"})
+DEFAULT_AI_PROVIDER = "deepseek"
+
+
+def get_ai_provider(conn=None) -> str:
+    """The active AI provider name (one of "deepseek", "minimax"). Defaults
+    to "deepseek" on a fresh DB or one with no ai_provider row set, so an
+    existing deployment never breaks on deploy. Read fresh inside
+    `ai_client._client()` on every call so a gunicorn multi-worker process
+    sees a toggle flip on the next request, no restart required."""
+    value = get_setting(AI_PROVIDER_KEY, conn=conn)
+    if value in _VALID_PROVIDERS:
+        return value
+    return DEFAULT_AI_PROVIDER
+
+
+def set_ai_provider(value: str, conn=None) -> None:
+    """Set the active AI provider. Rejects unknown values rather than
+    silently writing a typo, since an unknown provider would make every
+    subsequent AI call fail with AIError."""
+    if value not in _VALID_PROVIDERS:
+        raise ValueError(
+            f"unknown AI provider {value!r}; must be one of "
+            f"{sorted(_VALID_PROVIDERS)}")
+    set_setting(AI_PROVIDER_KEY, value, conn=conn)
+
+
 # Columns added after a table's initial CREATE TABLE IF NOT EXISTS shipped —
 # ALTER TABLE ADD COLUMN them in on an existing DB, since SQLite has no
 # "ADD COLUMN IF NOT EXISTS". Safe to re-run: skipped once the column exists.

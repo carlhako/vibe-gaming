@@ -50,7 +50,7 @@ import json
 import sqlite3
 from collections import Counter
 
-from agent_cost_report import DEFAULT_MODEL, PRICING
+import pricing
 
 
 def _classify_reads(events):
@@ -108,8 +108,8 @@ def main():
     read_stats = Counter()
     agent_runs = 0
     for job in jobs:
-        miss_rate, hit_rate, out_rate = PRICING.get(
-            job["model"] or DEFAULT_MODEL, PRICING[DEFAULT_MODEL])
+        miss_rate, hit_rate, out_rate = pricing.rates_for(
+            job["model"], pricing.load_pricing())
         events = [
             (r["role"], json.loads(r["data"]) if r["data"] else {})
             for r in conn.execute(

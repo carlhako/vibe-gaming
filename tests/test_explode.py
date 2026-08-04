@@ -1068,9 +1068,14 @@ def _model_used_for_explode(games_dir, multifile_cfg):
 
 
 def test_agent_defaults_to_pro_with_no_config_block(isolated_db, games_dir):
+    """When the multifile_agent config block is absent, the agent falls
+    back to ai.MODEL_DEFAULT (= deepseek-v4-pro since the 2026-07 flip).
+    Previously this test referenced agent.DEFAULT_AGENT_MODEL, which folded
+    into ai.MODEL_DEFAULT — see agent.py's header comment."""
+    import ai_client
     _setup_single_file_source(games_dir)
-    assert _model_used_for_explode(games_dir, None) == agent.DEFAULT_AGENT_MODEL
-    assert agent.DEFAULT_AGENT_MODEL == "deepseek-v4-pro"
+    assert _model_used_for_explode(games_dir, None) == ai_client.MODEL_DEFAULT
+    assert ai_client.MODEL_DEFAULT == "deepseek-v4-pro"
 
 
 def test_agent_defaults_to_pro_when_the_configured_model_is_blank(
@@ -1090,13 +1095,16 @@ def test_an_explicit_model_in_config_still_wins(isolated_db, games_dir):
     assert used == "deepseek-v4-flash"
 
 
-def test_the_agent_default_does_not_leak_into_the_single_file_pipelines(
+def test_the_single_file_pipelines_resolve_through_ai_client_default(
         isolated_db, games_dir):
-    """newaiwebgame/enhanceaiwebgame have no evidence against flash and must
-    keep resolving through ai_client's own default."""
+    """newaiwebgame/enhanceaiwebgame have no separate default — they read
+    ai_client.MODEL_DEFAULT. After the 2026-07 flip to v4-pro, that IS the
+    agent's default too; the historic "agent != ai_client" invariant no
+    longer holds (and was deleted with the fold of DEFAULT_AGENT_MODEL
+    into ai.MODEL_DEFAULT). What survives is: both resolve to v4-pro,
+    which this test pins."""
     import ai_client
-    assert ai_client.MODEL_DEFAULT == "deepseek-v4-flash"
-    assert agent.DEFAULT_AGENT_MODEL != ai_client.MODEL_DEFAULT
+    assert ai_client.MODEL_DEFAULT == "deepseek-v4-pro"
 
 
 # --- 3D games: the merged-module variant of the shared-scope contract ------
