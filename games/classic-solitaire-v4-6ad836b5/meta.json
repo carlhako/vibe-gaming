@@ -1,0 +1,11 @@
+{
+  "game_id": "6ad836b5d35f43c98cf32d91fcb40870",
+  "parent_game_id": "0b36f3ecb40641f7930892f6efdfe0e3",
+  "root_game_id": "d224166ce7f9431d856064848a9d365a",
+  "title": "Classic Solitaire (v4)",
+  "description": "Classic Klondike Solitaire with improved waste-pile dragging (always grabs the top card), better card stacking visuals, and refined hit areas.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-08-04T07:26:49.893390Z",
+  "version": 2,
+  "prompt": "dragging cards from the top left pile drags the wrong card - should always be top card. improve stacking visual."
+}
