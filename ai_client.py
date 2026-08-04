@@ -492,39 +492,66 @@ def ask_with_tools(
     if resolved_temperature is not None:
         create_kwargs["temperature"] = resolved_temperature
 
+    # NOTE: the try/except covers the full request-response cycle, not just
+    # the network call. The response processing below assumes a specific
+    # OpenAI-shaped payload (choice.message.tool_calls, response.usage, etc.)
+    # — and a non-OpenAI-shaped response from M3 (or any future provider)
+    # would otherwise raise something that's not AIError, propagate out of
+    # the worker thread, and silently kill it: the caller catches AIError
+    # and records an `ai_error` attempt, but a bare AttributeError /
+    # IndexError / TypeError slips through that catch and leaves the
+    # generation_requests row stuck in 'generating' with zero attempts and
+    # zero agent_events (no _log_response at prod WARNING level either).
+    # This block surfaces any unexpected shape as AIError so the caller
+    # gets a chance to retry / sweep / report it instead of orphaning the
+    # job. Verified empirically against the DeepSeek response (standard
+    # OpenAI shape, still works) and the one M3 response observed live
+    # (no `reasoning_content`, extra `service_tier`/`audio_content`/etc.
+    # fields the SDK ignores — also works).
     try:
         response = client.chat.completions.create(**create_kwargs)
+        response_dict = response.model_dump()
+        _log_response(response_dict)
+
+        choice = response.choices[0] if response.choices else None
+        if choice is None:
+            raise AIError("Error: response contained no choices")
+
+        message_dict = choice.message.model_dump(exclude_none=True)
+        # TODO(probe-with-minimax-key): the strip below is None-safe and
+        # harmless if M3 doesn't return the field — but M3 may actively
+        # reject echoing `reasoning_content` back the way DeepSeek does.
+        # The current code does the right thing in both cases (strip when
+        # present, no-op when absent), so no change needed unless M3
+        # returns `reasoning_content` and the follow-up request 400s
+        # despite our strip — probe to confirm.
+        message_dict.pop("reasoning_content", None)
+
+        tool_calls = [
+            ToolCall(id=tc.id, name=tc.function.name, arguments=tc.function.arguments)
+            for tc in (choice.message.tool_calls or [])
+        ]
+        text = (choice.message.content or "").strip()
+        input_tokens = response.usage.prompt_tokens if response.usage else 0
+        output_tokens = response.usage.completion_tokens if response.usage else 0
     except APITimeoutError:
         raise AIError(f"Error: timed out after {timeout}s")
     except APIError as exc:
         _log_api_error(exc)
         raise AIError(f"Error: {exc}")
+    except AIError:
+        raise
     except Exception as exc:
-        raise AIError(f"Error: {exc}")
-
-    response_dict = response.model_dump()
-    _log_response(response_dict)
-
-    choice = response.choices[0] if response.choices else None
-    if choice is None:
-        raise AIError("Error: response contained no choices")
-
-    message_dict = choice.message.model_dump(exclude_none=True)
-    # TODO(probe-with-minimax-key): the strip above is None-safe and harmless
-    # if M3 doesn't return the field — but M3 may actively reject echoing
-    # `reasoning_content` back the way DeepSeek does. The current code does
-    # the right thing in both cases (strip when present, no-op when absent),
-    # so no change needed unless M3 returns `reasoning_content` and the
-    # follow-up request 400s despite our strip — probe to confirm.
-    message_dict.pop("reasoning_content", None)
-
-    tool_calls = [
-        ToolCall(id=tc.id, name=tc.function.name, arguments=tc.function.arguments)
-        for tc in (choice.message.tool_calls or [])
-    ]
-    text = (choice.message.content or "").strip()
-    input_tokens = response.usage.prompt_tokens if response.usage else 0
-    output_tokens = response.usage.completion_tokens if response.usage else 0
+        # Any other exception here is an unexpected response shape from
+        # the provider, not a transport/HTTP failure. Re-raising as
+        # AIError with the type name keeps the caller's ai_error path
+        # (which records the attempt and retries per max_attempts) instead
+        # of letting the bare exception kill the worker thread silently.
+        provider = db.get_ai_provider()
+        raise AIError(
+            f"Error: failed to parse {provider} response "
+            f"({type(exc).__name__}: {exc})"
+        )
 
     return ToolAskResult(
         message=message_dict,

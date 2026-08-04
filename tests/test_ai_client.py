@@ -3,6 +3,8 @@ and API key for each provider, fails loudly with the relevant env-var name
 when the key is missing, and resolves `_resolve_model` per-provider.
 """
 
+from unittest import mock
+
 import pytest
 from openai import OpenAI
 
@@ -249,3 +251,95 @@ def test_resolve_thinking_preserves_caller_temperature(monkeypatch):
     monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "minimax")
     _, _, _, temperature = ai_client._resolve_thinking(None, 0.7)
     assert temperature == 0.7
+
+
+# --- ask_with_tools() defensive response processing ---------------------------
+
+def _patched_ask_with_tools(monkeypatch, mock_create):
+    """Wire ask_with_tools() through a fake openai client whose
+    `chat.completions.create` is `mock_create`. Bypasses the env-var key
+    check in _client() by setting the deepseek key."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-dummy")
+    monkeypatch.setattr(ai_client, "_client", lambda: mock.Mock())
+    monkeypatch.setattr(ai_client, "_client").chat.completions.create = mock_create
+    return lambda *a, **kw: ai_client.ask_with_tools(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"type": "function", "function": {"name": "submit_game"}}],
+        tool_choice="auto",
+        effort="low",
+    )
+
+
+def test_ask_with_tools_unexpected_response_shape_raises_ai_error(monkeypatch):
+    """A non-OpenAI-shaped response (e.g. from M3) that breaks the response
+    processing after the network call must surface as AIError, not as a bare
+    exception that kills the worker thread silently. See the NOTE in
+    ai_client.ask_with_tools() for the full reasoning."""
+    # Build a response where `choice.message` is None, so the
+    # `choice.message.model_dump(...)` call raises AttributeError.
+    # Previously this propagated out, killing the worker thread; now it
+    # must come back as AIError with the provider name in the message.
+    fake_response = mock.Mock()
+    fake_response.model_dump.return_value = {"id": "x", "choices": [{"message": None}], "usage": {}}
+    fake_response.choices = [mock.Mock()]
+    fake_response.choices[0].message = None  # <-- the trigger
+    fake_response.choices[0].finish_reason = "stop"
+    fake_response.usage = mock.Mock(prompt_tokens=10, completion_tokens=5)
+
+    fake_client = mock.Mock()
+    fake_client.chat.completions.create.return_value = fake_response
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-dummy")
+    monkeypatch.setattr(ai_client, "_client", lambda: fake_client)
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "deepseek")
+
+    with pytest.raises(ai_client.AIError) as exc_info:
+        ai_client.ask_with_tools(
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {"name": "submit_game"}}],
+            tool_choice="auto",
+            effort="low",
+        )
+    # Must mention the provider and the exception type so the ai_error
+    # attempt's `detail` is diagnostic, not just "AttributeError".
+    msg = str(exc_info.value)
+    assert "deepseek" in msg
+    assert "AttributeError" in msg
+
+
+def test_ask_with_tools_normal_response_still_works(monkeypatch):
+    """The defensive wrapping must not regress the happy path: a standard
+    OpenAI-shaped response with a single tool_call still produces a
+    ToolAskResult with the call's id/name/arguments extracted."""
+    fake_response = mock.Mock()
+    fake_response.model_dump.return_value = {"id": "x", "choices": [], "usage": {}}
+    fake_response.choices = [mock.Mock()]
+    fake_response.choices[0].message = mock.Mock()
+    fake_response.choices[0].message.model_dump.return_value = {
+        "role": "assistant", "content": "", "tool_calls": [{"id": "t1", "type": "function", "function": {"name": "submit_game", "arguments": "{}"}}],
+    }
+    tc = mock.Mock()
+    tc.id = "t1"
+    tc.function.name = "submit_game"
+    tc.function.arguments = "{}"
+    fake_response.choices[0].message.tool_calls = [tc]
+    fake_response.choices[0].message.content = ""
+    fake_response.choices[0].finish_reason = "tool_calls"
+    fake_response.usage = mock.Mock(prompt_tokens=10, completion_tokens=5)
+
+    fake_client = mock.Mock()
+    fake_client.chat.completions.create.return_value = fake_response
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-dummy")
+    monkeypatch.setattr(ai_client, "_client", lambda: fake_client)
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "deepseek")
+
+    result = ai_client.ask_with_tools(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"type": "function", "function": {"name": "submit_game"}}],
+        tool_choice="auto",
+        effort="low",
+    )
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].name == "submit_game"
+    assert result.finish_reason == "tool_calls"
