@@ -175,9 +175,10 @@ id `MiniMax-M3`), selectable at runtime via the admin/stats provider
 toggle (db.get_ai_provider). When the toggle is `deepseek`,
 `ai_client.MODEL_DEFAULT` resolves to `deepseek-v4-pro`; when `minimax`,
 it resolves to `MiniMax-M3`. **Per-pipeline `effort: "high"` is on for
-every pipeline including ask_ai and content_moderation** (the "always
-thinking" posture, 2026-08). The `effort` semantic is identical on
-both providers; only the API wire string for "thinking on" differs:
+every pipeline EXCEPT `enhanceaiwebgame`, which is `effort: "low"`**
+(the "always thinking" posture, with enhance as the deliberate
+exception, 2026-08-05). The `effort` semantic is identical on both
+providers; only the API wire string for "thinking on" differs:
 DeepSeek emits `thinking.type=enabled` (caller picks reasoning depth
 via `reasoning_effort`); M3 emits `thinking.type=adaptive` (server
 picks depth per-call, no caller knob). M3 400s on `enabled` with
@@ -186,6 +187,19 @@ disabled) (2013)`. The mapping is in `_resolve_thinking` /
 `_thinking_type_on`. Missing-key handling in `_client()` fails loudly
 with the relevant env-var name in the message before opening any
 connection.
+
+**Why `enhanceaiwebgame` is the exception.** DeepSeek respects the
+caller's `reasoning_effort`, so thinking on costs what you ask for.
+M3's `adaptive` mode is server-controlled, and on an enhance system
+prompt that includes the full source HTML (16-150 KB depending on the
+game) it picks very deep reasoning: measured locally (2026-08-05),
+a complex enhance of a 16 KB Pong clone took **876s with
+`effort: "high"`** vs **195s on a 61 KB Hex & Hollow with
+`effort: "low"`** — ~4.5× slowdown. With `max_attempts: 3` and the
+1800s per-call timeout, an M3 + thinking-on enhance that doesn't
+converge can burn 90 minutes before giving up. Create
+(`newaiwebgame`) keeps thinking on because its system prompt is
+~500 tokens and M3 reasoning there is fast.
 
 `ai_client.ask_with_tools(messages, tools=..., tool_choice=..., ...)` is
 the multi-turn function-calling entry point the generation loop uses; the

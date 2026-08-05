@@ -15,12 +15,24 @@
 # any model's rates via the PRICING_JSON env var.
 #
 # `effort: "high"` (thinking mode on) is the new default for every
-# pipeline including ask_ai. The `effort` semantic is provider-agnostic
-# (high/max enable thinking, anything else disables it); only the API
-# wire string for "thinking on" differs by provider — DeepSeek emits
-# `thinking.type=enabled`, M3 emits `thinking.type=adaptive` (server
-# picks reasoning depth per-call). The mapping lives in
+# pipeline EXCEPT enhanceaiwebgame, which is "low". The `effort` semantic
+# is provider-agnostic (high/max enable thinking, anything else disables
+# it); only the API wire string for "thinking on" differs by provider —
+# DeepSeek emits `thinking.type=enabled`, M3 emits `thinking.type=adaptive`
+# (server picks reasoning depth per-call). The mapping lives in
 # ai_client._resolve_thinking / _thinking_type_on.
+#
+# Why enhanceaiwebgame is the odd one out: on DeepSeek, thinking mode is
+# cheap for enhance (the model respects `reasoning_effort=high`), so the
+# "always thinking" posture is a quality win. On M3, `thinking.type=adaptive`
+# has no caller knob — the server picks reasoning depth — and it can spend
+# 15+ minutes on chain-of-thought about a 16KB source game with a
+# non-trivial prompt. Measured locally (2026-08-05): a complex enhance of
+# a 16KB Pong clone took 876s with effort: "high" vs 195s on a 61KB Hex &
+# Hollow with effort: "low". With max_attempts=3 and a 1800s per-call
+# timeout, an M3 + thinking-on stuck enhance can mean 90 minutes before
+# giving up. Create (newaiwebgame) keeps effort: "high" because its system
+# prompt is ~500 tokens and M3 reasoning there is fast.
 
 game_web:
   host: "0.0.0.0"
@@ -64,7 +76,9 @@ enhanceaiwebgame:
   # model: "deepseek-v4-flash"
   # model: "deepseek-chat"        # DEPRECATED, retires 2026-07-24
   # model: "deepseek-reasoner"    # DEPRECATED, retires 2026-07-24
-  effort: "high"             # enhancement/debugging is complex, keep thinking mode on
+  effort: "low"              # thinking mode OFF. Override to "high"/"max" only when the
+                             # provider toggle is on DeepSeek — see the file header note
+                             # for why M3 + thinking on hangs enhance jobs.
   timeout_seconds: 1800      # per ai_client.ask() call (30 min); see note above
   max_attempts: 3            # 1 initial + 2 retries; each failed attempt restores the backup first
   smoke_test_timeout_seconds: 20
