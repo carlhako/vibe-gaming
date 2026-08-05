@@ -1,0 +1,11 @@
+{
+  "game_id": "b6070c7c8c2a4382918081180851ceca",
+  "parent_game_id": "3b9b0c7122954cfcb3110cb22b2171f0",
+  "root_game_id": "9070c34f38c345c7aa13daa5cb8945d3",
+  "title": "Pac-Man Clone (v5)",
+  "description": "Classic Pac-Man arcade game with smarter ghost AI that actively patrols the whole maze and properly uses the side tunnels to teleport between left and right.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-08-05T02:47:26.217787Z",
+  "version": 5,
+  "prompt": "improve the enemy ai so they move around the whole level, they are getting stuck in the center.  make the enemy also use the teleport that goes from one side to the other."
+}
