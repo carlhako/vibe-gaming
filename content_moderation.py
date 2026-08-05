@@ -74,7 +74,16 @@ def check_game(html: str, description: str, notes: str) -> dict:
         result = ai.ask(
             prompt,
             system_prompt=_SYSTEM_PROMPT,
-            model=ai.MODEL_DEFAULT,  # pin to the cheap/fast model regardless of what "default" means elsewhere
+            # No explicit model — let _resolve_model pick the active
+            # provider's default. Pinning ai.MODEL_DEFAULT here would warn
+            # ("'deepseek-v4-pro' is not in the minimax provider's known
+            # model set") on every call once the admin toggle is flipped,
+            # and would silently route to MiniMax-M3 anyway via the
+            # fallback; the comment used to read "pin to the cheap/fast
+            # model regardless of what 'default' means elsewhere", but
+            # ai.MODEL_DEFAULT is v4-pro (the platform's general default,
+            # not specifically cheap), and tying moderation to one model
+            # name was the wrong abstraction in a multi-provider world.
             effort="high",  # thinking mode on — same posture as every other pipeline (2026-08)
             temperature=0.0,
             response_format={"type": "json_object"},

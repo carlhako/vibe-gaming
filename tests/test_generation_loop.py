@@ -222,7 +222,16 @@ def test_parse_submission_rejects(arguments):
 # ai_client._resolve_tool_choice (DeepSeek thinking-mode quirk)
 # ---------------------------------------------------------------------------
 
-def test_forcing_tool_choice_downgraded_only_in_thinking_mode():
+def test_forcing_tool_choice_downgraded_only_in_thinking_mode(monkeypatch):
+    """_resolve_tool_choice picks the active provider's wire string for
+    'thinking on' (enabled for deepseek, adaptive for minimax) — so the
+    helper depends on db.get_ai_provider(). Pin the deepseek branch
+    explicitly so the test doesn't read the prod ai_provider setting
+    (which has flipped to minimax as of 2026-08; the parallel M3 branch
+    has its own test below). Without this monkeypatch the helper would
+    silently treat `enabled` as NOT thinking-on under minimax and the
+    downgrade would never fire — which is exactly the regression."""
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "deepseek")
     forced = {"type": "function", "function": {"name": "submit_game"}}
     thinking = {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
     non_thinking = {"thinking": {"type": "disabled"}}

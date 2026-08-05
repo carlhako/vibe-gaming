@@ -60,12 +60,40 @@ import copy
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
 from openai import APIError, APITimeoutError, OpenAI
 
 import db
+
+# M3's thinking-mode chain-of-thought leaks into message.content as
+# ``<think>...</think>`` blocks preceding the actual answer (verified live
+# 2026-08-05 across four moderation calls — see moderation_calls rows 8-11
+# in vibegames.db). DeepSeek V4 keeps the same reasoning in a SEPARATE
+# ``reasoning_content`` field, which ask_with_tools() already strips (see
+# the comment on message_dict above). Stripping inline here symmetrizes
+# the two providers' ``AskResult.text`` / message-content shape, so:
+#   * ask() callers (content_moderation.check_game, ai_qa.answer_question)
+#     don't see the reasoning inline and can parse JSON / sanitize HTML
+#     without a think-block prefix.
+#   * ask_with_tools() callers don't echo the model's old chain-of-thought
+#     back as part of the assistant message on the next turn (saves the
+#     re-send cost; mostly clean thinking-on responses have idempotent
+#     tails anyway).
+# raw_response is left untouched on purpose — db.moderation_calls uses
+# raw_response verbatim and the chain-of-thought is the part admins want
+# to see when a verdict is suspicious. Idempotent on already-clean text.
+_THINK_BLOCK_RE = re.compile(r"<think.*?</think>", re.DOTALL)
+
+
+def _strip_think_blocks(text: str) -> str:
+    """Drop M3's chain-of-thought ``<think>...</think>`` blocks from a
+    one-shot ``AskResult.text`` or an ``ask_with_tools`` ``message.content``.
+    See the comment on ``_THINK_BLOCK_RE`` above for the provider
+    asymmetry this closes."""
+    return _THINK_BLOCK_RE.sub("", text)
 
 load_dotenv()
 
@@ -412,7 +440,10 @@ def ask(
     _log_response(response_dict)
 
     choice = response.choices[0] if response.choices else None
-    text = (choice.message.content or "").strip() if choice else ""
+    # Strip M3's inline thinking-mode chain-of-thought (see _THINK_BLOCK_RE
+    # docstring) so callers see only the final answer. raw_response keeps the
+    # unstripped full payload for audit/debug.
+    text = _strip_think_blocks((choice.message.content or "").strip()) if choice else ""
     input_tokens = response.usage.prompt_tokens if response.usage else 0
     output_tokens = response.usage.completion_tokens if response.usage else 0
 
@@ -526,12 +557,21 @@ def ask_with_tools(
         # returns `reasoning_content` and the follow-up request 400s
         # despite our strip — probe to confirm.
         message_dict.pop("reasoning_content", None)
+        # Same M3 chain-of-thought strip as ask() above, applied to the
+        # message we'll hand back to the caller (and that callers feed
+        # back as the prior assistant turn on the next call). Avoids
+        # echoing M3's old reasoning as part of the assistant message —
+        # saves the re-send cost on M3 and keeps the conversation history
+        # shaped like DeepSeek's (whose reasoning_content is already gone).
+        content = message_dict.get("content")
+        if isinstance(content, str):
+            message_dict["content"] = _strip_think_blocks(content)
 
         tool_calls = [
             ToolCall(id=tc.id, name=tc.function.name, arguments=tc.function.arguments)
             for tc in (choice.message.tool_calls or [])
         ]
-        text = (choice.message.content or "").strip()
+        text = _strip_think_blocks((choice.message.content or "").strip())
         input_tokens = response.usage.prompt_tokens if response.usage else 0
         output_tokens = response.usage.completion_tokens if response.usage else 0
     except APITimeoutError:

@@ -343,3 +343,130 @@ def test_ask_with_tools_normal_response_still_works(monkeypatch):
     assert len(result.tool_calls) == 1
     assert result.tool_calls[0].name == "submit_game"
     assert result.finish_reason == "tool_calls"
+
+
+# --- ask() / ask_with_tools() / _strip_think_blocks: M3 inline thinking strip
+# M3 emits its thinking-mode chain-of-thought inside message.content as
+# ``<think>...</think>`` blocks preceding the final answer (verified live
+# 2026-08, see moderation_calls rows 8-11 in vibegames.db). DeepSeek V4
+# keeps the same reasoning in a SEPARATE ``reasoning_content`` field that
+# ask_with_tools() already strips (see the comment on message_dict above).
+# Stripping here symmetrizes the two providers so callers
+# (content_moderation.check_game, ai_qa sanitization) get a clean answer
+# shape on either provider. See ``_THINK_BLOCK_RE`` docstring in
+# ai_client.py for the full reasoning.
+
+
+def test_strip_think_blocks_removes_inline_m3_thinking():
+    real_m3_response = (
+        "<think>The user wants me to review the visible, player-facing text of a Pac-Man clone. "
+        + "Let me list all of the visible text:\n\n"
+        + "1. Title: Pac-Man Clone\n2. SCORE: X\n3. READY!\n4. GAME OVER\n"
+        + "</think>\n\n"
+        + '{"flagged": false, "reason": ""}'
+    )
+    stripped = ai_client._strip_think_blocks(real_m3_response)
+    # The actual JSON answer must be the only thing left, parseable
+    # straight away (content_moderation.check_game's contract).
+    import json
+    parsed = json.loads(stripped.strip())
+    assert parsed == {"flagged": False, "reason": ""}
+
+
+def test_strip_think_blocks_is_idempotent_on_clean_text():
+    """DeepSeek V4 (and M3 in non-thinking mode) never emit think
+    blocks; the strip must be a no-op on already-clean text so the
+    behavior is uniform across providers and effort levels."""
+    assert ai_client._strip_think_blocks('{"flagged": false, "reason": ""}') == (
+        '{"flagged": false, "reason": ""}'
+    )
+    assert ai_client._strip_think_blocks("plain answer text") == "plain answer text"
+    assert ai_client._strip_think_blocks("") == ""
+
+
+def test_strip_think_blocks_handles_multiple_blocks():
+    a = "<think>first reasoning</think>middle<think>second reasoning</think>tail"
+    out = ai_client._strip_think_blocks(a).strip()
+    # The strip removes both think-blocks; nothing from inside either
+    # block survives in the result.
+    assert "first reasoning" not in out
+    assert "second reasoning" not in out
+
+
+def test_strip_think_blocks_preserves_newlines_outside_blocks():
+    a = "<think>reasoning</think>\n\nfinal"
+    assert ai_client._strip_think_blocks(a).strip() == "final"
+
+
+def _build_fake_response(raw_content):
+    """Build an OpenAI-shaped mock response carrying raw_content as the
+    assistant message body."""
+    fake_message = mock.Mock()
+    fake_message.content = raw_content
+    fake_message.tool_calls = []
+    fake_message.model_dump.return_value = {
+        "role": "assistant", "content": raw_content, "tool_calls": [],
+    }
+    fake_response = mock.Mock()
+    fake_response.model_dump.return_value = {
+        "id": "resp-x",
+        "choices": [{"message": {"content": raw_content, "tool_calls": []}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 4},
+    }
+    fake_response.choices = [mock.Mock()]
+    fake_response.choices[0].message = fake_message
+    fake_response.choices[0].finish_reason = "stop"
+    fake_response.usage = mock.Mock(prompt_tokens=12, completion_tokens=4)
+    return fake_response
+
+
+def test_ask_strips_think_blocks_from_result_text(monkeypatch):
+    """End-to-end: ask() must hand callers a result.text without an
+    inline think-block prefix. Regression for the production error
+    'content moderation reply unparseable, defaulting to unflagged'
+    caused by M3 emitting <think>...</think> ahead of the JSON
+    answer, paired with response_format=json_object."""
+    raw = (
+        "<think>some M3 reasoning\n\nstep 1\nstep 2</think>\n\n"
+        + '{"flagged": false, "reason": ""}'
+    )
+    fake_client = mock.Mock()
+    fake_client.chat.completions.create.return_value = _build_fake_response(raw)
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-dummy")
+    monkeypatch.setattr(ai_client, "_client", lambda: fake_client)
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "minimax")
+    monkeypatch.setattr(db, "is_ai_generation_enabled", lambda conn=None: True)
+    monkeypatch.setattr(ai_client, "_resolve_model", lambda m: "MiniMax-M3")
+
+    result = ai_client.ask("the prompt", system_prompt="you are a moderator")
+    import json
+    parsed = json.loads(result.text)  # MUST NOT raise
+    assert parsed == {"flagged": False, "reason": ""}
+    # raw_response is kept unredacted so the moderation admin page can
+    # still see what M3 was thinking when it reached the verdict.
+    assert "<think>" in result.raw_response["choices"][0]["message"]["content"]
+
+
+def test_ask_with_tools_strips_think_blocks_from_message_content(monkeypatch):
+    """The message_dict returned from ask_with_tools() is what callers
+    feed back as the prior assistant turn. M3 chain-of-thought leakage
+    there would re-send tokens on the next call and possibly confuse
+    the model. Strip in lockstep with ask() above."""
+    raw = "<think>reasoning chain</think>final answer"
+    fake_client = mock.Mock()
+    fake_client.chat.completions.create.return_value = _build_fake_response(raw)
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-dummy")
+    monkeypatch.setattr(ai_client, "_client", lambda: fake_client)
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "minimax")
+    monkeypatch.setattr(db, "is_ai_generation_enabled", lambda conn=None: True)
+    monkeypatch.setattr(ai_client, "_resolve_model", lambda m: "MiniMax-M3")
+
+    result = ai_client.ask_with_tools(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"type": "function", "function": {"name": "x"}}],
+        effort="low",
+    )
+    assert result.message["content"] == "final answer"
+    assert result.text == "final answer"

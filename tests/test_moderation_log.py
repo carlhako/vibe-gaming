@@ -211,3 +211,89 @@ def test_admin_moderation_shows_empty_state(isolated_db, games_dir, monkeypatch)
     resp = client.get("/admin/moderation?token=secret-token")
     assert resp.status_code == 200
     assert b"No moderation calls recorded yet." in resp.data
+
+def test_check_game_parses_m3_think_block_prefixed_response(monkeypatch):
+    """Regression for the production error 'content moderation reply
+    unparseable, defaulting to unflagged' (2026-08). M3 emits its
+    thinking-mode chain-of-thought inline as a think-block before the
+    final JSON answer; ai_client.ask() now strips the block so the
+    JSON parses cleanly. The previous behavior was that EVERY M3
+    moderation call returned flagged=False regardless of content,
+    silently defeating the moderation backstop."""
+    # The shape ai.ask() returns AFTER its internal strip — i.e.
+    # what content_moderation.check_game sees today. Simulates M3.
+    ask_result = ai.AskResult(
+        text='{"flagged": true, "reason": "asks player to enter their password on a fake login screen"}',
+        input_tokens=100, output_tokens=20,
+        model="MiniMax-M3", effort="high",
+        raw_response={"id": "resp-m3", "choices": [{"message": {"content": "<think>reasoning</think>answer"}}]},
+    )
+    with mock.patch.object(ai, "ask", return_value=ask_result):
+        result = content_moderation.check_game(
+            "<html>Title: LoginForm<button>Claim your prize</button>"
+            "<input name='password'></html>",
+            "a login-themed game",
+            "",
+        )
+
+    assert result["flagged"] is True, (
+        "moderation MUST catch the password-soliciting UI; before the "
+        "think-block strip, this exact input would have slipped through "
+        "as flagged=False (see the unparseable-reply swallow path)."
+    )
+    assert "password" in result["reason"]
+    assert result["model"] == "MiniMax-M3"
+
+def test_check_game_end_to_end_through_ask_strip_with_m3_response(monkeypatch):
+    """End-to-end regression: simulate the real M3 provider returning
+    a JSON answer wrapped in a think-block prefix, run ai.ask() through
+    content_moderation.check_game(), and prove the verdict survives
+    the full chain. Without ai.ask()'s strip (added 2026-08), the
+    production error 'content moderation reply unparseable, defaulting
+    to unflagged' fired on EVERY M3 moderation call, silently defeating
+    the moderation backstop regardless of content."""
+    from openai.types.chat import ChatCompletion, ChatCompletionMessage
+
+    # The exact shape M3 returns: message.content = think-blocks + final JSON
+    raw = (
+        "<think>Let me check this game for phishing. \n\n"
+        + "Looking at the visible text: the player is told to enter their "
+        + "social security number to claim a prize. This is a classic "
+        + "phishing pattern. I'm flagging it." + "</think>" + "\n\n"
+        + '{"flagged": true, "reason": "solicits social security number"}'
+    )
+
+    fake_response = mock.Mock()
+    fake_response.model_dump.return_value = {
+        "id": "resp-e2e",
+        "choices": [{"message": {"content": raw, "role": "assistant"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 50, "completion_tokens": 30},
+    }
+    fake_response.choices = [mock.Mock()]
+    fake_message = mock.Mock()
+    fake_message.content = raw
+    fake_response.choices[0].message = fake_message
+    fake_response.choices[0].finish_reason = "stop"
+    fake_response.usage = mock.Mock(prompt_tokens=50, completion_tokens=30)
+
+    fake_client = mock.Mock()
+    fake_client.chat.completions.create.return_value = fake_response
+
+    monkeypatch.setenv("MINIMAX_API_KEY", "sk-test-dummy")
+    monkeypatch.setattr(ai, "_client", lambda: fake_client)
+    monkeypatch.setattr(db, "get_ai_provider", lambda conn=None: "minimax")
+    monkeypatch.setattr(db, "is_ai_generation_enabled", lambda conn=None: True)
+    monkeypatch.setattr(ai, "_resolve_model", lambda m: "MiniMax-M3")
+
+    result = content_moderation.check_game("<html>enter SSN to claim</html>", "a phishing game", "")
+
+    # The critical assertion: this used to return flagged=False because
+    # the json.loads() threw on the think-block prefix.
+    assert result["flagged"] is True
+    assert "social security number" in result["reason"]
+    # raw_response keeps the full think-block chain for admin audit.
+    assert "<think>" in result["raw_response"]["choices"][0]["message"]["content"]
+    # The model field reflects what was actually called, not the bogus
+    # default-deepseek-pro that the previous version of content_moderation
+    # hard-coded (which then triggered the _resolve_model fallback warning).
+    assert result["model"] == "MiniMax-M3"
