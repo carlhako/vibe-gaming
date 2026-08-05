@@ -1,0 +1,11 @@
+{
+  "game_id": "3b9b0c7122954cfcb3110cb22b2171f0",
+  "parent_game_id": "32ffcbc50c7749e0a54f40b7674f8799",
+  "root_game_id": "9070c34f38c345c7aa13daa5cb8945d3",
+  "title": "Pac-Man Clone (v4)",
+  "description": "Pac-Man clone with a fully connected maze \u2014 the ghost house door is open, the interior is one room, and side passages run alongside the ghost house so no corridors are closed off.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-08-05T00:12:04.504604Z",
+  "version": 4,
+  "prompt": "fix the pacman game there are closed sections in the middle where the enemy cant get out, all corridors should be linked and no closed off areas like a real pacman game."
+}
