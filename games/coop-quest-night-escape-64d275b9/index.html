@@ -1,0 +1,2121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Coop Quest: Night Escape</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #04040d;
+  overflow: hidden;
+  font-family: 'Courier New', 'Lucida Console', monospace;
+  color: #eee;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  user-select: none;
+}
+canvas {
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  border: 3px solid #2a2438;
+  background: #06061a;
+  box-shadow: 0 0 40px rgba(80, 60, 140, 0.5);
+  cursor: crosshair;
+}
+#hud {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  font-size: 12px;
+  text-shadow: 2px 2px 0 #000;
+  pointer-events: none;
+  z-index: 10;
+  line-height: 1.45;
+  background: rgba(0,0,0,0.55);
+  padding: 8px 12px;
+  border: 1px solid #444;
+  max-width: 240px;
+}
+#hint {
+  position: fixed;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  text-shadow: 2px 2px 0 #000;
+  pointer-events: none;
+  z-index: 10;
+  color: #aaa;
+  text-align: center;
+  background: rgba(0,0,0,0.5);
+  padding: 5px 14px;
+  border: 1px solid #333;
+}
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="600"></canvas>
+<div id="hud"></div>
+<div id="hint">WASD / Arrow keys = move • E = interact / climb / escape • F = ability • Right-click (Spot) = aim Black Hole</div>
+<script>
+"use strict";
+
+// ============================================================
+// CANVAS SETUP
+// ============================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+const W = canvas.width;
+const H = canvas.height;
+
+// ============================================================
+// GLOBAL STATE
+// ============================================================
+let state = 'menu';          // menu, coop, backyard, shedTop, cutscene, ending
+let character = null;        // 'terry', 'spot', 'charlet'
+let now = 0;
+let lastT = performance.now();
+let gameTime = 0;            // elapsed seconds since run started
+let message = '';
+let messageTimer = 0;
+let endingType = null;       // 'bad', 'goodish', 'good'
+let cutsceneStep = 0;
+let cutsceneT = 0;
+let endingTimer = 0;
+let particles = [];
+
+// ============================================================
+// PLAYER
+// ============================================================
+const PLAYER_SPEED = 175;
+const player = {
+  x: 75, y: 300,
+  vx: 0, vy: 0,
+  facing: 1,
+  walkPhase: 0,
+  onShed: false,
+  onGardenBed: false,
+  inCoop: true,
+  inPool: false,
+  height: 0  // for flight
+};
+
+// ============================================================
+// COOPER (the brindle monster dog)
+// ============================================================
+const COOPER_LURK_SPEED = PLAYER_SPEED * 0.7;   // 122.5
+const COOPER_CHASE_SPEED = PLAYER_SPEED * 0.92; // 161
+const cooper = {
+  x: 760, y: 340,
+  vx: 0, vy: 0,
+  facing: -1,
+  walkPhase: 0,
+  state: 'lurking',         // lurking, chasing, stunned
+  stunTimer: 0,
+  noChaseTimer: 0,
+  visionRange: 210,
+  wanderAngle: 0,
+  wanderTimer: 0,
+  lastSeenX: 0,
+  lastSeenY: 0
+};
+
+// ============================================================
+// ABILITIES
+// ============================================================
+const abilities = {
+  terry: {
+    name: 'FLIGHT',
+    active: false,
+    duration: 2.6,
+    timer: 0,
+    cooldown: 0,
+    maxCD: 15,
+    ready: true
+  },
+  spot: {
+    name: 'BLACK HOLE',
+    active: false,
+    duration: 1.5,
+    timer: 0,
+    cooldown: 0,
+    maxCD: 37,
+    x: 0, y: 0,
+    animT: 0,
+    noChaseTimer: 0
+  },
+  charlet: {
+    name: 'MULLET FORM',
+    active: false,
+    duration: 4,
+    timer: 0,
+    cooldown: 0,
+    maxCD: 34,
+    poolEntryX: 0,
+    poolEntryY: 0,
+    splashT: 0
+  }
+};
+
+// ============================================================
+// MAP OBJECTS
+// ============================================================
+const map = {
+  coop:          { x: 10,  y: 195, w: 130, h: 210 },
+  coopFloorY:    395,
+  coopHole:      { x: 130, y: 290, w: 30,  h: 38 },
+
+  trees: [
+    { x: 235, y: 200, r: 28 },
+    { x: 470, y: 285, r: 28 }
+  ],
+
+  pool:          { x: 305, y: 420, w: 180, h: 135 },
+  poolFence:     { x: 300, y: 410, w: 190, h: 8 },
+
+  gardenBeds: [
+    { x: 175, y: 475, w: 90, h: 45, climbable: false },
+    { x: 505, y: 430, w: 95, h: 50, climbable: true }
+  ],
+
+  bananaTrees: [
+    { x: 565, y: 155 },
+    { x: 605, y: 178 },
+    { x: 645, y: 155 },
+    { x: 685, y: 178 },
+    { x: 725, y: 155 }
+  ],
+
+  shed:          { x: 620, y: 315, w: 150, h: 165 }
+};
+
+// ============================================================
+// INPUT
+// ============================================================
+const keys = {};
+const justPressed = {};
+let mouseX = W / 2, mouseY = H / 2;
+
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (!keys[k]) justPressed[k] = true;
+  keys[k] = true;
+});
+window.addEventListener('keyup', e => {
+  keys[e.key.toLowerCase()] = false;
+});
+
+function getCanvasMouse(e) {
+  const rect = canvas.getBoundingClientRect();
+  const sx = canvas.width / rect.width;
+  const sy = canvas.height / rect.height;
+  return {
+    x: Math.max(0, Math.min(W, (e.clientX - rect.left) * sx)),
+    y: Math.max(0, Math.min(H, (e.clientY - rect.top) * sy))
+  };
+}
+
+canvas.addEventListener('mousemove', e => {
+  const m = getCanvasMouse(e);
+  mouseX = m.x; mouseY = m.y;
+});
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('mousedown', e => {
+  const m = getCanvasMouse(e);
+  mouseX = m.x; mouseY = m.y;
+  if (e.button === 0) {
+    if (state === 'menu') handleMenuClick(m.x, m.y);
+    else if (state === 'ending') {
+      if (endingTimer > 0.4) resetGame();
+    }
+  } else if (e.button === 2) {
+    // right click
+    if (state === 'backyard' || state === 'shedTop') {
+      if (character === 'spot' && !abilities.spot.active && abilities.spot.cooldown <= 0) {
+        spawnBlackHole(m.x, m.y);
+      }
+    }
+  }
+});
+
+// ============================================================
+// MENU / CHARACTERS
+// ============================================================
+const chars = [
+  {
+    id: 'terry',
+    name: 'TERRY',
+    color: '#ff7722',
+    body: '#ffffff',
+    body2: '#ffd9b3',
+    head: '#ff7a1f',
+    desc: ['Orange & white chicken', 'ABILITY: FLIGHT', 'Fly over monsters', '1.3x speed • 15s cooldown']
+  },
+  {
+    id: 'spot',
+    name: 'SPOT',
+    color: '#eaeaea',
+    body: '#ffffff',
+    body2: '#ffffff',
+    head: '#f0e0d0',
+    desc: ['White chicken w/ black spots', 'ABILITY: BLACK HOLE', 'Right-click to suck', 'monsters in • 37s cooldown']
+  },
+  {
+    id: 'charlet',
+    name: 'CHARLET',
+    color: '#a3623a',
+    body: '#7a4a22',
+    body2: '#5a3818',
+    head: '#4a2810',
+    desc: ['Brown chicken', 'ABILITY: MULLET FORM', 'Swim in water & chomp', '4s swim • 34s cooldown']
+  }
+];
+
+function handleMenuClick(mx, my) {
+  const cardW = 210, cardH = 280, gap = 30;
+  const totalW = cardW * 3 + gap * 2;
+  const startX = (W - totalW) / 2;
+  const startY = 250;
+  for (let i = 0; i < 3; i++) {
+    const cx = startX + i * (cardW + gap);
+    if (mx >= cx && mx <= cx + cardW && my >= startY && my <= startY + cardH) {
+      startGame(chars[i].id);
+      return;
+    }
+  }
+}
+
+function startGame(charId) {
+  character = charId;
+  state = 'coop';
+  player.x = 75;
+  player.y = 310;
+  player.facing = 1;
+  player.onShed = false;
+  player.onGardenBed = false;
+  player.inCoop = true;
+  player.inPool = false;
+  player.height = 0;
+  cooper.x = 760;
+  cooper.y = 340;
+  cooper.state = 'lurking';
+  cooper.noChaseTimer = 0;
+  cooper.stunTimer = 0;
+  cooper.wanderAngle = Math.PI;
+  cooper.wanderTimer = 0;
+  for (const k in abilities) {
+    abilities[k].active = false;
+    abilities[k].timer = 0;
+    abilities[k].cooldown = 0;
+  }
+  gameTime = 0;
+  particles = [];
+  showMessage('You are in the nesting box. Go down through the hole to the coop floor.', 4);
+}
+
+function resetGame() {
+  state = 'menu';
+  character = null;
+  endingType = null;
+  cutsceneStep = 0;
+  cutsceneT = 0;
+  endingTimer = 0;
+  message = '';
+  messageTimer = 0;
+}
+
+function showMessage(msg, dur) {
+  message = msg;
+  messageTimer = dur || 2.5;
+}
+
+// ============================================================
+// ABILITY HELPERS
+// ============================================================
+function spawnBlackHole(x, y) {
+  // Constrain to map (within the playable yard area)
+  x = Math.max(155, Math.min(W - 15, x));
+  y = Math.max(110, Math.min(H - 25, y));
+  abilities.spot.x = x;
+  abilities.spot.y = y;
+  abilities.spot.active = true;
+  abilities.spot.timer = abilities.spot.duration;
+  abilities.spot.animT = 0;
+  showMessage('BLACK HOLE!', 1);
+}
+
+function activateAbility() {
+  if (character === 'terry') {
+    if (!abilities.terry.active && abilities.terry.cooldown <= 0) {
+      abilities.terry.active = true;
+      abilities.terry.timer = abilities.terry.duration;
+      showMessage('FLIGHT! You soar above the danger!', 1.4);
+      addParticle(player.x, player.y, '#ffaa66', 8);
+    }
+  } else if (character === 'spot') {
+    if (!abilities.spot.active && abilities.spot.cooldown <= 0) {
+      spawnBlackHole(player.x, player.y);
+    }
+  } else if (character === 'charlet') {
+    if (!abilities.charlet.active && abilities.charlet.cooldown <= 0) {
+      const nearPool = pointInRect(player.x, player.y, {
+        x: map.pool.x - 18, y: map.pool.y - 18,
+        w: map.pool.w + 36, h: map.pool.h + 36
+      });
+      if (nearPool) {
+        abilities.charlet.active = true;
+        abilities.charlet.timer = abilities.charlet.duration;
+        abilities.charlet.poolEntryX = clamp(player.x, map.pool.x + 20, map.pool.x + map.pool.w - 20);
+        abilities.charlet.poolEntryY = clamp(player.y, map.pool.y + 20, map.pool.y + map.pool.h - 20);
+        player.x = abilities.charlet.poolEntryX;
+        player.y = abilities.charlet.poolEntryY;
+        player.inPool = true;
+        abilities.charlet.splashT = 0.3;
+        showMessage('MULLET FORM! You dive into the water!', 1.4);
+        for (let i = 0; i < 12; i++) {
+          addParticle(player.x, player.y - 10, '#aaccdd', 1);
+        }
+      } else {
+        showMessage('You need to be near the pool!', 1.5);
+      }
+    }
+  }
+}
+
+function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+
+function addParticle(x, y, color, life) {
+  particles.push({
+    x, y, vx: (Math.random() - 0.5) * 60,
+    vy: -Math.random() * 60 - 10,
+    color, life: life || 0.6, max: life || 0.6
+  });
+}
+
+// ============================================================
+// CUTSCENE
+// ============================================================
+const cutsceneLines = {
+  bad: [
+    'You leap over the fence into the neighbor\'s yard...',
+    'A small dog bursts from the porch! It\'s RUBY,',
+    'the fierce brown French Bulldog!',
+    'She lunges through the air and catches you in her jaws!',
+    'You have been eaten...',
+    'BAD ENDING'
+  ],
+  goodish: [
+    'You leap over the fence into the neighbor\'s yard...',
+    'A small dog bursts out! Ruby the French Bulldog!',
+    'She snaps at you and grabs your tail feathers!',
+    'RIP! Your beautiful tail feathers are torn off!',
+    'A neighbor rushes out shouting, scaring Ruby away.',
+    'You are rescued, but you\'ve lost your tail feathers...',
+    'GOODISH ENDING'
+  ],
+  good: [
+    'You leap over the fence into the neighbor\'s yard...',
+    'Ruby the French Bulldog spots you and gives chase!',
+    'You flap your wings with all your might!',
+    'You soar back over the fence, narrowly escaping!',
+    'Your tail feathers are safe. You live to cluck another day!',
+    'GOOD ENDING'
+  ]
+};
+
+function startCutscene() {
+  state = 'cutscene';
+  cutsceneStep = 0;
+  cutsceneT = 0.6;
+  const r = Math.random();
+  if (r < 0.50) endingType = 'bad';
+  else if (r < 0.75) endingType = 'goodish';
+  else endingType = 'good';
+  endingTimer = 0;
+  // spawn particles for effect
+  for (let i = 0; i < 14; i++) addParticle(player.x, player.y, '#ffcc66', 1);
+}
+
+function advanceCutsceneLine() {
+  const lines = cutsceneLines[endingType];
+  if (cutsceneStep < lines.length) {
+    showMessage(lines[cutsceneStep], 2.6);
+    cutsceneT = 2.6;
+    cutsceneStep++;
+  } else {
+    state = 'ending';
+    endingTimer = 0;
+    message = '';
+  }
+}
+
+// ============================================================
+// MAIN UPDATE
+// ============================================================
+function update(dt) {
+  gameTime += dt;
+
+  // particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 80 * dt;
+    p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+
+  if (messageTimer > 0) {
+    messageTimer -= dt;
+    if (messageTimer <= 0) message = '';
+  }
+
+  if (state === 'coop') updateCoop(dt);
+  else if (state === 'backyard') updateBackyard(dt);
+  else if (state === 'shedTop') updateShedTop(dt);
+  else if (state === 'cutscene') updateCutscene(dt);
+  else if (state === 'ending') {
+    endingTimer += dt;
+  }
+
+  // Consume single-press keys
+  for (const k in justPressed) justPressed[k] = false;
+}
+
+function readMove() {
+  let dx = 0, dy = 0;
+  if (keys['w'] || keys['arrowup']) dy -= 1;
+  if (keys['s'] || keys['arrowdown']) dy += 1;
+  if (keys['a'] || keys['arrowleft']) dx -= 1;
+  if (keys['d'] || keys['arrowright']) dx += 1;
+  if (dx !== 0 && dy !== 0) {
+    const m = Math.hypot(dx, dy);
+    dx /= m; dy /= m;
+  }
+  if (dx > 0) player.facing = 1;
+  else if (dx < 0) player.facing = -1;
+  return { dx, dy };
+}
+
+// ---- COOP ----
+function updateCoop(dt) {
+  const { dx, dy } = readMove();
+  if (dx !== 0 || dy !== 0) player.walkPhase += dt * 7;
+
+  const speed = PLAYER_SPEED * 0.95;
+  let nx = player.x + dx * speed * dt;
+  let ny = player.y + dy * speed * dt;
+
+  // Constrain inside coop (with a small offset for sprite size)
+  if (nx < 28) nx = 28;
+  if (nx > 132) nx = 132;
+  if (ny < 210) ny = 210;
+  if (ny > 388) ny = 388;
+
+  player.x = nx;
+  player.y = ny;
+
+  // If player walks into the hole on the right, exit
+  if (player.x > 128 && player.y > 285 && player.y < 335) {
+    state = 'backyard';
+    player.x = 165;
+    player.y = 305;
+    player.inCoop = false;
+    cooper.x = 760;
+    cooper.y = 340;
+    cooper.state = 'lurking';
+    cooper.noChaseTimer = 1.0; // small grace period
+    showMessage('Cooper the brindle dog is lurking outside! Reach the shed roof and escape!', 4);
+  }
+}
+
+// ---- BACKYARD ----
+function updateBackyard(dt) {
+  updateAbilities(dt);
+
+  const { dx, dy } = readMove();
+
+  let speed = PLAYER_SPEED;
+  if (abilities.terry.active) speed *= 1.3;
+  if (abilities.charlet.active) speed *= 0.9;
+
+  if (dx !== 0 || dy !== 0) player.walkPhase += dt * 8;
+
+  let nx = player.x + dx * speed * dt;
+  let ny = player.y + dy * speed * dt;
+
+  // Clamp to map
+  nx = clamp(nx, 20, W - 20);
+  ny = clamp(ny, 80, H - 30);
+
+  // Special: mullet can swim in pool
+  if (abilities.charlet.active) {
+    // bounds inside pool
+    nx = clamp(nx, map.pool.x + 6, map.pool.x + map.pool.w - 6);
+    ny = clamp(ny, map.pool.y + 6, map.pool.y + map.pool.h - 6);
+    player.x = nx;
+    player.y = ny;
+  } else {
+    // Obstacles
+    nx = resolveCollisionX(nx, ny);
+    ny = resolveCollisionY(nx, ny);
+    player.x = nx;
+    player.y = ny;
+  }
+
+  // Tick cooldowns
+  for (const k in abilities) {
+    if (abilities[k].cooldown > 0) abilities[k].cooldown -= dt;
+  }
+
+  // Cooper AI
+  updateCooper(dt);
+
+  // Check if Cooper catches player
+  if (cooper.state === 'chasing') {
+    const dist = Math.hypot(player.x - cooper.x, player.y - cooper.y);
+    const flyingOver = abilities.terry.active;
+    const swimming = abilities.charlet.active;
+    if (dist < 22 && !flyingOver && !swimming) {
+      // Caught - send back to coop
+      showMessage('Cooper caught you! You scramble back into the coop...', 2.5);
+      state = 'coop';
+      player.x = 75;
+      player.y = 310;
+      player.inCoop = true;
+      cooper.x = 760;
+      cooper.y = 340;
+      cooper.state = 'lurking';
+      cooper.noChaseTimer = 2;
+      cooper.stunTimer = 0;
+    }
+  }
+
+  // Interaction key (single press)
+  if (justPressed['e'] || justPressed['enter'] || justPressed[' ']) {
+    justPressed['e'] = false;
+    justPressed['enter'] = false;
+    justPressed[' '] = false;
+    handleInteraction();
+  }
+
+  // Ability key (F)
+  if (justPressed['f']) {
+    justPressed['f'] = false;
+    activateAbility();
+  }
+
+  // If somehow climbed shed, switch state
+  if (player.onShed) state = 'shedTop';
+}
+
+function updateAbilities(dt) {
+  // Terry flight
+  if (abilities.terry.active) {
+    abilities.terry.timer -= dt;
+    player.height = Math.sin((abilities.terry.duration - abilities.terry.timer) / abilities.terry.duration * Math.PI) * 40;
+    if (abilities.terry.timer <= 0) {
+      abilities.terry.active = false;
+      abilities.terry.cooldown = abilities.terry.maxCD;
+      player.height = 0;
+      showMessage('Flight ended. 15s cooldown.', 1.4);
+    }
+  }
+
+  // Spot black hole
+  if (abilities.spot.active) {
+    abilities.spot.timer -= dt;
+    abilities.spot.animT += dt;
+    abilities.spot.noChaseTimer = abilities.spot.timer;
+
+    // Pull cooper in
+    if (cooper.state !== 'stunned') {
+      const dx = abilities.spot.x - cooper.x;
+      const dy = abilities.spot.y - cooper.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 110) {
+        cooper.state = 'stunned';
+        cooper.stunTimer = abilities.spot.timer;
+      }
+    }
+    if (cooper.state === 'stunned' && abilities.spot.active) {
+      const dx = abilities.spot.x - cooper.x;
+      const dy = abilities.spot.y - cooper.y;
+      const d = Math.max(0.1, Math.hypot(dx, dy));
+      const pull = 220 * dt;
+      cooper.x += (dx / d) * Math.min(pull, d);
+      cooper.y += (dy / d) * Math.min(pull, d);
+      cooper.stunTimer = abilities.spot.timer;
+    }
+
+    if (abilities.spot.timer <= 0) {
+      abilities.spot.active = false;
+      abilities.spot.cooldown = abilities.spot.maxCD;
+      cooper.state = 'lurking';
+      cooper.noChaseTimer = 3.5; // cannot activate chase for 3.5s
+      showMessage('Black hole collapses. 37s cooldown. Cooper is disoriented!', 2);
+    }
+  }
+
+  // Charlet mullet
+  if (abilities.charlet.active) {
+    abilities.charlet.timer -= dt;
+    if (abilities.charlet.splashT > 0) abilities.charlet.splashT -= dt;
+
+    // bubble particles
+    if (Math.random() < dt * 6) {
+      addParticle(player.x + (Math.random() - 0.5) * 14,
+                  player.y - 4, '#aaeeff', 0.6);
+    }
+
+    if (abilities.charlet.timer <= 0) {
+      // Exit: jump out, chomp
+      abilities.charlet.active = false;
+      abilities.charlet.cooldown = abilities.charlet.maxCD;
+      player.inPool = false;
+      // jump to nearest pool edge
+      const exitY = map.pool.y - 8;
+      const exitX = clamp(player.x, map.pool.x - 8, map.pool.x + map.pool.w + 8);
+      player.x = exitX;
+      player.y = exitY;
+      // Splash particles
+      for (let i = 0; i < 18; i++) {
+        addParticle(player.x, player.y + 10, '#aaeeff', 0.7);
+      }
+      // Chomp: stun nearby Cooper
+      const d = Math.hypot(player.x - cooper.x, player.y - cooper.y);
+      if (d < 90) {
+        cooper.state = 'stunned';
+        cooper.stunTimer = 3;
+        cooper.noChaseTimer = 3 + 3.5; // 3s stun + 3.5s no chase
+        showMessage('MULLET CHOMP! Cooper is stunned!', 1.5);
+        for (let i = 0; i < 10; i++) addParticle(cooper.x, cooper.y, '#ff6644', 0.5);
+      } else {
+        showMessage('Mullet form ended. 34s cooldown.', 1.3);
+      }
+    }
+  }
+
+  // Cooper stun decay (when not from black hole)
+  if (cooper.state === 'stunned' && !abilities.spot.active) {
+    cooper.stunTimer -= dt;
+    if (cooper.stunTimer <= 0) {
+      cooper.state = 'lurking';
+    }
+  }
+
+  if (cooper.noChaseTimer > 0) cooper.noChaseTimer -= dt;
+}
+
+// ---- COOPER AI ----
+function updateCooper(dt) {
+  cooper.walkPhase += dt * 5;
+
+  if (cooper.state === 'stunned') return; // stunned does its own movement
+
+  // Vision / chase detection
+  const dist = Math.hypot(player.x - cooper.x, player.y - cooper.y);
+  const inSight = dist < cooper.visionRange && cooper.noChaseTimer <= 0;
+
+  // If player flying high, harder to spot (range down)
+  let effectiveRange = cooper.visionRange;
+  if (abilities.terry.active) effectiveRange = 90;
+
+  const playerVisible = dist < effectiveRange && cooper.noChaseTimer <= 0;
+
+  if (playerVisible) {
+    cooper.state = 'chasing';
+    cooper.lastSeenX = player.x;
+    cooper.lastSeenY = player.y;
+  } else if (cooper.state === 'chasing') {
+    // Lost player - go to last seen spot, then lurk
+    if (Math.hypot(cooper.lastSeenX - cooper.x, cooper.lastSeenY - cooper.y) < 15) {
+      cooper.state = 'lurking';
+    }
+  }
+
+  let speed, tx, ty;
+  if (cooper.state === 'chasing') {
+    speed = COOPER_CHASE_SPEED;
+    tx = player.x;
+    ty = player.y;
+  } else {
+    speed = COOPER_LURK_SPEED;
+    cooper.wanderTimer -= dt;
+    if (cooper.wanderTimer <= 0) {
+      cooper.wanderAngle = Math.random() * Math.PI * 2;
+      cooper.wanderTimer = 1.5 + Math.random() * 2.5;
+    }
+    tx = cooper.x + Math.cos(cooper.wanderAngle) * 200;
+    ty = cooper.y + Math.sin(cooper.wanderAngle) * 200;
+  }
+
+  const ang = Math.atan2(ty - cooper.y, tx - cooper.x);
+  cooper.vx = Math.cos(ang) * speed;
+  cooper.vy = Math.sin(ang) * speed;
+  cooper.facing = cooper.vx >= 0 ? 1 : -1;
+
+  let nx = cooper.x + cooper.vx * dt;
+  let ny = cooper.y + cooper.vy * dt;
+
+  // Clamp to playable area
+  nx = clamp(nx, 160, W - 20);
+  ny = clamp(ny, 100, H - 25);
+
+  // Avoid trees
+  for (const t of map.trees) {
+    const dx = nx - t.x, dy = ny - t.y;
+    if (Math.hypot(dx, dy) < t.r + 8) {
+      const a = Math.atan2(dy, dx);
+      nx = t.x + Math.cos(a) * (t.r + 8);
+      ny = t.y + Math.sin(a) * (t.r + 8);
+    }
+  }
+  // Avoid banana trees
+  for (const bt of map.bananaTrees) {
+    const dx = nx - bt.x, dy = ny - bt.y;
+    if (Math.hypot(dx, dy) < 18) {
+      const a = Math.atan2(dy, dx);
+      nx = bt.x + Math.cos(a) * 18;
+      ny = bt.y + Math.sin(a) * 18;
+    }
+  }
+  // Avoid pool (don't fall in)
+  if (!abilities.spot.active) {
+    if (pointInRect(nx, ny, map.pool)) {
+      const dx = nx - (map.pool.x + map.pool.w / 2);
+      const dy = ny - (map.pool.y + map.pool.h / 2);
+      const a = Math.atan2(dy, dx);
+      nx = map.pool.x + map.pool.w / 2 + Math.cos(a) * (map.pool.w / 2 + 10);
+      ny = map.pool.y + map.pool.h / 2 + Math.sin(a) * (map.pool.h / 2 + 10);
+    }
+  }
+  // Avoid garden beds (treat as walls)
+  for (const gb of map.gardenBeds) {
+    if (nx > gb.x && nx < gb.x + gb.w && ny > gb.y && ny < gb.y + gb.h) {
+      if (cooper.x < gb.x) nx = gb.x - 2;
+      else if (cooper.x > gb.x + gb.w) nx = gb.x + gb.w + 2;
+      else if (cooper.y < gb.y) ny = gb.y - 2;
+      else ny = gb.y + gb.h + 2;
+    }
+  }
+  // Avoid shed
+  if (nx > map.shed.x && nx < map.shed.x + map.shed.w &&
+      ny > map.shed.y && ny < map.shed.y + map.shed.h) {
+    if (cooper.x < map.shed.x) nx = map.shed.x - 2;
+    else if (cooper.x > map.shed.x + map.shed.w) nx = map.shed.x + map.shed.w + 2;
+    else if (cooper.y < map.shed.y) ny = map.shed.y - 2;
+    else ny = map.shed.y + map.shed.h + 2;
+  }
+
+  cooper.x = nx;
+  cooper.y = ny;
+}
+
+// ---- INTERACTION ----
+function handleInteraction() {
+  if (player.onShed) return; // handled in shedTop
+
+  // Climb garden bed 1 (climbable) when on ground and nearby
+  const gb = map.gardenBeds[1];
+  if (!player.onGardenBed && !player.onShed) {
+    if (player.x > gb.x - 20 && player.x < gb.x + gb.w + 20 &&
+        player.y > gb.y - 20 && player.y < gb.y + gb.h + 40) {
+      player.x = gb.x + gb.w / 2;
+      player.y = gb.y - 6;
+      player.onGardenBed = true;
+      showMessage('You climb onto the raised garden bed!', 2);
+      addParticle(player.x, player.y + 5, '#a0522d', 0.5);
+      return;
+    }
+  }
+
+  // Climb shed when on garden bed near shed
+  if (player.onGardenBed && !player.onShed) {
+    if (player.x > map.shed.x - 20 && player.x < map.shed.x + 25 &&
+        player.y < map.shed.y + 8 && player.y > map.shed.y - 35) {
+      player.x = map.shed.x + 30;
+      player.y = map.shed.y - 4;
+      player.onShed = true;
+      player.onGardenBed = false;
+      showMessage('You climb onto the shed roof! You\'re safe from Cooper!', 3);
+      addParticle(player.x, player.y + 5, '#8a6a30', 0.5);
+      state = 'shedTop';
+      return;
+    }
+  }
+}
+
+// ---- SHED TOP ----
+function updateShedTop(dt) {
+  const { dx, dy } = readMove();
+  if (dx !== 0 || dy !== 0) player.walkPhase += dt * 8;
+
+  const speed = PLAYER_SPEED;
+  let nx = player.x + dx * speed * dt;
+  let ny = player.y + dy * speed * dt;
+
+  // constrain to shed roof area
+  nx = clamp(nx, map.shed.x + 4, map.shed.x + map.shed.w - 4);
+  ny = clamp(ny, map.shed.y - 22, map.shed.y - 2);
+  player.x = nx;
+  player.y = ny;
+
+  // Escape prompt
+  if (justPressed['e'] || justPressed['enter'] || justPressed[' ']) {
+    justPressed['e'] = false;
+    justPressed['enter'] = false;
+    justPressed[' '] = false;
+    startCutscene();
+  }
+}
+
+// ---- CUTSCENE ----
+function updateCutscene(dt) {
+  cutsceneT -= dt;
+  if (cutsceneT <= 0) advanceCutsceneLine();
+}
+
+// ============================================================
+// COLLISION HELPERS
+// ============================================================
+function pointInRect(px, py, r) {
+  return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
+}
+
+function resolveCollisionX(x, y) {
+  // Trees
+  for (const t of map.trees) {
+    if (x > t.x - t.r && x < t.x + t.r && y > t.y - t.r && y < t.y + t.r) {
+      if (player.x < t.x - t.r) x = t.x - t.r - 1;
+      else if (player.x > t.x + t.r) x = t.x + t.r + 1;
+    }
+  }
+  // Banana trees
+  for (const bt of map.bananaTrees) {
+    if (x > bt.x - 16 && x < bt.x + 16 && y > bt.y - 16 && y < bt.y + 16) {
+      if (player.x < bt.x) x = bt.x - 17;
+      else x = bt.x + 17;
+    }
+  }
+  // Garden beds
+  for (const gb of map.gardenBeds) {
+    if (x > gb.x && x < gb.x + gb.w && y > gb.y - 4 && y < gb.y + gb.h) {
+      if (player.x < gb.x) x = gb.x - 1;
+      else x = gb.x + gb.w + 1;
+    }
+  }
+  // Shed
+  if (!player.onShed) {
+    if (x > map.shed.x && x < map.shed.x + map.shed.w &&
+        y > map.shed.y + 8 && y < map.shed.y + map.shed.h) {
+      if (player.x < map.shed.x) x = map.shed.x - 1;
+      else x = map.shed.x + map.shed.w + 1;
+    }
+  }
+  // Pool (solid - no walking in)
+  if (x > map.pool.x && x < map.pool.x + map.pool.w &&
+      y > map.pool.y && y < map.pool.y + map.pool.h) {
+    if (player.x < map.pool.x) x = map.pool.x - 1;
+    else if (player.x > map.pool.x + map.pool.w) x = map.pool.x + map.pool.w + 1;
+    else if (player.y < map.pool.y) y = map.pool.y - 1;
+    else y = map.pool.y + map.pool.h + 1;
+  }
+  return x;
+}
+
+function resolveCollisionY(x, y) {
+  for (const t of map.trees) {
+    if (x > t.x - t.r && x < t.x + t.r && y > t.y - t.r && y < t.y + t.r) {
+      if (player.y < t.y) y = t.y - t.r - 1;
+      else y = t.y + t.r + 1;
+    }
+  }
+  for (const bt of map.bananaTrees) {
+    if (x > bt.x - 16 && x < bt.x + 16 && y > bt.y - 16 && y < bt.y + 16) {
+      if (player.y < bt.y) y = bt.y - 17;
+      else y = bt.y + 17;
+    }
+  }
+  for (const gb of map.gardenBeds) {
+    if (x > gb.x && x < gb.x + gb.w && y > gb.y && y < gb.y + gb.h) {
+      if (player.y < gb.y) y = gb.y - 1;
+      else y = gb.y + gb.h + 1;
+    }
+  }
+  if (!player.onShed) {
+    if (x > map.shed.x && x < map.shed.x + map.shed.w &&
+        y > map.shed.y && y < map.shed.y + map.shed.h) {
+      if (player.y < map.shed.y) y = map.shed.y - 1;
+      else y = map.shed.y + map.shed.h + 1;
+    }
+  }
+  if (x > map.pool.x && x < map.pool.x + map.pool.w &&
+      y > map.pool.y && y < map.pool.y + map.pool.h) {
+    if (player.y < map.pool.y) y = map.pool.y - 1;
+    else y = map.pool.y + map.pool.h + 1;
+  }
+  return y;
+}
+
+// ============================================================
+// RENDERING
+// ============================================================
+function render() {
+  // background base
+  ctx.fillStyle = '#06061a';
+  ctx.fillRect(0, 0, W, H);
+
+  if (state === 'menu') renderMenu();
+  else if (state === 'coop') renderCoop();
+  else if (state === 'backyard') renderBackyard();
+  else if (state === 'shedTop') renderBackyard();  // same scene
+  else if (state === 'cutscene') renderCutscene();
+  else if (state === 'ending') renderEnding();
+
+  // Particles above everything
+  renderParticles();
+
+  // HUD overlay
+  renderHUD();
+  if (message) renderMessage();
+  if (state === 'menu') renderMenuHint();
+}
+
+// ---- PARTICLES ----
+function renderParticles() {
+  for (const p of particles) {
+    const a = p.life / p.max;
+    ctx.globalAlpha = Math.max(0, a);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(Math.floor(p.x), Math.floor(p.y), 3, 3);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---- NIGHT SKY (shared) ----
+function drawNightSky() {
+  // gradient sky
+  const grd = ctx.createLinearGradient(0, 0, 0, 140);
+  grd.addColorStop(0, '#020210');
+  grd.addColorStop(1, '#0a0a2a');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, W, 140);
+
+  // Stars
+  for (let i = 0; i < 70; i++) {
+    const x = (i * 173 + 11) % W;
+    const y = ((i * 67) % 110) + 4;
+    const t = Math.sin(gameTime * 1.6 + i * 0.7);
+    ctx.fillStyle = t > 0.3 ? '#fff' : (t > -0.2 ? '#bbb' : '#666');
+    ctx.fillRect(x, y, 1, 1);
+    if (i % 7 === 0) ctx.fillRect(x + 1, y, 1, 1);
+  }
+
+  // Moon
+  const mx = W - 90, my = 32;
+  ctx.fillStyle = '#e8e6d4';
+  ctx.fillRect(mx, my, 26, 26);
+  ctx.fillStyle = '#cecbb6';
+  ctx.fillRect(mx + 4, my + 4, 4, 4);
+  ctx.fillRect(mx + 12, my + 8, 3, 3);
+  ctx.fillRect(mx + 6, my + 16, 5, 3);
+  // crescent shadow
+  ctx.fillStyle = '#020210';
+  ctx.fillRect(mx + 14, my, 12, 26);
+}
+
+// ---- GROUND ----
+function drawGround() {
+  // grass
+  ctx.fillStyle = '#102a08';
+  ctx.fillRect(0, 100, W, H);
+
+  // grass tufts (pixelated)
+  ctx.fillStyle = '#1a3a10';
+  for (let x = 0; x < W; x += 8) {
+    for (let y = 110; y < H; y += 14) {
+      const o = ((x * 13 + y * 7) % 17);
+      if (o < 5) ctx.fillRect(x + (o % 4), y + (o % 3), 2, 2);
+    }
+  }
+  // darker patches
+  ctx.fillStyle = '#0a1a05';
+  for (let i = 0; i < 30; i++) {
+    const x = (i * 137 + 31) % W;
+    const y = 130 + ((i * 53) % (H - 150));
+    ctx.fillRect(x, y, 4, 3);
+  }
+}
+
+// ---- MENU ----
+function renderMenu() {
+  drawNightSky();
+  // ground beneath
+  ctx.fillStyle = '#0a1a05';
+  ctx.fillRect(0, 100, W, H - 100);
+
+  // Title
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffcc66';
+  ctx.font = 'bold 52px Courier New';
+  ctx.fillText('COOP QUEST', W / 2, 90);
+
+  ctx.fillStyle = '#aaaacc';
+  ctx.font = '18px Courier New';
+  ctx.fillText('A Nighttime Chicken Escape', W / 2, 118);
+
+  // Subtitle hint
+  ctx.fillStyle = '#888';
+  ctx.font = '13px Courier New';
+  ctx.fillText('Click a chicken to start your story', W / 2, 175);
+
+  // Cards
+  const cardW = 210, cardH = 280, gap = 30;
+  const totalW = cardW * 3 + gap * 2;
+  const startX = (W - totalW) / 2;
+  const startY = 230;
+
+  for (let i = 0; i < 3; i++) {
+    const ch = chars[i];
+    const cx = startX + i * (cardW + gap);
+    const cy = startY;
+
+    // Card shadow
+    ctx.fillStyle = '#000';
+    ctx.fillRect(cx + 4, cy + 4, cardW, cardH);
+
+    // Card bg
+    ctx.fillStyle = '#14142a';
+    ctx.fillRect(cx, cy, cardW, cardH);
+
+    // Border
+    ctx.fillStyle = ch.color;
+    ctx.fillRect(cx, cy, cardW, 4);
+    ctx.fillRect(cx, cy + cardH - 4, cardW, 4);
+    ctx.fillRect(cx, cy, 4, cardH);
+    ctx.fillRect(cx + cardW - 4, cy, 4, cardH);
+
+    // Name
+    ctx.fillStyle = ch.color;
+    ctx.font = 'bold 30px Courier New';
+    ctx.fillText(ch.name, cx + cardW / 2, cy + 40);
+
+    // Portrait
+    drawChickenScaled(cx + cardW / 2, cy + 140, ch.id, 1, 2.5);
+
+    // Description
+    ctx.fillStyle = '#ddd';
+    ctx.font = '12px Courier New';
+    for (let j = 0; j < ch.desc.length; j++) {
+      ctx.fillStyle = j === 0 ? '#fff' : (j === 1 ? ch.color : '#bbb');
+      ctx.fillText(ch.desc[j], cx + cardW / 2, cy + 210 + j * 18);
+    }
+
+    // "Click to play" at bottom
+    ctx.fillStyle = '#666';
+    ctx.font = '11px Courier New';
+    ctx.fillText('[ CLICK TO PLAY ]', cx + cardW / 2, cy + cardH - 14);
+  }
+
+  // Game info
+  ctx.fillStyle = '#888';
+  ctx.font = '12px Courier New';
+  ctx.fillText('Escape the backyard • Avoid Cooper • Climb the shed • Fly to the neighbor\'s yard', W / 2, 540);
+  ctx.fillText('Three possible endings await...', W / 2, 560);
+}
+
+function renderMenuHint() {
+  // (handled in renderMenu itself)
+}
+
+// ---- COOP ----
+function renderCoop() {
+  drawNightSky();
+
+  // Coop interior (wood, dim)
+  ctx.fillStyle = '#3a2818';
+  ctx.fillRect(map.coop.x, map.coop.y, map.coop.w, map.coop.h);
+
+  // Floor (slightly different)
+  ctx.fillStyle = '#4a3220';
+  ctx.fillRect(map.coop.x, map.coopFloorY - 6, map.coop.w, map.coop.h - (map.coopFloorY - map.coop.y - 6));
+
+  // Wood planks
+  ctx.fillStyle = '#2a1808';
+  for (let y = map.coop.y + 12; y < map.coopFloorY; y += 22) {
+    ctx.fillRect(map.coop.x, y, map.coop.w, 2);
+  }
+
+  // Window
+  ctx.fillStyle = '#0a1a30';
+  ctx.fillRect(45, 215, 50, 35);
+  ctx.fillStyle = '#152545';
+  ctx.fillRect(47, 217, 46, 31);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(55, 222, 2, 2);
+  ctx.fillRect(75, 232, 2, 2);
+  ctx.fillRect(85, 240, 2, 2);
+
+  // Nesting box
+  ctx.fillStyle = '#7a5020';
+  ctx.fillRect(20, 220, 60, 45);
+  ctx.fillStyle = '#a07a30';
+  ctx.fillRect(22, 222, 56, 41);
+  // hay
+  ctx.fillStyle = '#c8a850';
+  for (let i = 0; i < 7; i++) ctx.fillRect(24, 224 + i * 6, 52, 2);
+  // egg
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(38, 240, 12, 14);
+  ctx.fillStyle = '#f0e8d0';
+  ctx.fillRect(40, 242, 8, 10);
+
+  // Ramp / ladder
+  ctx.fillStyle = '#5a3818';
+  for (let i = 0; i < 6; i++) {
+    ctx.fillRect(110, 280 + i * 12, 18, 3);
+  }
+
+  // Coop hole (leads outside)
+  ctx.fillStyle = '#1a1408';
+  ctx.fillRect(map.coopHole.x, map.coopHole.y, map.coopHole.w, map.coopHole.h);
+  ctx.fillStyle = '#0a0a2a';
+  ctx.fillRect(map.coopHole.x + 2, map.coopHole.y + 2, map.coopHole.w - 4, map.coopHole.h - 4);
+  // tiny stars visible through
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(map.coopHole.x + 8, map.coopHole.y + 6, 1, 1);
+  ctx.fillRect(map.coopHole.x + 18, map.coopHole.y + 14, 1, 1);
+  ctx.fillRect(map.coopHole.x + 12, map.coopHole.y + 22, 1, 1);
+
+  // Hole frame
+  ctx.fillStyle = '#2a1808';
+  ctx.fillRect(map.coopHole.x - 3, map.coopHole.y - 3, map.coopHole.w + 6, 3);
+  ctx.fillRect(map.coopHole.x - 3, map.coopHole.y + map.coopHole.h, map.coopHole.w + 6, 3);
+  ctx.fillRect(map.coopHole.x - 3, map.coopHole.y - 3, 3, map.coopHole.h + 6);
+  ctx.fillRect(map.coopHole.x + map.coopHole.w, map.coopHole.y - 3, 3, map.coopHole.h + 6);
+
+  // Player
+  drawChicken(player.x, player.y, character, player.facing, 1, 0);
+
+  // Indicator
+  if (player.x > 95) {
+    ctx.fillStyle = '#ffcc66';
+    ctx.font = 'bold 14px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText('→ EXIT TO YARD →', map.coopHole.x + 20, map.coopHole.y - 8);
+  }
+}
+
+// ---- BACKYARD ----
+function renderBackyard() {
+  drawNightSky();
+  drawGround();
+
+  // Yard objects (back layer)
+  for (const bt of map.bananaTrees) drawBananaTree(bt.x, bt.y);
+  for (const t of map.trees) drawTree(t.x, t.y, t.r);
+  drawPool();
+  for (const gb of map.gardenBeds) drawGardenBed(gb.x, gb.y, gb.w, gb.h);
+  drawShed();
+
+  // Cooper (only if not stunned fade)
+  const visible = !(cooper.state === 'stunned' && Math.floor(gameTime * 9) % 2 === 0);
+  if (visible) drawCooper(cooper.x, cooper.y);
+
+  // Cooper vision ring (subtle when chasing)
+  if (cooper.state === 'chasing') {
+    ctx.strokeStyle = 'rgba(255, 80, 80, 0.22)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cooper.x, cooper.y, cooper.visionRange, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  // Cooper stun stars
+  if (cooper.state === 'stunned') {
+    ctx.fillStyle = '#ffe066';
+    ctx.font = '14px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText('★', cooper.x - 10, cooper.y - 18);
+    ctx.fillText('★', cooper.x + 10, cooper.y - 22);
+    ctx.fillText('★', cooper.x, cooper.y - 26);
+  }
+
+  // Player
+  if (abilities.charlet.active) {
+    drawMullet(player.x, player.y);
+  } else {
+    drawChicken(player.x, player.y, character, player.facing, 1, player.height);
+  }
+
+  // Black hole
+  if (abilities.spot.active) {
+    drawBlackHole(abilities.spot.x, abilities.spot.y, abilities.spot.animT);
+  }
+
+  // Highlight interactable
+  drawInteractHint();
+
+  // Mini-map / aim cursor for Spot
+  if (character === 'spot' && !abilities.spot.active && abilities.spot.cooldown <= 0 &&
+      (state === 'backyard' || state === 'shedTop')) {
+    ctx.strokeStyle = 'rgba(204, 102, 255, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(mouseX, mouseY, 18, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(204, 102, 255, 0.5)';
+    ctx.font = '10px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText('R-CLICK', mouseX, mouseY - 22);
+  }
+}
+
+function drawInteractHint() {
+  let prompt = null;
+
+  if (state === 'shedTop') {
+    prompt = '[E] FLY OVER THE FENCE →';
+  } else if (!player.onShed && !player.onGardenBed) {
+    const gb = map.gardenBeds[1];
+    if (player.x > gb.x - 30 && player.x < gb.x + gb.w + 30 &&
+        player.y > gb.y - 30 && player.y < gb.y + gb.h + 50) {
+      prompt = '[E] CLIMB GARDEN BED';
+    }
+  } else if (player.onGardenBed && !player.onShed) {
+    if (player.x > map.shed.x - 30 && player.x < map.shed.x + 25 &&
+        player.y < map.shed.y + 8 && player.y > map.shed.y - 35) {
+      prompt = '[E] CLIMB SHED ROOF';
+    }
+  }
+
+  if (prompt) {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(W / 2 - 140, 30, 280, 28);
+    ctx.fillStyle = '#ffcc66';
+    ctx.font = 'bold 14px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText(prompt, W / 2, 50);
+  }
+}
+
+// ---- YARD OBJECTS ----
+function drawTree(x, y, r) {
+  // shadow
+  ctx.fillStyle = '#0a1405';
+  ctx.fillRect(x - r + 4, y + r - 4, r * 2, 6);
+  // trunk
+  ctx.fillStyle = '#3a2810';
+  ctx.fillRect(x - 5, y - 4, 10, 22);
+  ctx.fillStyle = '#4a3818';
+  ctx.fillRect(x - 3, y - 2, 2, 18);
+  // canopy
+  ctx.fillStyle = '#0a2008';
+  ctx.fillRect(x - r, y - r, r * 2, r);
+  ctx.fillStyle = '#143818';
+  ctx.fillRect(x - r + 4, y - r + 4, r * 2 - 8, r - 8);
+  ctx.fillStyle = '#1f4a25';
+  ctx.fillRect(x - r + 8, y - r + 10, r * 2 - 16, r - 18);
+  // little moon-lit highlights
+  ctx.fillStyle = '#2a5a30';
+  ctx.fillRect(x - r + 12, y - r + 6, 4, 4);
+}
+
+function drawBananaTree(x, y) {
+  // trunk (tall, thin)
+  ctx.fillStyle = '#3a2810';
+  ctx.fillRect(x - 3, y, 6, 60);
+  ctx.fillStyle = '#4a3818';
+  ctx.fillRect(x - 2, y + 2, 2, 56);
+  // big leaves fanning
+  ctx.fillStyle = '#1a3818';
+  ctx.fillRect(x - 22, y - 10, 44, 10);
+  ctx.fillStyle = '#234a25';
+  ctx.fillRect(x - 18, y - 8, 36, 6);
+  ctx.fillStyle = '#2a5a30';
+  ctx.fillRect(x - 14, y - 6, 28, 3);
+  // bananas
+  ctx.fillStyle = '#c8a020';
+  ctx.fillRect(x - 4, y + 4, 3, 6);
+  ctx.fillRect(x + 1, y + 6, 3, 6);
+  ctx.fillRect(x - 1, y + 12, 3, 5);
+}
+
+function drawPool() {
+  // ground around pool
+  ctx.fillStyle = '#a08060';
+  ctx.fillRect(map.pool.x - 14, map.pool.y - 14, map.pool.w + 28, map.pool.h + 28);
+  // pool deck
+  ctx.fillStyle = '#8a7050';
+  ctx.fillRect(map.pool.x - 10, map.pool.y - 10, map.pool.w + 20, map.pool.h + 20);
+
+  // fence
+  ctx.fillStyle = '#5a4838';
+  ctx.fillRect(map.poolFence.x, map.poolFence.y, map.poolFence.w, map.poolFence.h);
+  // fence posts
+  ctx.fillStyle = '#6a5848';
+  for (let x = map.poolFence.x; x <= map.poolFence.x + map.poolFence.w; x += 16) {
+    ctx.fillRect(x, map.poolFence.y - 4, 4, 12);
+  }
+  // top rail
+  ctx.fillStyle = '#7a6850';
+  ctx.fillRect(map.poolFence.x, map.poolFence.y - 1, map.poolFence.w, 2);
+
+  // water
+  ctx.fillStyle = '#0a1838';
+  ctx.fillRect(map.pool.x, map.pool.y, map.pool.w, map.pool.h);
+  ctx.fillStyle = '#152848';
+  ctx.fillRect(map.pool.x + 4, map.pool.y + 4, map.pool.w - 8, map.pool.h - 8);
+
+  // ripples (animated)
+  ctx.fillStyle = '#3a5878';
+  for (let i = 0; i < 4; i++) {
+    const rx = map.pool.x + 12 + ((i * 35 + gameTime * 18) % (map.pool.w - 24));
+    const ry = map.pool.y + 20 + i * 28;
+    ctx.fillRect(rx, ry, 22, 2);
+  }
+  ctx.fillStyle = '#5a7898';
+  for (let i = 0; i < 3; i++) {
+    const rx = map.pool.x + 30 + ((i * 50 + gameTime * 10) % (map.pool.w - 50));
+    const ry = map.pool.y + 35 + i * 30;
+    ctx.fillRect(rx, ry, 12, 1);
+  }
+
+  // "POOL" sign
+  ctx.fillStyle = '#446';
+  ctx.fillRect(map.pool.x + map.pool.w / 2 - 18, map.pool.y - 28, 36, 12);
+  ctx.fillStyle = '#aaccff';
+  ctx.font = 'bold 9px Courier New';
+  ctx.textAlign = 'center';
+  ctx.fillText('POOL', map.pool.x + map.pool.w / 2, map.pool.y - 19);
+}
+
+function drawGardenBed(x, y, w, h) {
+  // shadow
+  ctx.fillStyle = '#1a1005';
+  ctx.fillRect(x + 2, y + h - 2, w, 4);
+  // wood frame
+  ctx.fillStyle = '#5a3818';
+  ctx.fillRect(x - 3, y - 3, w + 6, h + 6);
+  ctx.fillStyle = '#7a5028';
+  ctx.fillRect(x - 3, y - 3, w + 6, 4);
+  ctx.fillRect(x - 3, y + h - 1, w + 6, 4);
+  // soil
+  ctx.fillStyle = '#3a2010';
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = '#2a1808';
+  ctx.fillRect(x + 2, y + 2, w - 4, h - 4);
+  // plants
+  ctx.fillStyle = '#1a3818';
+  for (let i = 0; i < 4; i++) {
+    const px = x + 12 + i * 20;
+    const py = y + 12;
+    ctx.fillRect(px, py, 4, 10);
+    ctx.fillStyle = '#2a5028';
+    ctx.fillRect(px - 2, py + 2, 8, 4);
+    ctx.fillStyle = '#1a3818';
+  }
+  // little vegetable
+  ctx.fillStyle = '#cc3322';
+  ctx.fillRect(x + w / 2 - 3, y + h / 2 - 2, 6, 6);
+}
+
+function drawShed() {
+  // shadow
+  ctx.fillStyle = '#0a1405';
+  ctx.fillRect(map.shed.x + 4, map.shed.y + map.shed.h - 2, map.shed.w, 5);
+  // walls
+  ctx.fillStyle = '#4a3018';
+  ctx.fillRect(map.shed.x, map.shed.y, map.shed.w, map.shed.h);
+  // wood planks
+  ctx.fillStyle = '#3a2810';
+  for (let y = map.shed.y + 6; y < map.shed.y + map.shed.h; y += 18) {
+    ctx.fillRect(map.shed.x, y, map.shed.w, 2);
+  }
+  // roof overhang
+  ctx.fillStyle = '#2a1808';
+  ctx.fillRect(map.shed.x - 6, map.shed.y - 10, map.shed.w + 12, 12);
+  ctx.fillStyle = '#3a2810';
+  ctx.fillRect(map.shed.x - 6, map.shed.y - 10, map.shed.w + 12, 2);
+  // window (with light inside)
+  ctx.fillStyle = '#1a3050';
+  ctx.fillRect(map.shed.x + 18, map.shed.y + 30, 32, 26);
+  ctx.fillStyle = '#3a5070';
+  ctx.fillRect(map.shed.x + 20, map.shed.y + 32, 28, 22);
+  ctx.fillStyle = '#ffcc66';
+  ctx.fillRect(map.shed.x + 26, map.shed.y + 38, 4, 4);
+  ctx.fillRect(map.shed.x + 36, map.shed.y + 44, 3, 3);
+  // door
+  ctx.fillStyle = '#2a1808';
+  ctx.fillRect(map.shed.x + map.shed.w - 38, map.shed.y + 55, 32, map.shed.h - 55);
+  ctx.fillStyle = '#1a1005';
+  ctx.fillRect(map.shed.x + map.shed.w - 36, map.shed.y + 57, 28, map.shed.h - 59);
+  ctx.fillStyle = '#ffcc66';
+  ctx.fillRect(map.shed.x + map.shed.w - 14, map.shed.y + 95, 4, 4);
+  // SHED sign
+  ctx.fillStyle = '#3a2810';
+  ctx.fillRect(map.shed.x + 8, map.shed.y - 22, 50, 14);
+  ctx.fillStyle = '#c8a050';
+  ctx.font = 'bold 10px Courier New';
+  ctx.textAlign = 'center';
+  ctx.fillText('SHED', map.shed.x + 33, map.shed.y - 11);
+
+  // Roof top highlight (visible to player when climbed)
+  ctx.fillStyle = '#3a2810';
+  ctx.fillRect(map.shed.x, map.shed.y - 18, map.shed.w, 8);
+  ctx.fillStyle = '#5a3a20';
+  ctx.fillRect(map.shed.x + 4, map.shed.y - 16, map.shed.w - 8, 4);
+}
+
+// ---- SPRITES ----
+function drawChickenScaled(cx, cy, charId, facing, scale) {
+  ctx.save();
+  ctx.translate(Math.floor(cx), Math.floor(cy));
+  ctx.scale(scale, scale);
+  drawChickenInternal(charId, facing);
+  ctx.restore();
+}
+
+function drawChickenInternal(charId, facing) {
+  let bodyCol, body2, headCol;
+  if (charId === 'terry') {
+    bodyCol = '#ffffff';
+    body2 = '#ffd9b3';
+    headCol = '#ff7a1f';
+  } else if (charId === 'spot') {
+    bodyCol = '#ffffff';
+    body2 = '#ffffff';
+    headCol = '#f0e0d0';
+  } else {
+    bodyCol = '#7a4a22';
+    body2 = '#5a3818';
+    headCol = '#4a2810';
+  }
+  const dir = facing;
+
+  // Tail feathers
+  ctx.fillStyle = bodyCol;
+  if (dir > 0) {
+    ctx.fillRect(-18, -2, 4, 10);
+    ctx.fillRect(-16, -5, 4, 14);
+    ctx.fillRect(-14, -7, 4, 14);
+  } else {
+    ctx.fillRect(14, -2, 4, 10);
+    ctx.fillRect(12, -5, 4, 14);
+    ctx.fillRect(10, -7, 4, 14);
+  }
+
+  // Body (oval-ish)
+  ctx.fillStyle = body2;
+  ctx.fillRect(-12, -4, 24, 14);
+  ctx.fillStyle = bodyCol;
+  ctx.fillRect(-10, 2, 20, 6);
+
+  // Neck transition (orange near neck for Terry)
+  if (charId === 'terry') {
+    ctx.fillStyle = '#ffb27a';
+    ctx.fillRect(0 * dir, -10, 8, 8);
+  }
+
+  // Head
+  ctx.fillStyle = headCol;
+  ctx.fillRect(2 * dir, -14, 12, 12);
+
+  // Comb
+  ctx.fillStyle = '#dd1111';
+  if (dir > 0) {
+    ctx.fillRect(5, -17, 7, 4);
+    ctx.fillRect(7, -19, 4, 3);
+  } else {
+    ctx.fillRect(-12, -17, 7, 4);
+    ctx.fillRect(-11, -19, 4, 3);
+  }
+
+  // Beak
+  ctx.fillStyle = '#ffcc00';
+  if (dir > 0) ctx.fillRect(14, -10, 6, 4);
+  else ctx.fillRect(-20, -10, 6, 4);
+
+  // Wattle
+  ctx.fillStyle = '#dd1111';
+  ctx.fillRect(8 * dir, -2, 4, 5);
+
+  // Eye
+  ctx.fillStyle = '#000';
+  if (dir > 0) ctx.fillRect(9, -11, 3, 3);
+  else ctx.fillRect(-12, -11, 3, 3);
+  ctx.fillStyle = '#fff';
+  if (dir > 0) ctx.fillRect(10, -10, 1, 1);
+  else ctx.fillRect(-11, -10, 1, 1);
+
+  // Spots (Spot)
+  if (charId === 'spot') {
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(-6, -1, 4, 4);
+    ctx.fillRect(2, 3, 4, 4);
+    ctx.fillRect(-2, 4, 3, 3);
+    ctx.fillRect(5, -1, 3, 3);
+    ctx.fillRect(0, -3, 3, 3);
+  }
+
+  // Legs (with walking animation)
+  ctx.fillStyle = '#ffcc00';
+  const wf = Math.floor(player.walkPhase) % 2;
+  if (wf === 0) {
+    ctx.fillRect(-4, 8, 3, 8);
+    ctx.fillRect(7, 8, 3, 8);
+  } else {
+    ctx.fillRect(-2, 8, 3, 8);
+    ctx.fillRect(5, 8, 3, 8);
+  }
+  // Feet
+  ctx.fillStyle = '#cc9900';
+  ctx.fillRect(-6, 16, 6, 2);
+  ctx.fillRect(5, 16, 6, 2);
+}
+
+function drawChicken(x, y, charId, facing, scale, height) {
+  ctx.save();
+  ctx.translate(Math.floor(x), Math.floor(y - height));
+  ctx.scale(scale, scale);
+  drawChickenInternal(charId, facing);
+  ctx.restore();
+}
+
+function drawMullet(x, y) {
+  ctx.save();
+  ctx.translate(Math.floor(x), Math.floor(y));
+  const wiggle = Math.sin(gameTime * 10);
+  // fish body
+  ctx.fillStyle = '#6a7a8a';
+  ctx.fillRect(-14 + wiggle, -6, 28, 12);
+  ctx.fillStyle = '#8a9aaa';
+  ctx.fillRect(-12 + wiggle, -4, 24, 8);
+  ctx.fillStyle = '#aabbcc';
+  ctx.fillRect(-10 + wiggle, -2, 20, 4);
+  // scales (lines)
+  ctx.fillStyle = '#5a6a7a';
+  for (let i = 0; i < 4; i++) {
+    ctx.fillRect(-10 + wiggle + i * 5, -2, 1, 4);
+  }
+  // tail
+  ctx.fillStyle = '#5a6a7a';
+  ctx.fillRect(-20 + wiggle, -7, 6, 14);
+  ctx.fillRect(-22 + wiggle, -9, 2, 18);
+  // top fin
+  ctx.fillStyle = '#7a8a9a';
+  ctx.fillRect(-6 + wiggle, -10, 8, 4);
+  // bottom fin
+  ctx.fillRect(-6 + wiggle, 6, 8, 4);
+  // eye
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(8 + wiggle, -3, 4, 4);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(9 + wiggle, -2, 2, 2);
+  // mouth (open for chomp later)
+  ctx.fillStyle = '#000';
+  ctx.fillRect(12 + wiggle, 1, 6, 3);
+  ctx.fillStyle = '#dd3333';
+  ctx.fillRect(13 + wiggle, 2, 4, 1);
+  // bubbles
+  ctx.fillStyle = '#aaeeff';
+  for (let i = 0; i < 3; i++) {
+    const bx = -16 + ((i * 6 + gameTime * 30) % 30);
+    const by = -8 - ((gameTime * 12 + i * 4) % 12);
+    ctx.fillRect(bx + wiggle, by, 2, 2);
+  }
+  ctx.restore();
+}
+
+function drawCooper(x, y) {
+  ctx.save();
+  ctx.translate(Math.floor(x), Math.floor(y));
+  const dir = cooper.facing;
+  const wf = Math.floor(cooper.walkPhase) % 2;
+
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(-16, 14, 32, 4);
+
+  // tail
+  ctx.fillStyle = '#6a4020';
+  ctx.fillRect(-22 * (dir), -4, 8, 5);
+
+  // body
+  ctx.fillStyle = '#6a4020';
+  ctx.fillRect(-16, -4, 32, 14);
+  // black brindle stripes (lots)
+  ctx.fillStyle = '#0d0500';
+  ctx.fillRect(-14, -4, 2, 14);
+  ctx.fillRect(-9, -4, 2, 14);
+  ctx.fillRect(-4, -4, 2, 14);
+  ctx.fillRect(2, -4, 2, 14);
+  ctx.fillRect(7, -4, 2, 14);
+  ctx.fillRect(12, -4, 2, 14);
+  // extra stripe pattern (lots of black strips as requested)
+  ctx.fillStyle = '#1a0a05';
+  ctx.fillRect(-12, 0, 16, 1);
+  ctx.fillRect(-6, 6, 16, 1);
+  ctx.fillRect(0, 2, 14, 1);
+
+  // legs
+  ctx.fillStyle = '#2a1808';
+  if (wf === 0) {
+    ctx.fillRect(-10, 10, 4, 8);
+    ctx.fillRect(4, 10, 4, 8);
+  } else {
+    ctx.fillRect(-8, 10, 4, 8);
+    ctx.fillRect(6, 10, 4, 8);
+  }
+
+  // head
+  ctx.fillStyle = '#6a4020';
+  ctx.fillRect(8 * dir, -12, 16, 12);
+  // head stripes
+  ctx.fillStyle = '#0d0500';
+  ctx.fillRect((8 * dir) + 2, -12, 1, 12);
+  ctx.fillRect((8 * dir) + 8, -12, 1, 12);
+
+  // ears
+  ctx.fillStyle = '#1a0a05';
+  if (dir > 0) {
+    ctx.fillRect(10, -18, 4, 8);
+    ctx.fillRect(18, -18, 4, 8);
+  } else {
+    ctx.fillRect(-14, -18, 4, 8);
+    ctx.fillRect(-22, -18, 4, 8);
+  }
+  // inner ear
+  ctx.fillStyle = '#5a2818';
+  if (dir > 0) {
+    ctx.fillRect(11, -16, 2, 4);
+    ctx.fillRect(19, -16, 2, 4);
+  } else {
+    ctx.fillRect(-13, -16, 2, 4);
+    ctx.fillRect(-21, -16, 2, 4);
+  }
+
+  // snout
+  ctx.fillStyle = '#3a2010';
+  ctx.fillRect(22 * dir, -6, 8, 8);
+
+  // nose
+  ctx.fillStyle = '#000';
+  ctx.fillRect(28 * dir, -4, 3, 3);
+
+  // eye
+  ctx.fillStyle = '#ffcc33';
+  if (dir > 0) ctx.fillRect(15, -9, 3, 3);
+  else ctx.fillRect(-18, -9, 3, 3);
+  ctx.fillStyle = '#000';
+  if (dir > 0) ctx.fillRect(16, -8, 1, 2);
+  else ctx.fillRect(-17, -8, 1, 2);
+
+  // teeth (snarl)
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(24 * dir, 2, 5, 2);
+
+  ctx.restore();
+}
+
+function drawBlackHole(x, y, animT) {
+  const r = 48 + Math.sin(animT * 8) * 4;
+  ctx.save();
+  ctx.translate(x, y);
+
+  // distortion aura
+  for (let i = 0; i < 3; i++) {
+    ctx.strokeStyle = `rgba(170, 0, 255, ${0.35 - i * 0.1})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 14 + i * 8, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // particles spiraling in
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2 + animT * 5;
+    const d = r + 18 - (animT * 40 % 30);
+    ctx.fillStyle = '#cc66ff';
+    ctx.fillRect(Math.cos(a) * d, Math.sin(a) * d, 2, 2);
+  }
+
+  // event horizon
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  // purple ring
+  ctx.strokeStyle = '#aa00ff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, 0, r - 2, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // hot center
+  ctx.fillStyle = '#220044';
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// ---- CUTSCENE ----
+function renderCutscene() {
+  drawNightSky();
+  drawGround();
+
+  // Draw yard objects as backdrop
+  for (const bt of map.bananaTrees) drawBananaTree(bt.x, bt.y);
+  for (const t of map.trees) drawTree(t.x, t.y, t.r);
+  drawPool();
+  for (const gb of map.gardenBeds) drawGardenBed(gb.x, gb.y, gb.w, gb.h);
+  drawShed();
+
+  // Fence in foreground
+  drawNeighborFence();
+
+  // Position Ruby based on ending + step
+  let rubyX = 540;
+  let rubyY = 360;
+  if (endingType === 'bad') {
+    if (cutsceneStep >= 2) rubyY -= 30;
+    if (cutsceneStep >= 3) { rubyX = 360; rubyY = 240; }
+  } else if (endingType === 'goodish') {
+    if (cutsceneStep >= 2) rubyX -= 40;
+  } else {
+    if (cutsceneStep >= 2) rubyX -= 30;
+  }
+  drawRuby(rubyX, rubyY);
+
+  // Chicken flying/escaping based on step
+  const flyUp = Math.min(cutsceneStep, 4);
+  const cx = 350 + (endingType === 'good' ? flyUp * 30 : -flyUp * 15);
+  const cy = 240 - flyUp * 18;
+  drawChicken(cx, cy, character, endingType === 'good' ? -1 : 1, 1.2, 0);
+
+  // Vignette based on ending
+  if (endingType === 'bad') {
+    ctx.fillStyle = 'rgba(60, 0, 0, 0.35)';
+    ctx.fillRect(0, 0, W, H);
+  } else if (endingType === 'goodish') {
+    ctx.fillStyle = 'rgba(120, 80, 0, 0.2)';
+    ctx.fillRect(0, 0, W, H);
+  } else {
+    ctx.fillStyle = 'rgba(0, 60, 120, 0.2)';
+    ctx.fillRect(0, 0, W, H);
+  }
+}
+
+function drawNeighborFence() {
+  // wooden fence between yards
+  ctx.fillStyle = '#3a2810';
+  ctx.fillRect(0, 380, W, 36);
+  // vertical planks
+  for (let x = 0; x < W; x += 14) {
+    ctx.fillStyle = '#4a3818';
+    ctx.fillRect(x, 374, 8, 50);
+    ctx.fillStyle = '#3a2810';
+    ctx.fillRect(x + 8, 374, 2, 50);
+  }
+  // top rail
+  ctx.fillStyle = '#5a4028';
+  ctx.fillRect(0, 372, W, 4);
+  ctx.fillRect(0, 416, W, 4);
+}
+
+function drawRuby(x, y) {
+  ctx.save();
+  ctx.translate(Math.floor(x), Math.floor(y));
+
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(-14, 14, 28, 4);
+
+  // body (compact, stocky bulldog)
+  ctx.fillStyle = '#7a4828';
+  ctx.fillRect(-14, -4, 28, 16);
+  // belly highlight
+  ctx.fillStyle = '#a0623a';
+  ctx.fillRect(-10, 4, 20, 6);
+  // wrinkles shading
+  ctx.fillStyle = '#4a2810';
+  ctx.fillRect(-10, -2, 20, 2);
+  ctx.fillRect(-8, 2, 16, 1);
+
+  // legs (short, stout)
+  ctx.fillStyle = '#4a2810';
+  ctx.fillRect(-10, 12, 6, 6);
+  ctx.fillRect(4, 12, 6, 6);
+
+  // tail (tiny)
+  ctx.fillStyle = '#7a4828';
+  ctx.fillRect(-16, -2, 4, 4);
+
+  // head (big, square bulldog head)
+  ctx.fillStyle = '#7a4828';
+  ctx.fillRect(8, -16, 18, 18);
+  // wrinkles on forehead
+  ctx.fillStyle = '#4a2810';
+  ctx.fillRect(11, -14, 12, 1);
+  ctx.fillRect(11, -10, 12, 1);
+
+  // bat ears (french bulldog trademark)
+  ctx.fillStyle = '#3a1a08';
+  ctx.fillRect(8, -22, 5, 10);
+  ctx.fillRect(20, -22, 5, 10);
+  // inner ear
+  ctx.fillStyle = '#a0623a';
+  ctx.fillRect(9, -20, 2, 4);
+  ctx.fillRect(21, -20, 2, 4);
+
+  // flat snout (bulldog)
+  ctx.fillStyle = '#3a1a08';
+  ctx.fillRect(22, -8, 8, 8);
+  // nose
+  ctx.fillStyle = '#000';
+  ctx.fillRect(28, -6, 3, 3);
+
+  // mouth/jowls
+  ctx.fillStyle = '#4a2810';
+  ctx.fillRect(22, -2, 8, 4);
+  ctx.fillStyle = '#aa6644';
+  ctx.fillRect(24, -1, 4, 2);
+
+  // eyes
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(12, -12, 4, 4);
+  ctx.fillRect(20, -12, 4, 4);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(13, -11, 2, 3);
+  ctx.fillRect(21, -11, 2, 3);
+
+  // angry brow
+  ctx.fillStyle = '#000';
+  ctx.fillRect(10, -14, 4, 1);
+  ctx.fillRect(18, -14, 4, 1);
+
+  // teeth (showing)
+  ctx.fillStyle = '#fff';
+  if (endingType !== 'good') {
+    ctx.fillRect(24, 1, 2, 2);
+    ctx.fillRect(27, 1, 2, 2);
+  }
+
+  ctx.restore();
+}
+
+// ---- ENDING ----
+function renderEnding() {
+  ctx.fillStyle = '#02020a';
+  ctx.fillRect(0, 0, W, H);
+
+  // tint
+  if (endingType === 'bad') {
+    ctx.fillStyle = 'rgba(60, 0, 0, 0.55)';
+  } else if (endingType === 'goodish') {
+    ctx.fillStyle = 'rgba(120, 100, 0, 0.35)';
+  } else {
+    ctx.fillStyle = 'rgba(0, 60, 120, 0.4)';
+  }
+  ctx.fillRect(0, 0, W, H);
+
+  // stars
+  for (let i = 0; i < 60; i++) {
+    const x = (i * 173 + 11) % W;
+    const y = ((i * 67) % (H - 200)) + 4;
+    ctx.fillStyle = i % 3 === 0 ? '#fff' : '#888';
+    ctx.fillRect(x, y, 1, 1);
+  }
+
+  // big chicken in center
+  const cx = W / 2, cy = 200;
+  if (endingType === 'bad') {
+    drawRuby(cx, cy + 20);
+    // chicken in Ruby mouth - small
+    drawChickenScaled(cx - 8, cy + 22, character, 1, 0.7);
+  } else if (endingType === 'goodish') {
+    drawChickenScaled(cx, cy, character, -1, 2);
+    // tail feathers missing (just show smaller tail area)
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(cx + 30, cy - 4, 14, 16);
+    drawNeighbor();
+  } else {
+    drawChickenScaled(cx, cy, character, -1, 2);
+  }
+
+  // Big ending text
+  ctx.textAlign = 'center';
+  const titleCol = endingType === 'bad' ? '#ff4444' :
+                   (endingType === 'goodish' ? '#ffcc66' : '#66ff88');
+
+  // shadow
+  ctx.fillStyle = '#000';
+  ctx.font = 'bold 64px Courier New';
+  ctx.fillText(endingType === 'bad' ? 'BAD ENDING' :
+               (endingType === 'goodish' ? 'GOODISH ENDING' : 'GOOD ENDING'),
+               W / 2 + 3, 363);
+  // text
+  ctx.fillStyle = titleCol;
+  ctx.fillText(endingType === 'bad' ? 'BAD ENDING' :
+               (endingType === 'goodish' ? 'GOODISH ENDING' : 'GOOD ENDING'),
+               W / 2, 360);
+
+  // description
+  ctx.fillStyle = '#fff';
+  ctx.font = '17px Courier New';
+  const desc = endingType === 'bad' ?
+    'Ruby the French Bulldog catches you\nin her jaws. You have been eaten!\n\nThe night is silent... forever.' :
+    (endingType === 'goodish' ?
+      'Ruby snaps your tail feathers off,\nbut the neighbor rushes out and saves you.\n\nYou limp home, featherless but alive.' :
+      'You flap wildly and soar back over the fence!\nRuby barks futilely below.\n\nYour tail feathers are intact. You live to cluck again!');
+  const lines = desc.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], W / 2, 410 + i * 24);
+  }
+
+  // Stats
+  ctx.fillStyle = '#aaa';
+  ctx.font = '14px Courier New';
+  ctx.fillText('Character: ' + character.toUpperCase() +
+               '   |   Time: ' + gameTime.toFixed(1) + 's',
+               W / 2, 540);
+
+  // Restart prompt
+  if (endingTimer > 0.5) {
+    const pulse = 0.7 + 0.3 * Math.abs(Math.sin(gameTime * 3));
+    ctx.fillStyle = `rgba(255, 204, 102, ${pulse})`;
+    ctx.font = 'bold 20px Courier New';
+    ctx.fillText('Click anywhere to play again', W / 2, 575);
+  }
+}
+
+function drawNeighbor() {
+  // simple pixel art neighbor
+  const x = W / 2 + 80, y = 200;
+  ctx.save();
+  ctx.translate(x, y);
+  // body
+  ctx.fillStyle = '#2244aa';
+  ctx.fillRect(-8, 0, 16, 18);
+  // head
+  ctx.fillStyle = '#f0c8a0';
+  ctx.fillRect(-6, -10, 12, 10);
+  // hair
+  ctx.fillStyle = '#3a2010';
+  ctx.fillRect(-7, -12, 14, 4);
+  // arm raised (waving)
+  ctx.fillStyle = '#f0c8a0';
+  ctx.fillRect(8, -2, 4, 12);
+  ctx.fillStyle = '#2244aa';
+  ctx.fillRect(8, 4, 4, 6);
+  ctx.restore();
+}
+
+// ---- HUD ----
+function renderHUD() {
+  const el = document.getElementById('hud');
+  if (state === 'menu') {
+    el.innerHTML = '<b style="color:#ffcc66">COOP QUEST</b><br>Pick your chicken';
+    return;
+  }
+  if (state === 'cutscene') {
+    el.innerHTML = '<b style="color:#ffcc66">CUTSCENE</b><br>Watch...';
+    return;
+  }
+  if (state === 'ending') {
+    el.innerHTML = '';
+    return;
+  }
+  let html = '<b>' + character.toUpperCase() + '</b><br>';
+  if (character === 'terry') {
+    const a = abilities.terry;
+    if (a.active) html += '<span style="color:#ff9933">FLIGHTING</span><br>';
+    else if (a.cooldown > 0) html += 'Flight: <span style="color:#aaa">' + a.cooldown.toFixed(1) + 's</span><br>';
+    else html += 'Flight: <span style="color:#66ff88">READY</span> [F]<br>';
+  }
+  if (character === 'spot') {
+    const a = abilities.spot;
+    if (a.active) html += '<span style="color:#cc66ff">BLACK HOLE ACTIVE</span><br>';
+    else if (a.cooldown > 0) html += 'Black Hole: <span style="color:#aaa">' + a.cooldown.toFixed(1) + 's</span><br>';
+    else html += 'Black Hole: <span style="color:#66ff88">READY</span> [F] or [R-Click]<br>';
+  }
+  if (character === 'charlet') {
+    const a = abilities.charlet;
+    if (a.active) html += '<span style="color:#66ccff">SWIMMING AS MULLET</span> ' + a.timer.toFixed(1) + 's<br>';
+    else if (a.cooldown > 0) html += 'Mullet: <span style="color:#aaa">' + a.cooldown.toFixed(1) + 's</span><br>';
+    else html += 'Mullet: <span style="color:#66ff88">READY</span> [F] near pool<br>';
+  }
+  if (state === 'shedTop') {
+    html += '<br><span style="color:#ffcc66">★ ON SHED ROOF ★<br>You are safe!<br>Press E to escape!</span>';
+  } else if (state === 'coop') {
+    html += '<br><span style="color:#aaa">In the chicken coop</span>';
+  } else {
+    if (cooper.state === 'chasing') {
+      html += '<br><span style="color:#ff5555">⚠ COOPER IS CHASING!</span>';
+    } else if (cooper.state === 'stunned') {
+      html += '<br><span style="color:#ffff66">Cooper is stunned!</span>';
+    } else {
+      html += '<br><span style="color:#aaa">Cooper is lurking...</span>';
+    }
+  }
+  el.innerHTML = html;
+}
+
+function renderMessage() {
+  // Wrap text to multiple lines
+  const maxChars = 60;
+  const words = message.split(' ');
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    if ((cur + ' ' + w).length > maxChars) {
+      if (cur) lines.push(cur.trim());
+      cur = w;
+    } else {
+      cur += ' ' + w;
+    }
+  }
+  if (cur) lines.push(cur.trim());
+
+  const boxH = lines.length * 18 + 20;
+  const boxY = H - boxH - 20;
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+  ctx.fillRect(30, boxY, W - 60, boxH);
+  ctx.strokeStyle = '#ffcc66';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(32, boxY + 2, W - 64, boxH - 4);
+
+  ctx.fillStyle = '#ffcc66';
+  ctx.font = 'bold 14px Courier New';
+  ctx.textAlign = 'center';
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], W / 2, boxY + 22 + i * 18);
+  }
+}
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+function loop(t) {
+  const elapsed = Math.min(0.06, (t - lastT) / 1000);
+  lastT = t;
+  now = t;
+  update(elapsed);
+  render();
+  requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(t => { lastT = t; loop(t); });
+
+</script>
+</body>
+</html>
