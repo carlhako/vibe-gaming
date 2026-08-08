@@ -211,7 +211,20 @@ def _client() -> OpenAI:
     `AIError` with the variable's name in the message, before opening any
     connection — so a flip to a provider whose env var is unset fails
     loudly with a clear, fixable error rather than 401'ing silently
-    mid-request."""
+    mid-request.
+
+    `max_retries=0`: the openai SDK defaults to 2 hidden retries on
+    retryable responses (5xx, timeouts). Observed live against MiniMax
+    (2026-08-07): its ALB returns a 504 after its own multi-minute backend
+    timeout, which the SDK's default retry policy treats as retryable —
+    so a single application-level attempt silently became 3 sequential
+    504s, each waiting up to the configured `timeout_seconds`, blowing the
+    per-attempt budget by up to 3x with nothing in `generation_attempts`
+    showing why. Retries already happen one layer up, visibly, in
+    `run_generation_attempts()` (`max_attempts` in config.yaml) — that
+    loop logs each attempt and feeds failures back to the model, which
+    the SDK's silent retry can't do. Disabling SDK retries makes a
+    logged attempt's duration match `timeout_seconds` again."""
     if not db.is_ai_generation_enabled():
         raise AIError("Error: AI generation is currently disabled by an admin")
     provider = db.get_ai_provider()
@@ -219,14 +232,14 @@ def _client() -> OpenAI:
         api_key = os.environ.get("MINIMAX_API_KEY")
         if not api_key:
             raise AIError("Error: MINIMAX_API_KEY is not set (see .env.example)")
-        return OpenAI(api_key=api_key, base_url=MINIMAX_BASE_URL)
+        return OpenAI(api_key=api_key, base_url=MINIMAX_BASE_URL, max_retries=0)
     # Default: "deepseek" (and any unknown provider, which db.get_ai_provider
     # should never actually return — it validates on set and falls back to
     # "deepseek" on read for unknown values).
     api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
         raise AIError("Error: DEEPSEEK_API_KEY is not set (see .env.example)")
-    return OpenAI(api_key=api_key, base_url=BASE_URL)
+    return OpenAI(api_key=api_key, base_url=BASE_URL, max_retries=0)
 
 
 def _cached_tokens(usage) -> int:
