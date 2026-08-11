@@ -1,0 +1,11 @@
+{
+  "game_id": "2b4aa6d397a44a96969c0e1df2f00337",
+  "parent_game_id": "77746fa87b1c4751a903b763efedb09e",
+  "root_game_id": "64d275b904ac499ebe6d7048d0b51461",
+  "title": "Coop Quest: Night Escape (v3)",
+  "description": "Help a chicken escape the backyard at night by climbing the garden bed and shed roof.",
+  "requested_by": "web:b4314cdaf5a6",
+  "created_at": "2026-08-11T00:44:32.282678Z",
+  "version": 3,
+  "prompt": "make it so when you go on the raised up garden bed you can climb on the shed."
+}
