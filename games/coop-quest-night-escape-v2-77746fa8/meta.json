@@ -1,0 +1,11 @@
+{
+  "game_id": "77746fa87b1c4751a903b763efedb09e",
+  "parent_game_id": "64d275b904ac499ebe6d7048d0b51461",
+  "root_game_id": "64d275b904ac499ebe6d7048d0b51461",
+  "title": "Coop Quest: Night Escape (v2)",
+  "description": "Nighttime chicken escape - now Charlet can transform into a slippery mullet form anywhere on the map, not just near the pool.",
+  "requested_by": "web:b4314cdaf5a6",
+  "created_at": "2026-08-11T00:33:35.757005Z",
+  "version": 2,
+  "prompt": "make charlet's ability be able to be used out and in of water"
+}
