@@ -1,0 +1,11 @@
+{
+  "game_id": "e991ab60ab3f423d8e0618267a361326",
+  "parent_game_id": "1670dfd576be4b7990b1ccfd09e79e61",
+  "root_game_id": "64d275b904ac499ebe6d7048d0b51461",
+  "title": "Coop Quest: Night Escape (v5)",
+  "description": "Help your chicken escape Cooper the dog, climb the shed, and fly over the fence into the neighbor's yard \u2014 but be ready for Ruby, the fierce French Bulldog waiting next door!",
+  "requested_by": "web:b4314cdaf5a6",
+  "created_at": "2026-08-11T01:00:29.437907Z",
+  "version": 5,
+  "prompt": "make it so when the player fly's over the fence the player will be put in a diffrent map for the cut sene"
+}
