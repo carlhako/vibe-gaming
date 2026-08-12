@@ -1,0 +1,11 @@
+{
+  "game_id": "623faba11b97426b898a5668b99770ae",
+  "parent_game_id": "e991ab60ab3f423d8e0618267a361326",
+  "root_game_id": "64d275b904ac499ebe6d7048d0b51461",
+  "title": "Coop Quest: Night Escape (v7)",
+  "description": "Escape the chicken coop at night, avoid Cooper the brindle monster dog, climb onto the shed, and fly over the fence into the neighbor's yard \u2014 now with fully redrawn, detailed pixel-art models.",
+  "requested_by": "web:7780682e550f",
+  "created_at": "2026-08-12T00:59:50.421851Z",
+  "version": 6,
+  "prompt": "make all the models a lot better."
+}
