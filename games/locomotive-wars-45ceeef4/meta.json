@@ -1,0 +1,11 @@
+{
+  "game_id": "45ceeef4f56a4c31ab7ab96d1b40bf1b",
+  "parent_game_id": null,
+  "root_game_id": "45ceeef4f56a4c31ab7ab96d1b40bf1b",
+  "title": "Locomotive Wars",
+  "description": "Slither.io-style top-down game where you drive a train, collect weapon/defense/support trailers, fight AI drones and bot trains, with WASD driving, mouse aiming, space boost, minimap and live leaderboard.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-08-14T22:21:14.071221Z",
+  "version": 1,
+  "prompt": "a top down multiplayer game like slither.io (multiplayer snake game) but you're a train that can drive anywhere. instead of collecting food like you do in slither.io, you collect random trailers to join onto your train which are randomly either a weapon, defensive (eg counter drones, energy shields, etc), or you pick another category. various different ai weapons roam the map, and when approached engage in attack. if you run into yourself or another player or a bot, it is game over. have a minimap in the top right. put a leaderboard in game, like slither.io. carriages are very short so that manoeuvrability is similar to that in slither.io. controls are wasd or arrow keys, and space bar makes go double speed like slither.io. mouse controls direction of all guns, missiles, etc. when another player dies leave a percentage of their carriages for pickup. alongside the various ai flying bot enemies, have a sensible number of ai players - dont spawn ai players if there are lots of human players (this is how slither.io works)"
+}

@@ -1,0 +1,1734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Locomotive Wars</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;background:#000;font-family:'Segoe UI',Tahoma,sans-serif;cursor:crosshair;user-select:none}
+canvas{display:block}
+#ui{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10}
+.panel{background:rgba(0,0,0,0.65);border:1px solid rgba(100,200,255,0.3);border-radius:8px;padding:12px 14px;color:#fff;backdrop-filter:blur(4px);font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,0.5)}
+#leaderboard{position:absolute;top:12px;left:12px;min-width:210px}
+#leaderboard h2{font-size:11px;text-transform:uppercase;letter-spacing:2px;color:#6cf;margin-bottom:8px;border-bottom:1px solid rgba(100,200,255,0.2);padding-bottom:6px}
+#leaderboard .row{display:flex;justify-content:space-between;padding:3px 0;font-size:12px;font-family:monospace;align-items:center}
+#leaderboard .row .rank{color:#888;width:20px}
+#leaderboard .row .name{flex:1;padding:0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#leaderboard .row .score{color:#ffeb3b;font-weight:bold}
+#leaderboard .row.me{color:#4a9eff;font-weight:bold;background:rgba(74,158,255,0.12);border-radius:4px;padding:3px 6px;margin:2px -6px}
+#leaderboard .row.me .score{color:#4a9eff}
+#leaderboard .row .dot{width:8px;height:8px;border-radius:50%;margin-right:4px;display:inline-block}
+#stats{position:absolute;bottom:12px;left:12px;min-width:230px}
+#stats .row{display:flex;justify-content:space-between;padding:3px 0;align-items:center}
+#stats .key{color:#888;font-size:10px;text-transform:uppercase;letter-spacing:1px}
+#stats .val{color:#fff;font-weight:bold;font-size:14px;font-family:monospace}
+#stats .bar{height:6px;background:#222;border-radius:3px;margin-top:4px;overflow:hidden;border:1px solid rgba(255,255,255,0.1)}
+#stats .bar>div{height:100%;background:linear-gradient(90deg,#4a9eff,#66d4ff);transition:width 0.1s}
+#stats .bar.boost>div{background:linear-gradient(90deg,#ff8800,#ffeb3b)}
+#minimap-panel{position:absolute;top:12px;right:12px;width:204px}
+#minimap-panel h3{font-size:11px;text-transform:uppercase;letter-spacing:2px;color:#6cf;margin-bottom:8px;text-align:center;border-bottom:1px solid rgba(100,200,255,0.2);padding-bottom:6px}
+#minimap{display:block;width:180px;height:180px;background:rgba(0,0,0,0.6);border:1px solid rgba(100,200,255,0.3);border-radius:4px;margin:0 auto}
+#tips{position:absolute;bottom:12px;right:12px;text-align:right;font-size:11px;color:#aaa;background:rgba(0,0,0,0.55);padding:10px 14px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);line-height:1.7}
+#tips kbd{background:#222;border:1px solid #444;padding:1px 6px;border-radius:3px;font-family:monospace;color:#fff;margin:0 2px;font-size:10px}
+.overlay{position:absolute;top:0;left:0;width:100%;height:100%;background:radial-gradient(ellipse at center,rgba(20,10,40,0.85) 0%,rgba(0,0,0,0.95) 100%);display:flex;align-items:center;justify-content:center;flex-direction:column;pointer-events:auto;z-index:100}
+.overlay h1{font-size:76px;font-weight:900;background:linear-gradient(45deg,#4a9eff,#ff4444);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:8px;letter-spacing:3px;text-align:center}
+.overlay.death h1{background:linear-gradient(45deg,#ff4444,#ffaa44);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.overlay .subtitle{color:#888;font-size:14px;margin-bottom:24px;letter-spacing:4px;text-transform:uppercase}
+.overlay p{color:#ccc;margin:5px 0;font-size:14px}
+.overlay .controls{margin-top:16px;text-align:center;background:rgba(0,0,0,0.4);padding:16px 28px;border-radius:8px;border:1px solid rgba(255,255,255,0.08)}
+.overlay button{margin-top:28px;padding:16px 50px;background:linear-gradient(45deg,#4a9eff,#2980b9);border:none;border-radius:8px;color:#fff;font-size:18px;font-weight:bold;cursor:pointer;letter-spacing:3px;text-transform:uppercase;transition:all 0.2s;box-shadow:0 0 30px rgba(74,158,255,0.5)}
+.overlay button:hover{transform:scale(1.05);box-shadow:0 0 40px rgba(74,158,255,0.8)}
+.overlay.death button{background:linear-gradient(45deg,#ff4444,#c0392b);box-shadow:0 0 30px rgba(255,68,68,0.5)}
+.overlay.death button:hover{box-shadow:0 0 40px rgba(255,68,68,0.8)}
+#death-stats{display:grid;grid-template-columns:auto auto;gap:10px 30px;margin:20px 0;color:#fff;background:rgba(0,0,0,0.5);padding:22px 32px;border-radius:8px;border:1px solid rgba(255,255,255,0.1)}
+#death-stats .key{color:#888;text-align:right;font-size:12px;text-transform:uppercase;letter-spacing:1px;align-self:center}
+#death-stats .val{color:#fff;font-weight:bold;text-align:left;font-size:20px;font-family:monospace}
+#trailer-legend{position:absolute;top:50%;left:12px;transform:translateY(-50%);background:rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:10px 12px;color:#fff;font-size:11px;display:none}
+#trailer-legend.show{display:block}
+#trailer-legend .item{display:flex;align-items:center;margin:3px 0}
+#trailer-legend .swatch{width:14px;height:14px;border-radius:3px;margin-right:8px;display:inline-block;border:1px solid #000}
+#trailer-legend .name{flex:1;color:#ccc}
+#trailer-legend h4{font-size:10px;text-transform:uppercase;letter-spacing:2px;color:#6cf;margin-bottom:6px;border-bottom:1px solid rgba(100,200,255,0.2);padding-bottom:4px}
+#combo{position:absolute;top:30%;left:50%;transform:translate(-50%,-50%);color:#ffeb3b;font-size:36px;font-weight:bold;text-shadow:0 0 16px #ffeb3b,0 0 30px #ff8800;pointer-events:none;opacity:0;transition:opacity 0.3s;font-family:monospace;text-align:center;letter-spacing:2px}
+#combo.show{opacity:1}
+#combo .sub{font-size:14px;color:#fff;display:block;margin-top:4px}
+#damage-flash{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;background:radial-gradient(ellipse at center,transparent 30%,rgba(255,0,0,0.4) 100%);opacity:0;transition:opacity 0.2s;z-index:5}
+#damage-flash.show{opacity:1}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="damage-flash"></div>
+<div id="ui">
+  <div id="leaderboard" class="panel">
+    <h2>Leaderboard</h2>
+    <div id="leaderboard-rows"></div>
+  </div>
+  <div id="stats" class="panel">
+    <div class="row"><span class="key">Score</span><span class="val" id="score">0</span></div>
+    <div class="row"><span class="key">Carriages</span><span class="val" id="carriages">1</span></div>
+    <div class="row"><span class="key">Length</span><span class="val" id="length">0m</span></div>
+    <div class="row"><span class="key">Kills</span><span class="val" id="kills">0</span></div>
+    <div class="row"><span class="key">Boost Fuel</span><span class="val" id="boost-val">100%</span></div>
+    <div class="bar boost"><div id="fuel" style="width:100%"></div></div>
+  </div>
+  <div id="minimap-panel" class="panel">
+    <h3>Minimap</h3>
+    <canvas id="minimap" width="180" height="180"></canvas>
+  </div>
+  <div id="tips">
+    <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Drive</div>
+    <div><kbd>Space</kbd> Boost</div>
+    <div><kbd>Mouse</kbd> Aim weapons</div>
+  </div>
+  <div id="trailer-legend">
+    <h4>Trailers</h4>
+    <div class="item"><span class="swatch" style="background:#ff4444"></span><span class="name">MG</span></div>
+    <div class="item"><span class="swatch" style="background:#ff6633"></span><span class="name">Missile</span></div>
+    <div class="item"><span class="swatch" style="background:#ffaa00"></span><span class="name">Laser</span></div>
+    <div class="item"><span class="swatch" style="background:#4488ff"></span><span class="name">Shield</span></div>
+    <div class="item"><span class="swatch" style="background:#44ddff"></span><span class="name">Drones</span></div>
+    <div class="item"><span class="swatch" style="background:#9944ff"></span><span class="name">Armor</span></div>
+    <div class="item"><span class="swatch" style="background:#44ff88"></span><span class="name">Speed</span></div>
+    <div class="item"><span class="swatch" style="background:#ffff44"></span><span class="name">Magnet</span></div>
+    <div class="item"><span class="swatch" style="background:#ff88ff"></span><span class="name">Fuel</span></div>
+  </div>
+  <div id="combo"></div>
+</div>
+<div id="start-screen" class="overlay">
+  <h1>LOCOMOTIVE WARS</h1>
+  <div class="subtitle">Slither-style train combat</div>
+  <p style="color:#aaa;font-size:13px;max-width:520px;text-align:center;margin:8px 30px">Collect trailers to grow your train. Each trailer is a weapon, defense, or support. Fight drones, hunt other trains, and survive the wasteland.</p>
+  <div class="controls">
+    <p><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or <kbd>&uarr;</kbd><kbd>&larr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> &mdash; Drive</p>
+    <p><kbd>Space</kbd> &mdash; Boost (drains fuel)</p>
+    <p><kbd>Mouse</kbd> &mdash; Aim weapons</p>
+  </div>
+  <button id="start-btn">Start Game</button>
+</div>
+<div id="death-screen" class="overlay death" style="display:none">
+  <h1>TRAIN DESTROYED</h1>
+  <div id="death-stats">
+    <div class="key">Score</div><div class="val" id="death-score">0</div>
+    <div class="key">Carriages</div><div class="val" id="death-carriages">0</div>
+    <div class="key">Longest Train</div><div class="val" id="death-max">0</div>
+    <div class="key">Kills</div><div class="val" id="death-kills">0</div>
+    <div class="key">Trailers</div><div class="val" id="death-pickups">0</div>
+    <div class="key">Time Alive</div><div class="val" id="death-time">0s</div>
+  </div>
+  <button id="restart-btn">Play Again</button>
+</div>
+<script>
+'use strict';
+// ===== Constants =====
+const MAP_SIZE = 6000;
+const PLAYER_SPEED = 180;
+const BOOST_SPEED = 380;
+const TURN_RATE = 3.6;
+const CARRIAGE_SPACING = 18;
+const FRAMES_PER_SPACING = 5;
+const PICKUP_RADIUS_BASE = 32;
+const COLLISION_RADIUS = 8;
+const BOOST_FUEL_MAX = 100;
+const BOOST_FUEL_DRAIN = 28;
+const BOOST_FUEL_REGEN = 12;
+const TRAILER_RESPAWN = 4.0;
+const ENEMY_RESPAWN = 7.0;
+const MAX_TRAILERS = 60;
+const MAX_ENEMIES = 22;
+const FPS = 60;
+
+// ===== Trailer types =====
+const TRAILER_TYPES = [
+  {cat:'weapon',sub:'mg',label:'MG Turret',color:'#ff4444',icon:'M',rarity:1.0},
+  {cat:'weapon',sub:'missile',label:'Missile',color:'#ff6633',icon:'R',rarity:0.7},
+  {cat:'weapon',sub:'laser',label:'Laser',color:'#ffaa00',icon:'L',rarity:0.8},
+  {cat:'defense',sub:'shield',label:'Shield',color:'#4488ff',icon:'S',rarity:1.0},
+  {cat:'defense',sub:'drones',label:'Counter-Drone',color:'#44ddff',icon:'D',rarity:0.7},
+  {cat:'defense',sub:'armor',label:'Armor',color:'#9944ff',icon:'A',rarity:0.9},
+  {cat:'support',sub:'speed',label:'Booster',color:'#44ff88',icon:'B',rarity:0.9},
+  {cat:'support',sub:'magnet',label:'Magnet',color:'#ffff44',icon:''+String.fromCharCode(0x25BC),rarity:0.8},
+  {cat:'support',sub:'fuel',label:'Fuel Tank',color:'#ff88ff',icon:'F',rarity:0.9},
+];
+
+// ===== AI Bot names =====
+const AI_NAMES = ['IronWolf','SteelHawk','CrimsonRail','Thunder-7','Magnetar','Vortex','Pandora','Brimstone','NightTrain','GhostProtocol','BrassBeast','Centurion','DoomEngine','Eclipse','Frostbite','Gunslinger','Helios','Inferno','Juggernaut','Kraken','Lightning','Moonshine','Nemesis','Onyx','Phantom','Quasar','Razorback','Stormbringer','Titan','Umbra','Vector','Wraith','Xenon','Yankee','Zenith','Apex','Bolt','Cyclone','Drake','Eagle','Falcon'];
+
+// ===== Canvas setup =====
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const minimapCanvas = document.getElementById('minimap');
+const minimapCtx = minimapCanvas.getContext('2d');
+let W = window.innerWidth, H = window.innerHeight;
+function resize(){
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ===== Input =====
+const input = {
+  up:false, down:false, left:false, right:false,
+  boost:false,
+  mouseX:0, mouseY:0,
+  mouseScreenX:0, mouseScreenY:0,
+};
+window.addEventListener('keydown', e => {
+  if(['w','W','ArrowUp'].includes(e.key)) input.up = true;
+  if(['a','A','ArrowLeft'].includes(e.key)) input.left = true;
+  if(['s','S','ArrowDown'].includes(e.key)) input.down = true;
+  if(['d','D','ArrowRight'].includes(e.key)) input.right = true;
+  if(e.key === ' '){input.boost = true; e.preventDefault();}
+  if(['w','a','s','d','W','A','S','D','ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+}, {capture:true});
+window.addEventListener('keyup', e => {
+  if(['w','W','ArrowUp'].includes(e.key)) input.up = false;
+  if(['a','A','ArrowLeft'].includes(e.key)) input.left = false;
+  if(['s','S','ArrowDown'].includes(e.key)) input.down = false;
+  if(['d','D','ArrowRight'].includes(e.key)) input.right = false;
+  if(e.key === ' ') input.boost = false;
+});
+window.addEventListener('mousemove', e => {
+  input.mouseScreenX = e.clientX;
+  input.mouseScreenY = e.clientY;
+  input.mouseX = e.clientX;
+  input.mouseY = e.clientY;
+});
+window.addEventListener('contextmenu', e => e.preventDefault());
+
+// ===== Utility =====
+function rand(min, max){ return Math.random() * (max - min) + min; }
+function randInt(min, max){ return Math.floor(rand(min, max)); }
+function randArr(arr){ return arr[Math.floor(Math.random() * arr.length)]; }
+function dist(a, b){ return Math.hypot(a.x - b.x, a.y - b.y); }
+function clamp(v, m, M){ return v < m ? m : v > M ? M : v; }
+function lerp(a, b, t){ return a + (b - a) * t; }
+function lerpAngle(a, b, t){
+  let d = b - a;
+  while(d > Math.PI) d -= 2 * Math.PI;
+  while(d < -Math.PI) d += 2 * Math.PI;
+  return a + d * t;
+}
+function shortAngle(d){
+  while(d > Math.PI) d -= 2 * Math.PI;
+  while(d < -Math.PI) d += 2 * Math.PI;
+  return d;
+}
+function randomPos(margin){
+  margin = margin || 100;
+  return {x: rand(margin, MAP_SIZE - margin), y: rand(margin, MAP_SIZE - margin)};
+}
+function randomColor(){
+  const colors = ['#ff6666','#66ff66','#6666ff','#ffcc66','#cc66ff','#66ffcc','#ff66cc','#ccff66','#ff9966','#9966ff','#66ccff','#ff66aa'];
+  return randArr(colors);
+}
+function pickTrailerType(){
+  // Weighted random by rarity
+  const total = TRAILER_TYPES.reduce((s, t) => s + t.rarity, 0);
+  let r = Math.random() * total;
+  for(const t of TRAILER_TYPES){
+    r -= t.rarity;
+    if(r <= 0) return t;
+  }
+  return TRAILER_TYPES[0];
+}
+
+// ===== Game state =====
+const game = {
+  state: 'start', // 'start', 'playing', 'gameover'
+  player: null,
+  trains: [],
+  trailers: [],
+  enemies: [],
+  projectiles: [],
+  particles: [],
+  pickupDrops: [],
+  camera: {x: 0, y: 0},
+  time: 0,
+  totalHumans: 1,
+  shakeTime: 0,
+  shakeIntensity: 0,
+  respawnTimers: {trailer: 0, enemy: 0},
+  killedTrains: 0,
+};
+
+// ===== Carriage rendering helpers =====
+function getCarriageColor(c){
+  if(c.type === 'weapon'){
+    if(c.subtype === 'mg') return {body:'#cc3333', light:'#ff8888'};
+    if(c.subtype === 'missile') return {body:'#cc4422', light:'#ff9966'};
+    if(c.subtype === 'laser') return {body:'#cc8822', light:'#ffcc55'};
+  }
+  if(c.type === 'shield'){
+    if(c.subtype === 'shield') return {body:'#3366cc', light:'#88bbff'};
+    if(c.subtype === 'drones') return {body:'#33aacc', light:'#88e8ff'};
+    if(c.subtype === 'armor') return {body:'#6633cc', light:'#9966ff'};
+  }
+  if(c.type === 'support'){
+    if(c.subtype === 'speed') return {body:'#33cc66', light:'#88ff99'};
+    if(c.subtype === 'magnet') return {body:'#cccc33', light:'#ffff88'};
+    if(c.subtype === 'fuel') return {body:'#cc33aa', light:'#ff88dd'};
+  }
+  return {body:'#888', light:'#aaa'};
+}
+
+// ===== Train class =====
+class Train {
+  constructor(name, color, isHuman){
+    this.name = name;
+    this.color = color;
+    this.isHuman = isHuman;
+    this.alive = true;
+    this.carriages = [];
+    this.path = [];
+    this.head = {x:0, y:0, angle:0, hp:100, maxHp:100};
+    this.score = 0;
+    this.fuel = BOOST_FUEL_MAX;
+    this.fuelMax = BOOST_FUEL_MAX;
+    this.aiTarget = null;
+    this.aiState = 'wander';
+    this.aiTimer = 0;
+    this.aiDecisionTimer = 0;
+    this.turnSpeed = 0;
+    this.killCount = 0;
+    this.pickups = 0;
+    this.maxCarriages = 1;
+    // Buffs
+    this.armorBonus = 0;
+    this.speedBonus = 0;
+    this.fuelBonus = 0;
+    this.magnetBonus = 0;
+    this.damageReduction = 0;
+    this.droneCount = 0;
+    this.fireTimers = {};
+    this.drones = [];
+    this.flashTime = 0;
+    this.boostTrail = 0;
+  }
+  spawn(pos){
+    this.head.x = pos.x;
+    this.head.y = pos.y;
+    this.head.angle = Math.random() * Math.PI * 2;
+    // Pre-fill path so carriages have positions
+    for(let i = 0; i < 200; i++){
+      this.path.push({x: pos.x, y: pos.y, angle: this.head.angle});
+    }
+    this.addCarriage('engine', 'locomotive');
+    this.recalcMaxHp();
+  }
+  addCarriage(category, subtype){
+    const idx = this.carriages.length;
+    const pathIdx = Math.max(0, this.path.length - 1 - idx * FRAMES_PER_SPACING);
+    const pos = this.path[pathIdx];
+    let type = 'engine';
+    if(category === 'weapon') type = 'weapon';
+    else if(category === 'defense') type = 'shield';
+    else if(category === 'support') type = 'support';
+    const c = {
+      type, subtype,
+      x: pos.x, y: pos.y, angle: pos.angle,
+      age: 0,
+    };
+    this.carriages.push(c);
+    this.maxCarriages = Math.max(this.maxCarriages, this.carriages.length);
+    // Apply buff
+    if(subtype === 'armor') this.armorBonus += 35;
+    if(subtype === 'speed') this.speedBonus += 0.07;
+    if(subtype === 'fuel') this.fuelBonus += 0.3;
+    if(subtype === 'magnet') this.magnetBonus += 14;
+    if(subtype === 'shield') this.damageReduction += 0.08;
+    if(subtype === 'drones') this.droneCount += 1;
+    if(subtype === 'repair') this.droneCount += 0; // placeholder
+    this.recalcMaxHp();
+  }
+  recalcMaxHp(){
+    this.head.maxHp = 80 + (this.carriages.length - 1) * 35 + this.armorBonus;
+    if(this.head.hp > this.head.maxHp) this.head.hp = this.head.maxHp;
+  }
+  addRandomCarriage(){
+    const t = pickTrailerType();
+    this.addCarriage(t.cat, t.sub);
+  }
+  get pickupRadius(){ return PICKUP_RADIUS_BASE + this.magnetBonus; }
+  get speedMult(){ return 1 + this.speedBonus; }
+  update(dt){
+    if(!this.alive) return;
+    let turnSpeed = 0;
+    let speed = PLAYER_SPEED * this.speedMult;
+    if(this.isHuman){
+      if(input.left) turnSpeed -= 1;
+      if(input.right) turnSpeed += 1;
+      if(input.boost && this.fuel > 0){
+        speed = BOOST_SPEED * this.speedMult;
+        this.fuel -= BOOST_FUEL_DRAIN * dt;
+        this.boostTrail = 0.3;
+      } else {
+        this.fuel = Math.min(this.fuelMax * (1 + this.fuelBonus * 0.5), this.fuel + BOOST_FUEL_REGEN * dt);
+      }
+      if(input.down) speed *= 0.5;
+    } else {
+      this.aiUpdate(dt);
+      turnSpeed = this.turnSpeed;
+      if((this.aiState === 'flee' || this.aiState === 'attack') && this.fuel > 0){
+        speed = BOOST_SPEED * this.speedMult * 0.9;
+        this.fuel -= BOOST_FUEL_DRAIN * 0.7 * dt;
+        this.boostTrail = 0.2;
+      } else {
+        this.fuel = Math.min(this.fuelMax * (1 + this.fuelBonus * 0.5), this.fuel + BOOST_FUEL_REGEN * dt);
+      }
+    }
+    this.head.angle += turnSpeed * TURN_RATE * dt;
+    this.head.x += Math.cos(this.head.angle) * speed * dt;
+    this.head.y += Math.sin(this.head.angle) * speed * dt;
+    // Wrap
+    this.head.x = (this.head.x + MAP_SIZE) % MAP_SIZE;
+    this.head.y = (this.head.y + MAP_SIZE) % MAP_SIZE;
+    // Path
+    this.path.push({x: this.head.x, y: this.head.y, angle: this.head.angle});
+    if(this.path.length > 6000) this.path.shift();
+    // Carriages
+    for(let i = 0; i < this.carriages.length; i++){
+      const idx = this.path.length - 1 - (i + 1) * FRAMES_PER_SPACING;
+      if(idx >= 0){
+        const p = this.path[idx];
+        this.carriages[i].x = p.x;
+        this.carriages[i].y = p.y;
+        this.carriages[i].angle = p.angle;
+      }
+    }
+    // Drones
+    for(let i = 0; i < this.drones.length; i++){
+      this.drones[i].angle += dt * 1.8;
+    }
+    // Boost smoke trail
+    if(this.boostTrail > 0){
+      this.boostTrail -= dt;
+      const back = -14;
+      for(let i = 0; i < 2; i++){
+        game.particles.push({
+          x: this.head.x + Math.cos(this.head.angle + Math.PI) * back + rand(-3, 3),
+          y: this.head.y + Math.sin(this.head.angle + Math.PI) * back + rand(-3, 3),
+          vx: rand(-20, 20),
+          vy: rand(-20, 20),
+          life: 0.6,
+          color: i ? '#aaaaaa' : '#ff8800',
+          size: rand(3, 6),
+        });
+      }
+    }
+    // Small exhaust always
+    if(Math.random() < 0.3){
+      const back = -10;
+      game.particles.push({
+        x: this.head.x + Math.cos(this.head.angle + Math.PI) * back + rand(-2, 2),
+        y: this.head.y + Math.sin(this.head.angle + Math.PI) * back + rand(-2, 2),
+        vx: rand(-10, 10),
+        vy: rand(-10, 10),
+        life: 0.4,
+        color: '#888888',
+        size: rand(2, 4),
+      });
+    }
+    // Fire weapons
+    this.fireWeapons(dt);
+    // Counter-drones fire
+    this.fireDrones(dt);
+    // Flash decay
+    if(this.flashTime > 0) this.flashTime -= dt;
+    // Passive heal from carriages
+    if(Math.random() < dt * 0.5){
+      this.head.hp = Math.min(this.head.maxHp, this.head.hp + 0.5);
+    }
+  }
+  fireDrones(dt){
+    if(this.droneCount === 0) return;
+    // Ensure drones array
+    while(this.drones.length < this.droneCount) this.drones.push({angle: Math.random() * Math.PI * 2, fireTimer: 0});
+    for(let i = 0; i < this.drones.length; i++){
+      const d = this.drones[i];
+      d.angle += dt * 2;
+      d.fireTimer = (d.fireTimer || 0) - dt;
+      if(d.fireTimer > 0) continue;
+      const droneX = this.head.x + Math.cos(d.angle) * 35;
+      const droneY = this.head.y + Math.sin(d.angle) * 35;
+      // Find target
+      let best = null, bestDist = 250;
+      for(const e of game.enemies){
+        const dd = Math.hypot(e.x - droneX, e.y - droneY);
+        if(dd < bestDist){bestDist = dd; best = e;}
+      }
+      if(best){
+        d.fireTimer = 0.6;
+        const a = Math.atan2(best.y - droneY, best.x - droneX);
+        game.projectiles.push({
+          x: droneX, y: droneY,
+          vx: Math.cos(a) * 380,
+          vy: Math.sin(a) * 380,
+          damage: 4,
+          type: 'drone',
+          owner: this,
+          ownerIsEnemy: false,
+          life: 1.0,
+        });
+      }
+    }
+  }
+  fireWeapons(dt){
+    for(let i = 0; i < this.carriages.length; i++){
+      const c = this.carriages[i];
+      if(c.type !== 'weapon') continue;
+      const target = this.findTargetForCarriage(i);
+      if(!target) continue;
+      const dx = target.x - c.x;
+      const dy = target.y - c.y;
+      const d = Math.hypot(dx, dy);
+      if(d > 550) continue;
+      let fireRate = 6, dmg = 8, projSpeed = 500, pType = 'bullet', splash = 0;
+      if(c.subtype === 'mg'){ fireRate = 7; dmg = 7; projSpeed = 550; pType = 'bullet'; }
+      if(c.subtype === 'missile'){ fireRate = 0.9; dmg = 28; projSpeed = 280; pType = 'missile'; splash = 50; }
+      if(c.subtype === 'laser'){ fireRate = 3.5; dmg = 14; projSpeed = 900; pType = 'laser'; }
+      const ftKey = c.subtype + '_' + i;
+      this.fireTimers[ftKey] = (this.fireTimers[ftKey] || 0) - dt;
+      if(this.fireTimers[ftKey] > 0) continue;
+      // Determine aim angle
+      let aimAngle = Math.atan2(dy, dx);
+      if(this.isHuman){
+        // Re-aim toward mouse for human
+        const mwX = input.mouseX + game.camera.x;
+        const mwY = input.mouseY + game.camera.y;
+        aimAngle = Math.atan2(mwY - c.y, mwX - c.x);
+      }
+      // Check fire cone
+      let diff = shortAngle(aimAngle - c.angle);
+      if(Math.abs(diff) > Math.PI / 2.5) continue;
+      this.fireTimers[ftKey] = 1 / fireRate;
+      const dirX = Math.cos(aimAngle);
+      const dirY = Math.sin(aimAngle);
+      game.projectiles.push({
+        x: c.x + dirX * 9,
+        y: c.y + dirY * 9,
+        vx: dirX * projSpeed,
+        vy: dirY * projSpeed,
+        damage: dmg,
+        type: pType,
+        owner: this,
+        ownerIsEnemy: false,
+        life: 1.6,
+        splash: splash,
+      });
+      // Muzzle flash particles
+      for(let p = 0; p < 3; p++){
+        game.particles.push({
+          x: c.x + dirX * 9,
+          y: c.y + dirY * 9,
+          vx: dirX * rand(80, 200) + rand(-50, 50),
+          vy: dirY * rand(80, 200) + rand(-50, 50),
+          life: 0.2,
+          color: c.subtype === 'missile' ? '#ffaa44' : '#ffff88',
+          size: rand(2, 4),
+        });
+      }
+    }
+  }
+  findTargetForCarriage(i){
+    const c = this.carriages[i];
+    let best = null, bestDist = 600;
+    for(const e of game.enemies){
+      if(e.hp <= 0) continue;
+      const d = dist(c, e);
+      if(d < bestDist){bestDist = d; best = e;}
+    }
+    if(!this.isHuman){
+      for(const t of game.trains){
+        if(t === this || !t.alive) continue;
+        const d = dist(c, t.head);
+        if(d < bestDist){bestDist = d; best = t.head;}
+      }
+    }
+    // If human and just grazing, also check enemies
+    return best;
+  }
+  aiUpdate(dt){
+    this.aiDecisionTimer -= dt;
+    if(this.aiDecisionTimer <= 0 || !this.aiTarget){
+      this.aiDecisionTimer = 1.0 + Math.random() * 1.5;
+      // Check threats
+      let threat = null, threatDist = 280;
+      for(const t of game.trains){
+        if(t === this || !t.alive) continue;
+        if(t.carriages.length > this.carriages.length + 2){
+          const d = dist(this.head, t.head);
+          if(d < threatDist){threatDist = d; threat = t;}
+        }
+      }
+      if(threat){
+        this.aiState = 'flee';
+        this.aiTarget = this;
+        this.fleeFrom = threat;
+      } else {
+        // Find target trains to attack
+        let target = null, targetDist = 350;
+        for(const t of game.trains){
+          if(t === this || !t.alive) continue;
+          if(t.carriages.length < this.carriages.length - 2){
+            const d = dist(this.head, t.head);
+            if(d < targetDist){targetDist = d; target = t.head;}
+          }
+        }
+        if(target){
+          this.aiState = 'attack';
+          this.aiTarget = target;
+        } else {
+          // Find trailer
+          let trailer = null, trailerDist = 1200;
+          for(const t of game.trailers){
+            const d = dist(this.head, t);
+            if(d < trailerDist){trailerDist = d; trailer = t;}
+          }
+          if(trailer){
+            this.aiState = 'seek';
+            this.aiTarget = trailer;
+          } else {
+            this.aiState = 'wander';
+            this.aiTarget = {x: rand(200, MAP_SIZE - 200), y: rand(200, MAP_SIZE - 200)};
+          }
+        }
+      }
+    }
+    // Determine target position
+    let tx, ty;
+    if(this.aiState === 'flee' && this.fleeFrom && this.fleeFrom.alive){
+      const dx = this.head.x - this.fleeFrom.head.x;
+      const dy = this.head.y - this.fleeFrom.head.y;
+      const dd = Math.hypot(dx, dy) || 1;
+      tx = this.head.x + (dx / dd) * 200;
+      ty = this.head.y + (dy / dd) * 200;
+    } else if(this.aiTarget && (this.aiTarget.x !== undefined)){
+      tx = this.aiTarget.x;
+      ty = this.aiTarget.y;
+    } else {
+      tx = this.head.x;
+      ty = this.head.y;
+    }
+    // Move toward target
+    const dx = tx - this.head.x;
+    const dy = ty - this.head.y;
+    const targetAngle = Math.atan2(dy, dx);
+    let diff = shortAngle(targetAngle - this.head.angle);
+    this.turnSpeed = clamp(diff * 2, -1, 1);
+  }
+  takeDamage(amount, source){
+    if(!this.alive) return;
+    const reduced = amount * (1 - Math.min(0.7, this.damageReduction));
+    this.head.hp -= reduced;
+    this.flashTime = 0.2;
+    if(this.head.hp <= 0){
+      this.die(source);
+    }
+  }
+  die(killer){
+    this.alive = false;
+    // Big explosion
+    for(let i = 0; i < 50; i++){
+      const a = Math.random() * Math.PI * 2;
+      const s = rand(80, 250);
+      game.particles.push({
+        x: this.head.x + rand(-10, 10),
+        y: this.head.y + rand(-10, 10),
+        vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+        life: 1.5 + Math.random() * 0.5,
+        color: randArr(['#ffaa44', '#ff4422', '#ffeb3b', this.color]),
+        size: rand(2, 7),
+      });
+    }
+    // Drop 50% of carriages as pickups
+    const dropCount = Math.floor(this.carriages.length * 0.5);
+    for(let i = 0; i < dropCount; i++){
+      const c = this.carriages[i];
+      if(!c) continue;
+      const t = pickTrailerType();
+      game.pickupDrops.push({
+        x: c.x + rand(-20, 20),
+        y: c.y + rand(-20, 20),
+        trailer: t,
+        age: 0,
+      });
+    }
+    if(this.isHuman){
+      // Game over
+      setTimeout(() => endGame(), 100);
+    } else if(killer && killer.isHuman){
+      killer.score += 15;
+      killer.killCount++;
+      showCombo('KILL +15', '#ffeb3b');
+      game.killedTrains++;
+    }
+    if(this.isHuman){
+      addShake(15, 0.6);
+      showDamageFlash();
+    }
+  }
+}
+
+// ===== Enemy class =====
+function spawnEnemyAt(pos){
+  const r = Math.random();
+  let type;
+  if(r < 0.55) type = 'drone';
+  else if(r < 0.85) type = 'hunter';
+  else type = 'sentry';
+  const e = {
+    type,
+    x: pos.x, y: pos.y,
+    angle: Math.random() * Math.PI * 2,
+    hp: type === 'drone' ? 25 : (type === 'sentry' ? 180 : 90),
+    maxHp: type === 'drone' ? 25 : (type === 'sentry' ? 180 : 90),
+    speed: type === 'drone' ? 90 : (type === 'sentry' ? 0 : 70),
+    damage: type === 'drone' ? 5 : (type === 'sentry' ? 12 : 9),
+    shootTimer: 0,
+    moveTimer: 0,
+    targetAngle: 0,
+    flashTime: 0,
+  };
+  game.enemies.push(e);
+  return e;
+}
+
+// ===== Spawn functions =====
+function spawnTrailer(pos){
+  const type = pickTrailerType();
+  game.trailers.push({
+    x: pos.x, y: pos.y,
+    type: type,
+    pulse: Math.random() * Math.PI * 2,
+  });
+}
+function spawnBotTrain(){
+  const t = new Train(randArr(AI_NAMES), randomColor(), false);
+  let pos;
+  for(let tries = 0; tries < 20; tries++){
+    pos = randomPos(200);
+    let tooClose = false;
+    for(const other of game.trains){
+      if(other.alive && dist(pos, other.head) < 800){tooClose = true; break;}
+    }
+    if(!tooClose) break;
+  }
+  t.spawn(pos);
+  // Add some initial carriages
+  const num = randInt(2, 6);
+  for(let i = 0; i < num; i++){
+    t.addRandomCarriage();
+  }
+  t.recalcMaxHp();
+  game.trains.push(t);
+  return t;
+}
+
+// ===== Game start/end =====
+function startGame(){
+  document.getElementById('start-screen').style.display = 'none';
+  document.getElementById('death-screen').style.display = 'none';
+  game.state = 'playing';
+  game.time = 0;
+  game.killedTrains = 0;
+  game.shakeTime = 0;
+  game.shakeIntensity = 0;
+  game.respawnTimers = {trailer: 0, enemy: 0};
+  // Player
+  game.player = new Train('You', '#4a9eff', true);
+  game.player.spawn({x: MAP_SIZE / 2, y: MAP_SIZE / 2});
+  game.trains = [game.player];
+  game.trailers = [];
+  game.enemies = [];
+  game.projectiles = [];
+  game.particles = [];
+  game.pickupDrops = [];
+  // Show legend after a few seconds
+  setTimeout(() => {
+    if(game.state === 'playing') document.getElementById('trailer-legend').classList.add('show');
+  }, 1500);
+  setTimeout(() => {
+    document.getElementById('trailer-legend').classList.remove('show');
+  }, 12000);
+  // Spawn trailers
+  for(let i = 0; i < 50; i++) spawnTrailer(randomPos(100));
+  // Spawn enemies
+  for(let i = 0; i < 18; i++) spawnEnemyAt(randomPos(150));
+  // Spawn bots (depends on "human" count)
+  const humanCount = game.totalHumans;
+  let botCount;
+  if(humanCount >= 6) botCount = 1;
+  else if(humanCount >= 4) botCount = 3;
+  else if(humanCount >= 2) botCount = 5;
+  else if(humanCount >= 1) botCount = 8;
+  else botCount = 10;
+  for(let i = 0; i < botCount; i++) spawnBotTrain();
+}
+function endGame(){
+  game.state = 'gameover';
+  const p = game.player;
+  document.getElementById('death-score').textContent = p.score;
+  document.getElementById('death-carriages').textContent = p.carriages.length;
+  document.getElementById('death-max').textContent = p.maxCarriages;
+  document.getElementById('death-kills').textContent = p.killCount;
+  document.getElementById('death-pickups').textContent = p.pickups;
+  document.getElementById('death-time').textContent = Math.floor(game.time) + 's';
+  document.getElementById('death-screen').style.display = 'flex';
+}
+function restartGame(){ startGame(); }
+document.getElementById('start-btn').onclick = startGame;
+document.getElementById('restart-btn').onclick = restartGame;
+
+// ===== Effects =====
+function addShake(intensity, duration){
+  if(intensity > game.shakeIntensity) game.shakeIntensity = intensity;
+  game.shakeTime = Math.max(game.shakeTime, duration);
+}
+function showDamageFlash(){
+  const el = document.getElementById('damage-flash');
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 200);
+}
+let comboTimer = 0;
+function showCombo(text, color){
+  const el = document.getElementById('combo');
+  el.innerHTML = text;
+  el.style.color = color;
+  el.classList.add('show');
+  comboTimer = 1.2;
+}
+
+// ===== Game loop =====
+let lastTime = performance.now();
+function loop(now){
+  const dt = Math.min(0.1, (now - lastTime) / 1000);
+  lastTime = now;
+  if(game.state === 'playing'){
+    update(dt);
+  }
+  render();
+  if(comboTimer > 0){
+    comboTimer -= dt;
+    if(comboTimer <= 0) document.getElementById('combo').classList.remove('show');
+  }
+  requestAnimationFrame(loop);
+}
+
+function update(dt){
+  game.time += dt;
+  // Update player
+  game.player.update(dt);
+  // Update bot trains
+  for(const t of game.trains){
+    if(t.isHuman) continue;
+    t.update(dt);
+  }
+  // Update enemies
+  for(let i = game.enemies.length - 1; i >= 0; i--){
+    const e = game.enemies[i];
+    if(e.flashTime > 0) e.flashTime -= dt;
+    e.shootTimer -= dt;
+    e.moveTimer -= dt;
+    if(e.speed > 0 && e.moveTimer <= 0){
+      e.moveTimer = 1.5 + Math.random() * 2;
+      e.targetAngle = Math.random() * Math.PI * 2;
+      // Bias toward player
+      if(game.player.alive && Math.random() < 0.4){
+        e.targetAngle = Math.atan2(game.player.head.y - e.y, game.player.head.x - e.x) + rand(-0.5, 0.5);
+      }
+    }
+    let diff = shortAngle(e.targetAngle - e.angle);
+    e.angle += diff * dt * 1.5;
+    e.x += Math.cos(e.angle) * e.speed * dt;
+    e.y += Math.sin(e.angle) * e.speed * dt;
+    e.x = (e.x + MAP_SIZE) % MAP_SIZE;
+    e.y = (e.y + MAP_SIZE) % MAP_SIZE;
+    // Shoot at player
+    if(game.player.alive && e.shootTimer <= 0){
+      const d = dist(e, game.player.head);
+      if(d < (e.type === 'sentry' ? 500 : 380)){
+        e.shootTimer = e.type === 'sentry' ? 1.0 : 1.5;
+        const a = Math.atan2(game.player.head.y - e.y, game.player.head.x - e.x);
+        game.projectiles.push({
+          x: e.x, y: e.y,
+          vx: Math.cos(a) * (e.type === 'sentry' ? 320 : 240),
+          vy: Math.sin(a) * (e.type === 'sentry' ? 320 : 240),
+          damage: e.damage,
+          type: 'enemy',
+          owner: e,
+          ownerIsEnemy: true,
+          life: 2.5,
+        });
+      }
+    }
+  }
+  // Update projectiles
+  for(let i = game.projectiles.length - 1; i >= 0; i--){
+    const p = game.projectiles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.life -= dt;
+    if(p.life <= 0 || p.x < -100 || p.x > MAP_SIZE + 100 || p.y < -100 || p.y > MAP_SIZE + 100){
+      game.projectiles.splice(i, 1);
+      continue;
+    }
+    if(!p.ownerIsEnemy){
+      // Hit enemies
+      let hit = false;
+      for(let j = game.enemies.length - 1; j >= 0; j--){
+        const e = game.enemies[j];
+        if(Math.hypot(p.x - e.x, p.y - e.y) < 18){
+          e.hp -= p.damage;
+          e.flashTime = 0.15;
+          // Hit particles
+          for(let q = 0; q < 5; q++){
+            const a = Math.random() * Math.PI * 2;
+            game.particles.push({
+              x: p.x, y: p.y,
+              vx: Math.cos(a) * rand(50, 150),
+              vy: Math.sin(a) * rand(50, 150),
+              life: 0.3, color: '#ffaa44', size: rand(2, 4),
+            });
+          }
+          // Splash damage
+          if(p.splash){
+            for(const e2 of game.enemies){
+              if(e2 === e) continue;
+              if(Math.hypot(e2.x - p.x, e2.y - p.y) < p.splash){
+                e2.hp -= p.damage * 0.6;
+                e2.flashTime = 0.15;
+              }
+            }
+          }
+          if(p.type === 'missile'){
+            // Explosion
+            for(let q = 0; q < 10; q++){
+              const a = Math.random() * Math.PI * 2;
+              const s = rand(50, 200);
+              game.particles.push({
+                x: p.x, y: p.y,
+                vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+                life: 0.5, color: '#ff6633', size: rand(3, 6),
+              });
+            }
+          }
+          if(e.hp <= 0){
+            // Kill
+            for(let q = 0; q < 18; q++){
+              const a = Math.random() * Math.PI * 2;
+              const s = rand(50, 220);
+              game.particles.push({
+                x: e.x, y: e.y,
+                vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+                life: 0.9, color: e.type === 'sentry' ? '#ffaa00' : '#ff4444', size: rand(2, 5),
+              });
+            }
+            // Drop trailer
+            const t = pickTrailerType();
+            game.pickupDrops.push({
+              x: e.x + rand(-15, 15), y: e.y + rand(-15, 15),
+              trailer: t, age: 0,
+            });
+            if(p.owner && p.owner.isHuman){
+              p.owner.score += 5;
+              p.owner.killCount++;
+            } else if(p.owner && !p.owner.isHuman){
+              p.owner.score += 2;
+            }
+            game.enemies.splice(j, 1);
+          }
+          hit = true;
+          break;
+        }
+      }
+      if(hit){game.projectiles.splice(i, 1); continue;}
+      // Hit bot trains
+      for(const t of game.trains){
+        if(t === p.owner || !t.alive) continue;
+        if(Math.hypot(p.x - t.head.x, p.y - t.head.y) < 14){
+          t.takeDamage(p.damage, p.owner);
+          game.projectiles.splice(i, 1);
+          if(p.owner && p.owner.isHuman){}
+          break;
+        }
+      }
+    } else {
+      // Enemy projectile - hit player
+      if(game.player.alive && Math.hypot(p.x - game.player.head.x, p.y - game.player.head.y) < 12){
+        game.player.takeDamage(p.damage, p.owner);
+        for(let q = 0; q < 5; q++){
+          const a = Math.random() * Math.PI * 2;
+          game.particles.push({
+            x: p.x, y: p.y,
+            vx: Math.cos(a) * rand(50, 150),
+            vy: Math.sin(a) * rand(50, 150),
+            life: 0.4, color: '#ff8800', size: rand(2, 4),
+          });
+        }
+        game.projectiles.splice(i, 1);
+        if(p.owner && p.owner !== game.player){
+          // Bot train shot us
+          showDamageFlash();
+        }
+      }
+    }
+  }
+  // Update particles
+  for(let i = game.particles.length - 1; i >= 0; i--){
+    const p = game.particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vx *= 0.93;
+    p.vy *= 0.93;
+    p.life -= dt;
+    if(p.life <= 0) game.particles.splice(i, 1);
+  }
+  // Pulses
+  for(const t of game.trailers) t.pulse = (t.pulse + dt * 2.5) % (Math.PI * 2);
+  // Pickup drops age
+  for(const p of game.pickupDrops) p.age += dt;
+  for(let i = game.pickupDrops.length - 1; i >= 0; i--){
+    if(game.pickupDrops[i].age > 35) game.pickupDrops.splice(i, 1);
+  }
+  // Pickup checks for player
+  if(game.player.alive){
+    const ph = game.player.head;
+    const pr = game.player.pickupRadius;
+    // Trailers
+    for(let i = game.trailers.length - 1; i >= 0; i--){
+      const t = game.trailers[i];
+      if(dist(ph, t) < pr){
+        game.player.addCarriage(t.type.cat, t.type.sub);
+        game.player.score += 1;
+        game.player.pickups++;
+        game.trailers.splice(i, 1);
+        // Particles
+        for(let q = 0; q < 10; q++){
+          const a = Math.random() * Math.PI * 2;
+          game.particles.push({
+            x: t.x, y: t.y,
+            vx: Math.cos(a) * rand(60, 180),
+            vy: Math.sin(a) * rand(60, 180),
+            life: 0.5, color: t.type.color, size: rand(2, 4),
+          });
+        }
+        game.respawnTimers.trailer = TRAILER_RESPAWN;
+      }
+    }
+    // Pickup drops
+    for(let i = game.pickupDrops.length - 1; i >= 0; i--){
+      const p = game.pickupDrops[i];
+      if(dist(ph, p) < pr){
+        game.player.addCarriage(p.trailer.cat, p.trailer.sub);
+        game.player.score += 2;
+        game.player.pickups++;
+        game.pickupDrops.splice(i, 1);
+        for(let q = 0; q < 8; q++){
+          const a = Math.random() * Math.PI * 2;
+          game.particles.push({
+            x: p.x, y: p.y,
+            vx: Math.cos(a) * rand(50, 150),
+            vy: Math.sin(a) * rand(50, 150),
+            life: 0.4, color: p.trailer.color, size: rand(2, 4),
+          });
+        }
+      }
+    }
+    // Collision: head vs other trains' carriages
+    for(const t of game.trains){
+      if(t === game.player || !t.alive) continue;
+      for(let i = 3; i < t.carriages.length; i++){
+        const c = t.carriages[i];
+        if(dist(ph, c) < 14){
+          game.player.die(t);
+          break;
+        }
+      }
+      if(!game.player.alive) break;
+    }
+    // Collision: other trains' head vs player carriages
+    if(game.player.alive){
+      for(const t of game.trains){
+        if(t === game.player || !t.alive) continue;
+        for(let i = 3; i < game.player.carriages.length; i++){
+          const c = game.player.carriages[i];
+          if(dist(t.head, c) < 14){
+            t.die(game.player);
+            break;
+          }
+        }
+      }
+    }
+    // Self collision (skip first few)
+    if(game.player.alive){
+      for(let i = 6; i < game.player.carriages.length; i++){
+        const c = game.player.carriages[i];
+        if(dist(ph, c) < 14){
+          game.player.die(null);
+          break;
+        }
+      }
+    }
+  }
+  // Bot behaviors
+  for(const t of game.trains){
+    if(t === game.player || !t.alive) continue;
+    // Pickup trailers
+    for(let i = game.trailers.length - 1; i >= 0; i--){
+      const tr = game.trailers[i];
+      if(dist(t.head, tr) < 30){
+        t.addCarriage(tr.type.cat, tr.type.sub);
+        t.score += 1;
+        game.trailers.splice(i, 1);
+        game.respawnTimers.trailer = Math.max(0.5, game.respawnTimers.trailer);
+      }
+    }
+    // Pickup drops
+    for(let i = game.pickupDrops.length - 1; i >= 0; i--){
+      const p = game.pickupDrops[i];
+      if(dist(t.head, p) < 30){
+        t.addCarriage(p.trailer.cat, p.trailer.sub);
+        t.score += 2;
+        game.pickupDrops.splice(i, 1);
+      }
+    }
+    // Collide with enemies (light damage)
+    for(let i = game.enemies.length - 1; i >= 0; i--){
+      const e = game.enemies[i];
+      if(dist(t.head, e) < 16){
+        t.takeDamage(40, null);
+        e.hp -= 20;
+        if(e.hp <= 0){
+          game.enemies.splice(i, 1);
+          const ty = pickTrailerType();
+          game.pickupDrops.push({x: e.x, y: e.y, trailer: ty, age: 0});
+        }
+      }
+    }
+  }
+  // Respawn trailers
+  if(game.trailers.length < MAX_TRAILERS){
+    game.respawnTimers.trailer -= dt;
+    if(game.respawnTimers.trailer <= 0){
+      game.respawnTimers.trailer = TRAILER_RESPAWN * (0.6 + Math.random() * 0.8);
+      spawnTrailer(randomPos(100));
+    }
+  }
+  // Respawn enemies
+  if(game.enemies.length < MAX_ENEMIES){
+    game.respawnTimers.enemy -= dt;
+    if(game.respawnTimers.enemy <= 0){
+      game.respawnTimers.enemy = ENEMY_RESPAWN * (0.6 + Math.random() * 1.0);
+      spawnEnemyAt(randomPos(150));
+    }
+  }
+  // Bot respawn
+  let aliveBots = game.trains.filter(t => !t.isHuman && t.alive).length;
+  let totalBots = game.trains.filter(t => !t.isHuman).length;
+  if(aliveBots < 5 && totalBots < 10){
+    spawnBotTrain();
+  }
+  // Camera
+  const cam = game.camera;
+  if(game.player.alive){
+    cam.x = lerp(cam.x, game.player.head.x - W / 2, 0.15);
+    cam.y = lerp(cam.y, game.player.head.y - H / 2, 0.15);
+  }
+  // Shake decay
+  if(game.shakeTime > 0){
+    game.shakeTime -= dt;
+    if(game.shakeTime <= 0) game.shakeIntensity = 0;
+  }
+  // Update HUD
+  updateHUD();
+  updateMinimap();
+  updateLeaderboard();
+}
+
+function render(){
+  // Background
+  ctx.fillStyle = '#06061a';
+  ctx.fillRect(0, 0, W, H);
+  // Camera shake offset
+  let shakeX = 0, shakeY = 0;
+  if(game.shakeTime > 0){
+    const offset = game.shakeIntensity * (game.shakeTime / 0.5);
+    shakeX = (Math.random() - 0.5) * Math.min(20, offset * 2);
+    shakeY = (Math.random() - 0.5) * Math.min(20, offset * 2);
+  }
+  ctx.save();
+  ctx.translate(shakeX, shakeY);
+  const cam = game.camera;
+  // Grid
+  ctx.strokeStyle = 'rgba(80, 100, 180, 0.08)';
+  ctx.lineWidth = 1;
+  const gridSize = 100;
+  const startX = Math.floor(cam.x / gridSize) * gridSize;
+  const startY = Math.floor(cam.y / gridSize) * gridSize;
+  ctx.beginPath();
+  for(let x = startX; x < cam.x + W + gridSize; x += gridSize){
+    ctx.moveTo(x - cam.x, Math.max(0, -shakeY));
+    ctx.lineTo(x - cam.x, H);
+  }
+  for(let y = startY; y < cam.y + H + gridSize; y += gridSize){
+    ctx.moveTo(Math.max(0, -shakeX), y - cam.y);
+    ctx.lineTo(W, y - cam.y);
+  }
+  ctx.stroke();
+  // Larger grid
+  ctx.strokeStyle = 'rgba(100, 150, 220, 0.12)';
+  ctx.beginPath();
+  const bigGrid = 500;
+  const bx = Math.floor(cam.x / bigGrid) * bigGrid;
+  const by = Math.floor(cam.y / bigGrid) * bigGrid;
+  for(let x = bx; x < cam.x + W + bigGrid; x += bigGrid){
+    ctx.moveTo(x - cam.x, 0); ctx.lineTo(x - cam.x, H);
+  }
+  for(let y = by; y < cam.y + H + bigGrid; y += bigGrid){
+    ctx.moveTo(0, y - cam.y); ctx.lineTo(W, y - cam.y);
+  }
+  ctx.stroke();
+  // Trailers
+  for(const t of game.trailers){
+    const px = t.x - cam.x;
+    const py = t.y - cam.y;
+    if(px < -50 || px > W + 50 || py < -50 || py > H + 50) continue;
+    const pulse = Math.sin(t.pulse) * 0.15 + 0.85;
+    // Glow
+    const grd = ctx.createRadialGradient(px, py, 0, px, py, 22);
+    grd.addColorStop(0, t.type.color);
+    grd.addColorStop(0.4, t.type.color + '88');
+    grd.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grd;
+    ctx.globalAlpha = pulse * 0.5;
+    ctx.beginPath();
+    ctx.arc(px, py, 22, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    // Core
+    ctx.fillStyle = t.type.color;
+    ctx.beginPath();
+    ctx.arc(px, py, 11, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // Icon
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(t.type.icon, px, py);
+  }
+  // Pickup drops (dead carriages)
+  for(const p of game.pickupDrops){
+    const px = p.x - cam.x;
+    const py = p.y - cam.y;
+    if(px < -30 || px > W + 30 || py < -30 || py > H + 30) continue;
+    const fade = clamp(1 - p.age / 35, 0.3, 1);
+    const pulse = Math.sin(p.age * 4) * 0.1 + 0.9;
+    ctx.globalAlpha = fade;
+    const grd = ctx.createRadialGradient(px, py, 0, px, py, 18);
+    grd.addColorStop(0, p.trailer.color);
+    grd.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grd;
+    ctx.globalAlpha = fade * 0.5;
+    ctx.beginPath();
+    ctx.arc(px, py, 18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = p.trailer.color;
+    ctx.beginPath();
+    ctx.arc(px, py, 9 * pulse, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(p.trailer.icon, px, py);
+    ctx.globalAlpha = 1;
+  }
+  // Enemies
+  for(const e of game.enemies){
+    const px = e.x - cam.x;
+    const py = e.y - cam.y;
+    if(px < -60 || px > W + 60 || py < -60 || py > H + 60) continue;
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(e.angle);
+    if(e.flashTime > 0){
+      ctx.fillStyle = '#ffffff';
+    } else {
+      ctx.fillStyle = e.type === 'sentry' ? '#aa2222' : (e.type === 'hunter' ? '#cc0000' : '#ff4444');
+    }
+    if(e.type === 'drone'){
+      ctx.beginPath();
+      ctx.moveTo(11, 0);
+      ctx.lineTo(-7, -8);
+      ctx.lineTo(-4, 0);
+      ctx.lineTo(-7, 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = '#ffaa44';
+      ctx.beginPath();
+      ctx.arc(0, 0, 3, 0, Math.PI * 2);
+      ctx.fill();
+    } else if(e.type === 'sentry'){
+      ctx.fillRect(-14, -14, 28, 28);
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(-14, -14, 28, 28);
+      ctx.fillStyle = e.flashTime > 0 ? '#fff' : '#ff4444';
+      ctx.beginPath();
+      ctx.arc(0, 0, 7, 0, Math.PI * 2);
+      ctx.fill();
+      // Turret
+      ctx.fillStyle = '#444';
+      ctx.fillRect(0, -3, 16, 6);
+      ctx.strokeStyle = '#000';
+      ctx.strokeRect(0, -3, 16, 6);
+    } else if(e.type === 'hunter'){
+      ctx.beginPath();
+      ctx.moveTo(15, 0);
+      ctx.lineTo(0, -11);
+      ctx.lineTo(-13, -9);
+      ctx.lineTo(-13, 9);
+      ctx.lineTo(0, 11);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = e.flashTime > 0 ? '#fff' : '#ff6600';
+      ctx.beginPath();
+      ctx.arc(0, 0, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+    // HP bar
+    if(e.hp < e.maxHp){
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(px - 14, py - 22, 28, 4);
+      ctx.fillStyle = e.hp > e.maxHp * 0.3 ? '#44ff44' : '#ff4444';
+      ctx.fillRect(px - 14, py - 22, 28 * (e.hp / e.maxHp), 4);
+    }
+  }
+  // Trains (sorted by length, smaller first for proper layering)
+  const sortedTrains = [...game.trains].filter(t => t.alive).sort((a, b) => a.carriages.length - b.carriages.length);
+  for(const t of sortedTrains){
+    drawTrain(t);
+  }
+  // Projectiles
+  for(const p of game.projectiles){
+    const px = p.x - cam.x;
+    const py = p.y - cam.y;
+    if(px < -20 || px > W + 20 || py < -20 || py > H + 20) continue;
+    if(p.type === 'missile'){
+      // Trail
+      ctx.strokeStyle = '#ffaa44';
+      ctx.lineWidth = 3;
+      ctx.globalAlpha = 0.6;
+      ctx.beginPath();
+      ctx.moveTo(px - p.vx * 0.02, py - p.vy * 0.02);
+      ctx.lineTo(px, py);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#ff4444';
+      ctx.beginPath();
+      ctx.arc(px, py, 4, 0, Math.PI * 2);
+      ctx.fill();
+    } else if(p.type === 'laser'){
+      ctx.strokeStyle = '#ff0044';
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath();
+      ctx.moveTo(px - p.vx * 0.015, py - p.vy * 0.015);
+      ctx.lineTo(px, py);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#ffeeaa';
+      ctx.beginPath();
+      ctx.arc(px, py, 2, 0, Math.PI * 2);
+      ctx.fill();
+    } else if(p.type === 'bullet'){
+      ctx.strokeStyle = '#ffff44';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(px - p.vx * 0.01, py - p.vy * 0.01);
+      ctx.lineTo(px, py);
+      ctx.stroke();
+      ctx.fillStyle = '#ffffaa';
+      ctx.beginPath();
+      ctx.arc(px, py, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    } else if(p.type === 'drone'){
+      ctx.fillStyle = '#66ffff';
+      ctx.beginPath();
+      ctx.arc(px, py, 2, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // Enemy projectile
+      ctx.fillStyle = '#ff2222';
+      ctx.beginPath();
+      ctx.arc(px, py, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ffaa66';
+      ctx.beginPath();
+      ctx.arc(px, py, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  // Particles
+  for(const p of game.particles){
+    const px = p.x - cam.x;
+    const py = p.y - cam.y;
+    if(px < -10 || px > W + 10 || py < -10 || py > H + 10) continue;
+    ctx.globalAlpha = clamp(p.life * 1.5, 0, 1);
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(px, py, p.size, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  // Aim cursor
+  if(game.state === 'playing' && game.player.alive){
+    ctx.strokeStyle = 'rgba(255, 100, 100, 0.7)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(input.mouseX, input.mouseY, 14, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(input.mouseX - 22, input.mouseY);
+    ctx.lineTo(input.mouseX - 10, input.mouseY);
+    ctx.moveTo(input.mouseX + 10, input.mouseY);
+    ctx.lineTo(input.mouseX + 22, input.mouseY);
+    ctx.moveTo(input.mouseX, input.mouseY - 22);
+    ctx.lineTo(input.mouseX, input.mouseY - 10);
+    ctx.moveTo(input.mouseX, input.mouseY + 10);
+    ctx.lineTo(input.mouseX, input.mouseY + 22);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255, 100, 100, 0.4)';
+    ctx.beginPath();
+    ctx.arc(input.mouseX, input.mouseY, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawTrain(train){
+  const cam = game.camera;
+  // Draw carriages from back to front
+  for(let i = train.carriages.length - 1; i >= 0; i--){
+    const c = train.carriages[i];
+    const px = c.x - cam.x;
+    const py = c.y - cam.y;
+    if(px < -30 || px > W + 30 || py < -30 || py > H + 30) continue;
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(c.angle);
+    const colors = getCarriageColor(c);
+    // Body
+    ctx.fillStyle = colors.body;
+    ctx.fillRect(-8, -6, 16, 12);
+    ctx.fillStyle = colors.light;
+    ctx.fillRect(-8, -6, 16, 3);
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-8, -6, 16, 12);
+    // Wheels detail
+    ctx.fillStyle = '#222';
+    ctx.fillRect(-6, -6, 2, 1);
+    ctx.fillRect(-6, 5, 2, 1);
+    ctx.fillRect(4, -6, 2, 1);
+    ctx.fillRect(4, 5, 2, 1);
+    // Type-specific decoration
+    if(c.type === 'weapon'){
+      ctx.fillStyle = colors.light;
+      ctx.beginPath();
+      ctx.arc(0, 0, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.arc(0, 0, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+      // Turret pointing to mouse (for human) or target (for bots)
+      let aim = train.isHuman ? Math.atan2(input.mouseY + cam.y - c.y, input.mouseX + cam.x - c.x) : c.angle;
+      ctx.rotate(aim - c.angle);
+      ctx.fillStyle = colors.light;
+      if(c.subtype === 'mg') ctx.fillRect(0, -1, 6, 2);
+      else if(c.subtype === 'missile') ctx.fillRect(0, -1.5, 7, 3);
+      else if(c.subtype === 'laser') {
+        ctx.fillRect(0, -1, 8, 2);
+        ctx.fillStyle = '#ffee88';
+        ctx.fillRect(0, -0.5, 8, 1);
+      }
+    } else if(c.type === 'shield'){
+      ctx.fillStyle = colors.light;
+      if(c.subtype === 'shield'){
+        ctx.beginPath();
+        ctx.arc(0, 0, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      } else if(c.subtype === 'drones'){
+        // Small antenna
+        ctx.fillRect(-0.5, -8, 1, 4);
+        ctx.fillStyle = colors.light;
+        ctx.beginPath();
+        ctx.arc(0, -8, 2, 0, Math.PI * 2);
+        ctx.fill();
+      } else if(c.subtype === 'armor'){
+        // Hex pattern
+        ctx.fillStyle = colors.light;
+        for(let q = 0; q < 6; q++){
+          const a = q * Math.PI / 3;
+          ctx.fillRect(Math.cos(a) * 3 - 0.5, Math.sin(a) * 3 - 0.5, 1, 1);
+        }
+      }
+    } else if(c.type === 'support'){
+      ctx.fillStyle = colors.light;
+      if(c.subtype === 'speed'){
+        // Lightning bolt
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.moveTo(-1, -3); ctx.lineTo(2, -1); ctx.lineTo(0, 0);
+        ctx.lineTo(2, 3); ctx.lineTo(-1, 1); ctx.lineTo(1, 0);
+        ctx.closePath();
+        ctx.fill();
+      } else if(c.subtype === 'magnet'){
+        ctx.fillStyle = colors.light;
+        ctx.fillRect(-3, -3, 6, 2);
+        ctx.fillRect(-3, 1, 6, 2);
+      } else if(c.subtype === 'fuel'){
+        ctx.fillStyle = colors.light;
+        ctx.beginPath();
+        ctx.arc(0, 0, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#000';
+        ctx.font = 'bold 6px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('F', 0, 0);
+      }
+    }
+    ctx.restore();
+  }
+  // Counter-drones
+  for(const d of train.drones){
+    const dx = train.head.x + Math.cos(d.angle) * 35 - cam.x;
+    const dy = train.head.y + Math.sin(d.angle) * 35 - cam.y;
+    if(dx < -40 || dx > W + 40 || dy < -40 || dy > H + 40) continue;
+    ctx.save();
+    ctx.translate(dx, dy);
+    ctx.fillStyle = '#66ffff';
+    ctx.beginPath();
+    ctx.arc(0, 0, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(0, 0, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  // Head
+  const ph = train.head;
+  const px = ph.x - cam.x;
+  const py = ph.y - cam.y;
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.rotate(ph.angle);
+  // Locomotive body
+  if(train.flashTime > 0){
+    ctx.fillStyle = '#ffffff';
+  } else {
+    ctx.fillStyle = train.color;
+  }
+  ctx.beginPath();
+  ctx.moveTo(14, 0);
+  ctx.lineTo(5, -9);
+  ctx.lineTo(-13, -9);
+  ctx.lineTo(-13, 9);
+  ctx.lineTo(5, 9);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  // Cab
+  ctx.fillStyle = train.color;
+  ctx.fillRect(-13, -9, 6, 18);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(-13, -9, 6, 18);
+  ctx.stroke();
+  // Cab window
+  ctx.fillStyle = '#88ccff';
+  ctx.fillRect(-11, -6, 3, 12);
+  // Smokestack
+  ctx.fillStyle = '#222';
+  ctx.fillRect(-4, -12, 4, 5);
+  ctx.fillRect(-4, 7, 4, 5);
+  ctx.strokeStyle = '#000';
+  ctx.strokeRect(-4, -12, 4, 5);
+  ctx.strokeRect(-4, 7, 4, 5);
+  // Headlight
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(10, 0, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+  // Glow
+  ctx.fillStyle = '#ffeb3b';
+  ctx.globalAlpha = 0.4;
+  ctx.beginPath();
+  ctx.arc(10, 0, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  // Detail line
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, -8); ctx.lineTo(0, 8);
+  ctx.stroke();
+  ctx.restore();
+  // Name label
+  if(train.isHuman || dist(train.head, game.player.head) < 400){
+    ctx.fillStyle = train.isHuman ? '#4a9eff' : '#ffffff';
+    ctx.font = train.isHuman ? 'bold 13px sans-serif' : '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+    ctx.lineWidth = 3;
+    ctx.strokeText(train.name, px, py - 22);
+    ctx.fillText(train.name, px, py - 22);
+  }
+  // HP bar for non-player
+  if(!train.isHuman && train.alive){
+    const hp = train.head.hp;
+    const mhp = train.head.maxHp;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(px - 18, py - 32, 36, 4);
+    ctx.fillStyle = hp > mhp * 0.3 ? '#44ff44' : '#ff4444';
+    ctx.fillRect(px - 18, py - 32, 36 * clamp(hp / mhp, 0, 1), 4);
+  }
+  // Carriage count
+  if(!train.isHuman){
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(train.carriages.length + ' cars', px, py - 12);
+  }
+}
+
+function updateHUD(){
+  const p = game.player;
+  document.getElementById('score').textContent = p.score;
+  document.getElementById('carriages').textContent = p.carriages.length;
+  document.getElementById('length').textContent = Math.floor(p.carriages.length * CARRIAGE_SPACING / 10) + 'm';
+  document.getElementById('kills').textContent = p.killCount;
+  const fuelMax = p.fuelMax * (1 + p.fuelBonus * 0.5);
+  const fuelPct = (p.fuel / fuelMax) * 100;
+  document.getElementById('fuel').style.width = clamp(fuelPct, 0, 100) + '%';
+  document.getElementById('boost-val').textContent = Math.floor(fuelPct) + '%';
+}
+
+function updateMinimap(){
+  const m = minimapCtx;
+  const size = 180;
+  m.clearRect(0, 0, size, size);
+  // Background
+  m.fillStyle = 'rgba(0, 0, 0, 0.7)';
+  m.fillRect(0, 0, size, size);
+  // Grid
+  m.strokeStyle = 'rgba(100, 150, 220, 0.15)';
+  m.lineWidth = 1;
+  m.beginPath();
+  for(let i = 0; i <= 4; i++){
+    m.moveTo(i * size / 4, 0);
+    m.lineTo(i * size / 4, size);
+    m.moveTo(0, i * size / 4);
+    m.lineTo(size, i * size / 4);
+  }
+  m.stroke();
+  const scale = size / MAP_SIZE;
+  // Trailers
+  for(const t of game.trailers){
+    m.fillStyle = t.type.color;
+    m.globalAlpha = 0.5;
+    m.fillRect(t.x * scale - 1, t.y * scale - 1, 2, 2);
+    m.globalAlpha = 1;
+  }
+  // Pickup drops
+  for(const p of game.pickupDrops){
+    m.fillStyle = p.trailer.color;
+    m.globalAlpha = 0.7;
+    m.fillRect(p.x * scale - 1, p.y * scale - 1, 2, 2);
+    m.globalAlpha = 1;
+  }
+  // Enemies
+  for(const e of game.enemies){
+    m.fillStyle = e.type === 'sentry' ? '#ffaa00' : '#ff4444';
+    m.beginPath();
+    m.arc(e.x * scale, e.y * scale, e.type === 'drone' ? 1.5 : 2, 0, Math.PI * 2);
+    m.fill();
+  }
+  // Trains
+  for(const t of game.trains){
+    if(!t.alive) continue;
+    m.fillStyle = t.isHuman ? '#4a9eff' : t.color;
+    m.beginPath();
+    m.arc(t.head.x * scale, t.head.y * scale, t.isHuman ? 4 : 3, 0, Math.PI * 2);
+    m.fill();
+    if(t.isHuman){
+      m.strokeStyle = '#fff';
+      m.lineWidth = 1;
+      m.stroke();
+    }
+  }
+  // View rectangle
+  if(game.player.alive){
+    const ph = game.player.head;
+    m.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+    m.lineWidth = 1;
+    m.strokeRect(
+      (ph.x - W / 2) * scale, (ph.y - H / 2) * scale,
+      W * scale, H * scale
+    );
+  }
+}
+
+function updateLeaderboard(){
+  const sorted = [...game.trains].filter(t => t.alive).sort((a, b) => b.score - a.score).slice(0, 10);
+  const rows = document.getElementById('leaderboard-rows');
+  let html = '';
+  for(let i = 0; i < sorted.length; i++){
+    const t = sorted[i];
+    const cls = t.isHuman ? 'row me' : 'row';
+    html += `<div class="${cls}"><span class="rank">${i + 1}.</span><span class="dot" style="background:${t.color}"></span><span class="name">${t.name}</span><span class="score">${t.score}</span></div>`;
+  }
+  rows.innerHTML = html;
+}
+
+// ===== Init =====
+console.log('Locomotive Wars initialized. Click Start to play.');
+window.addEventListener('load', () => {
+  // Show start screen
+  document.getElementById('start-screen').style.display = 'flex';
+  document.getElementById('death-screen').style.display = 'none';
+});
+// Start loop
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
