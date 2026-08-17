@@ -1,0 +1,11 @@
+{
+  "game_id": "ba75011b8dac4bb8b3a4ab557466cab0",
+  "parent_game_id": "6ad836b5d35f43c98cf32d91fcb40870",
+  "root_game_id": "d224166ce7f9431d856064848a9d365a",
+  "title": "Classic Solitaire (v5)",
+  "description": "Klondike Solitaire with working pile-on-pile drops, drag-and-drop, and undo/redo buttons.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-08-17T22:26:00.020569Z",
+  "version": 3,
+  "prompt": "moving a pile of cards onto another pile is not working - fix please. add undo/redo buttons"
+}
