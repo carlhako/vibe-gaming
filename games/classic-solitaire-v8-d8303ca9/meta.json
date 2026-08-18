@@ -1,0 +1,11 @@
+{
+  "game_id": "d8303ca9a7144c7493231e08cbdd659e",
+  "parent_game_id": "dc4cb196968440f881e607eebe5dabcb",
+  "root_game_id": "d224166ce7f9431d856064848a9d365a",
+  "title": "Classic Solitaire (v8)",
+  "description": "Klondike + Spider (3 Decks) with corrected Spider rules: only same-suit descending sequences can be moved or stacked, per the GNOME Aisleriot reference implementation.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-08-18T05:04:01.833411Z",
+  "version": 6,
+  "prompt": "rules for spider are not right - you can only move piles of cards of the same suit https://github.com/GNOME/aisleriot/blob/master/games/spider-three-decks.scm. in other words, if you have a red six on a black 7, you cannot move the 7. but if you have a three of hearts on a four of hearts, you can move the four of hearts and the 3 of hearts etc, as long as they are all the same suit. modify game lib to accept different rules for different games (make sure you do not modify the solitaire game)"
+}
