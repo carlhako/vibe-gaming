@@ -1,0 +1,11 @@
+{
+  "game_id": "dc4cb196968440f881e607eebe5dabcb",
+  "parent_game_id": "2bd3eac0eb3741c285036e48e2a9bf11",
+  "root_game_id": "d224166ce7f9431d856064848a9d365a",
+  "title": "Classic Solitaire (v7)",
+  "description": "Two card games sharing a reusable library: classic Klondike and Spider Solitaire with three full decks. Toolbar lets you switch between them.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-08-18T04:49:17.939748Z",
+  "version": 5,
+  "prompt": "extract the solitaire card rules and make a card game library. make all future card games based off this library. make another set of rules for another card game - spider solitaire 3 decks. if you can lookup online, rules for many card games can be found here: https://github.com/GNOME/aisleriot/blob/master/games/spider-three-decks.scm https://github.com/GNOME/aisleriot/blob/master/games/"
+}
