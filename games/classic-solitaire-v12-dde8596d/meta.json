@@ -1,0 +1,11 @@
+{
+  "game_id": "dde8596dbb244e519d143beb255a8e68",
+  "parent_game_id": "4dd270cebf5e4aa8930c514ea45bb688",
+  "root_game_id": "d224166ce7f9431d856064848a9d365a",
+  "title": "Classic Solitaire (v12)",
+  "description": "Klondike and Spider (3 decks) \u2014 single cards place on any suit; piles must be same-suit.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-08-18T21:07:17.952535Z",
+  "version": 10,
+  "prompt": "rules are still not right from previous regressions: should be able to move a card (or piles of cards that are the same suit) to any suit - currently not working. examples: should be able to move a pile of 2-q hearts onto any king, should be able to move a 5 of spades to a 6 of diamonds, should be able to move a jack of clubs to a queen of clubs, should be able to move a pile of a jack and queen of clubs to a king of hearts, should not be able to move a pile of king of hearts, queen of clubs, jack of clubs, as suit varies (this restriction is only for moving piles of cards)."
+}
