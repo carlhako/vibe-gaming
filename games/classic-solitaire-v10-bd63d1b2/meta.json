@@ -1,0 +1,11 @@
+{
+  "game_id": "bd63d1b277124093ba3604f7e7379460",
+  "parent_game_id": "fba4923843ef45d8ac37f87150ca8edb",
+  "root_game_id": "d224166ce7f9431d856064848a9d365a",
+  "title": "Classic Solitaire (v10)",
+  "description": "Two card games in one. Klondike uses a relaxed stacking rule (any color may descend by one rank, e.g. red 9 on any 10) and same-suit movable groups. Spider uses 3 decks and strict same-suit stacking.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-08-18T07:27:12.218096Z",
+  "version": 8,
+  "prompt": "another regression: should be able to put a red nine on any 10 (red or black). when moving piles, they must all be the same suit (i think this bit is working)."
+}
