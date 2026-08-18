@@ -1,0 +1,11 @@
+{
+  "game_id": "fba4923843ef45d8ac37f87150ca8edb",
+  "parent_game_id": "d8303ca9a7144c7493231e08cbdd659e",
+  "root_game_id": "d224166ce7f9431d856064848a9d365a",
+  "title": "Classic Solitaire (v9)",
+  "description": "Klondike uses alternating-color stacking (black 9 on red 10 works), Spider uses same-suit stacking.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-08-18T07:18:10.738552Z",
+  "version": 7,
+  "prompt": "Regression - should be able to put a black 9 on a red 10. it is only moving cards where the suit needs to be the same."
+}
