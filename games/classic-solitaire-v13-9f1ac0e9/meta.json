@@ -1,0 +1,11 @@
+{
+  "game_id": "9f1ac0e90320445cb9a63a9705dcd24c",
+  "parent_game_id": "dde8596dbb244e519d143beb255a8e68",
+  "root_game_id": "d224166ce7f9431d856064848a9d365a",
+  "title": "Classic Solitaire (v13)",
+  "description": "Two card games in one: standard Klondike (alternating colors) and a relaxed Spider 3-deck variant (any-suit descending) with auto-collect, scoring, undo/redo, and timer.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-08-18T21:24:52.801907Z",
+  "version": 11,
+  "prompt": "another regression, last request was meant for spider, not klondike"
+}
