@@ -1,0 +1,11 @@
+{
+  "game_id": "2bd3eac0eb3741c285036e48e2a9bf11",
+  "parent_game_id": "ba75011b8dac4bb8b3a4ab557466cab0",
+  "root_game_id": "d224166ce7f9431d856064848a9d365a",
+  "title": "Classic Solitaire (v6)",
+  "description": "Klondike solitaire with drag-anywhere pile movement, undo/redo, auto-move, and timer.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-08-18T00:59:20.990999Z",
+  "version": 4,
+  "prompt": "rag and drop of blocks of cards still not working (attempted to fix in previous version). should be able to drag any card from a pile of cards to move sub piles of cards around. dragging piles onto other piles still not working, fix please :)"
+}
