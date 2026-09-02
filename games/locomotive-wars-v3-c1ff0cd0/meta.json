@@ -1,0 +1,11 @@
+{
+  "game_id": "c1ff0cd02b4a49f799a8da8aa15f4ada",
+  "parent_game_id": "ae57734bbb734de4b272e1ec889b36b8",
+  "root_game_id": "45ceeef4f56a4c31ab7ab96d1b40bf1b",
+  "title": "Locomotive Wars (v3)",
+  "description": "Train combat with slither.io-style self-bridging, starting weapons, and refined early-game pacing.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-09-02T20:23:29.960260Z",
+  "version": 3,
+  "prompt": "render a small bridge (or something, you pick) when crossing own train to allow running into yourself (like slither.io). bridge disappears when not overlapped. bridge elongated if crossing yourself at an angle (or even following ones self in a loop - come up with a solution, maybe dont need the bridge etc, you decide). game is a bit too hard at the start without a weapon, equip a basic weapon on start. identify any other enhancements and implement."
+}
