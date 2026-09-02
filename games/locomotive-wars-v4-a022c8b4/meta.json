@@ -1,0 +1,11 @@
+{
+  "game_id": "a022c8b409df4c5cbc8c04ed8ffa4f77",
+  "parent_game_id": "c1ff0cd02b4a49f799a8da8aa15f4ada",
+  "root_game_id": "45ceeef4f56a4c31ab7ab96d1b40bf1b",
+  "title": "Locomotive Wars (v4)",
+  "description": "Slither-style train combat \u2014 bugfixed bridge mechanic so self-collision always forms a safe loop.",
+  "requested_by": "web:dcc52ebcb1c9",
+  "created_at": "2026-09-02T22:24:11.556578Z",
+  "version": 4,
+  "prompt": "bug: i died by running into myself - should be a bridge appear"
+}
