@@ -1,0 +1,14 @@
+{
+  "game_id": "2bc8db4601444c069efd752847888ec9",
+  "parent_game_id": null,
+  "root_game_id": "2bc8db4601444c069efd752847888ec9",
+  "title": "Neon Pong \u2014 2 Player",
+  "description": "A neon-styled two-player Pong. Local = left paddle, peer = right paddle. Paddle Y synced every frame; ball physics deterministic with authoritative 10Hz broadcasts.",
+  "requested_by": "web:e5ce15ea9cd7",
+  "created_at": "2026-09-03T21:15:51.432889Z",
+  "version": 1,
+  "prompt": "A two-player Pong. Each player controls one paddle: the local player is always the LEFT paddle, the peer is the RIGHT paddle. Use VG_RT \u2014 on every animation frame send my paddle's Y position with VG_RT.send({y: myPaddleY}), and in VG_RT.on('msg', ({d}) => ...) set the right paddle's Y from d.y. Run the ball physics locally on both clients from a fixed starting seed so they stay roughly in sync; the left player is authoritative for the ball and also sends {ball:{x,y,vx,vy}} ten times a second. Until a second player is present (VG_RT.roster.length < 2), show a centered \"Waiting for player 2\u2026\" overlay and don't start the ball. Show the peer's nickname (VG_RT.roster) using textContent, never innerHTML. Show each player's ping_ms from the roster in a corner. Restart with R.",
+  "multiplayer": {
+    "max_players": 2
+  }
+}

@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neon Pong — 2 Player</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; min-height: 100vh; overflow-x: hidden;
+    background: radial-gradient(ellipse at center, #0d0d1c 0%, #050510 100%);
+    color: #d0d0e0;
+    font-family: 'Courier New', ui-monospace, monospace;
+  }
+  body {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 16px; min-height: 100vh;
+  }
+  #title {
+    font-size: 11px; color: #4a4a6a; letter-spacing: 5px; margin-bottom: 10px;
+    text-transform: uppercase;
+  }
+  #wrap { position: relative; display: inline-block; line-height: 0; }
+  canvas {
+    display: block;
+    background: #0a0a18;
+    border: 2px solid #1a1a35;
+    border-radius: 6px;
+    box-shadow:
+      0 0 60px rgba(0, 255, 170, 0.06),
+      0 0 80px rgba(255, 102, 204, 0.04),
+      inset 0 0 80px rgba(0, 0, 0, 0.6);
+    max-width: 100%; height: auto;
+  }
+  #overlay {
+    position: absolute; inset: 0;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(6, 6, 18, 0.78);
+    -webkit-backdrop-filter: blur(3px);
+    backdrop-filter: blur(3px);
+    flex-direction: column; gap: 16px;
+    pointer-events: none;
+    line-height: 1.4;
+    border-radius: 6px;
+  }
+  #overlay.show { display: flex; }
+  #overlay .title {
+    font-size: 40px; font-weight: bold;
+    color: #00ffaa; letter-spacing: 6px;
+    text-shadow: 0 0 18px #00ffaa, 0 0 36px rgba(0, 255, 170, 0.4);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  #overlay .sub {
+    font-size: 13px; color: #8a8aa8; letter-spacing: 3px;
+  }
+  #overlay .blink { animation: blink 1.4s ease-in-out infinite; }
+  #overlay.lose .title { color: #ff66cc; text-shadow: 0 0 18px #ff66cc, 0 0 36px rgba(255, 102, 204, 0.4); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.75; } }
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  #hud {
+    display: flex; justify-content: space-between; align-items: center;
+    width: 100%; max-width: 800px; margin-top: 14px; gap: 8px;
+    font-size: 12px; color: #6a6a88; letter-spacing: 2px;
+    flex-wrap: wrap;
+  }
+  .stat {
+    padding: 6px 12px;
+    background: rgba(20, 20, 40, 0.55);
+    border: 1px solid #1a1a35;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .stat .lbl { color: #4a4a6a; margin-right: 4px; }
+  .stat .val { color: #00ffaa; font-weight: bold; }
+  .stat.peer .val { color: #ff66cc; }
+  #hints {
+    color: #4a4a6a; font-size: 11px; letter-spacing: 2px; margin-top: 10px;
+  }
+  #hints kbd {
+    display: inline-block; padding: 1px 6px;
+    background: #1a1a35; border: 1px solid #2a2a4a;
+    border-radius: 3px; color: #8a8aa8; font-family: inherit;
+    font-size: 10px;
+  }
+</style>
+<script src="/vendor/rt/rt.js" data-game-id="2bc8db4601444c069efd752847888ec9"></script></head>
+<body>
+<div id="title">▶ Neon Pong · 2 Player</div>
+<div id="wrap">
+  <canvas id="game" width="800" height="500"></canvas>
+  <div id="overlay" class="show">
+    <div class="title">WAITING</div>
+    <div class="sub">Waiting for player 2…</div>
+  </div>
+</div>
+<div id="hud">
+  <div class="stat"><span class="lbl">YOU</span><span class="val" id="myPing">— ms</span></div>
+  <div class="stat peer"><span class="lbl">PEER ·</span><span class="val" id="peerName">—</span></div>
+  <div class="stat peer"><span class="lbl">PING</span><span class="val" id="peerPing">— ms</span></div>
+</div>
+<div id="hints">
+  Move: <kbd>W</kbd><kbd>S</kbd> or <kbd>↑</kbd><kbd>↓</kbd> &nbsp;·&nbsp; Restart: <kbd>R</kbd>
+</div>
+<script>
+(function() {
+  'use strict';
+
+  // ---- Constants ----
+  const W = 800, H = 500;
+  const PADDLE_W = 14, PADDLE_H = 90;
+  const BALL_SIZE = 12;
+  const PADDLE_SPEED = 8;
+  const INITIAL_BALL_SPEED = 4.5;
+  const SPEEDUP = 1.045;
+  const MAX_BOUNCE = Math.PI / 3;   // 60° max deflection
+  const MAX_BALL_SPEED = 14;
+  const WIN_SCORE = 7;
+  const SEED = 0xC0FFEE;            // fixed seed -> deterministic serves
+  const BALL_SEND_MS = 100;         // 10x per second
+
+  // ---- DOM ----
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const overlay = document.getElementById('overlay');
+  const overlayTitle = overlay.querySelector('.title');
+  const overlaySub = overlay.querySelector('.sub');
+  const myPingEl = document.getElementById('myPing');
+  const peerNameEl = document.getElementById('peerName');
+  const peerPingEl = document.getElementById('peerPing');
+
+  // ---- State ----
+  let myPaddleY = (H - PADDLE_H) / 2;
+  let peerPaddleY = (H - PADDLE_H) / 2;
+  let ballX, ballY, ballVX, ballVY, ballSpeed;
+  let myScore = 0, peerScore = 0;
+  let gameState = 'waiting'; // 'waiting' | 'playing' | 'over'
+  let winner = -1;
+  const keys = {};
+  let roster = [];
+  let lastBallSend = 0;
+
+  // ---- Deterministic RNG (identical sequence on both clients) ----
+  function mulberry32(seed) {
+    let s = seed >>> 0;
+    return function() {
+      s = (s + 0x6D2B79F5) >>> 0;
+      let t = s;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  let rng = mulberry32(SEED);
+
+  function serveBall(direction) {
+    ballX = W / 2 - BALL_SIZE / 2;
+    ballY = H / 2 - BALL_SIZE / 2;
+    ballSpeed = INITIAL_BALL_SPEED;
+    const angle = (rng() - 0.5) * MAX_BOUNCE * 2; // ±60°
+    ballVX = Math.cos(angle) * ballSpeed * direction;
+    ballVY = Math.sin(angle) * ballSpeed;
+  }
+
+  function resetAll() {
+    myScore = 0;
+    peerScore = 0;
+    myPaddleY = (H - PADDLE_H) / 2;
+    peerPaddleY = (H - PADDLE_H) / 2;
+    ballVX = 0;
+    ballVY = 0;
+    ballSpeed = INITIAL_BALL_SPEED;
+    ballX = W / 2 - BALL_SIZE / 2;
+    ballY = H / 2 - BALL_SIZE / 2;
+    rng = mulberry32(SEED);
+    winner = -1;
+  }
+
+  // ---- Game logic ----
+  function update() {
+    // Paddle movement (local = left)
+    let move = 0;
+    if (keys['w'] || keys['arrowup']) move -= 1;
+    if (keys['s'] || keys['arrowdown']) move += 1;
+    myPaddleY += move * PADDLE_SPEED;
+    if (myPaddleY < 0) myPaddleY = 0;
+    if (myPaddleY > H - PADDLE_H) myPaddleY = H - PADDLE_H;
+
+    if (gameState !== 'playing') return;
+    if (ballVX === 0 && ballVY === 0) return;
+
+    // Move ball
+    ballX += ballVX;
+    ballY += ballVY;
+
+    // Top/bottom walls
+    if (ballY < 0) {
+      ballY = 0;
+      ballVY = Math.abs(ballVY);
+    } else if (ballY + BALL_SIZE > H) {
+      ballY = H - BALL_SIZE;
+      ballVY = -Math.abs(ballVY);
+    }
+
+    // Left paddle (local)
+    const lpx = 30;
+    if (ballVX < 0 &&
+        ballX <= lpx + PADDLE_W &&
+        ballX + BALL_SIZE >= lpx &&
+        ballY + BALL_SIZE >= myPaddleY &&
+        ballY <= myPaddleY + PADDLE_H) {
+      ballX = lpx + PADDLE_W;
+      reflectFromPaddle(myPaddleY, +1);
+    }
+
+    // Right paddle (peer — y comes from network)
+    const rpx = W - 30 - PADDLE_W;
+    if (ballVX > 0 &&
+        ballX + BALL_SIZE >= rpx &&
+        ballX <= rpx + PADDLE_W &&
+        ballY + BALL_SIZE >= peerPaddleY &&
+        ballY <= peerPaddleY + PADDLE_H) {
+      ballX = rpx - BALL_SIZE;
+      reflectFromPaddle(peerPaddleY, -1);
+    }
+
+    // Scoring
+    if (ballX + BALL_SIZE < 0) {
+      peerScore++;
+      if (peerScore >= WIN_SCORE) {
+        gameState = 'over';
+        winner = 1;
+        ballX = W / 2 - BALL_SIZE / 2;
+        ballY = H / 2 - BALL_SIZE / 2;
+        ballVX = 0; ballVY = 0;
+        showOverlay('PEER WINS', 'Press R to play again', true);
+      } else {
+        serveBall(-1); // toward left
+      }
+    } else if (ballX > W) {
+      myScore++;
+      if (myScore >= WIN_SCORE) {
+        gameState = 'over';
+        winner = 0;
+        ballX = W / 2 - BALL_SIZE / 2;
+        ballY = H / 2 - BALL_SIZE / 2;
+        ballVX = 0; ballVY = 0;
+        showOverlay('YOU WIN', 'Press R to play again', false);
+      } else {
+        serveBall(+1); // toward right
+      }
+    }
+  }
+
+  function reflectFromPaddle(paddleY, dirX) {
+    ballSpeed = Math.min(ballSpeed * SPEEDUP, MAX_BALL_SPEED);
+    const rel = ((ballY + BALL_SIZE / 2) - (paddleY + PADDLE_H / 2)) / (PADDLE_H / 2);
+    const clamped = Math.max(-1, Math.min(1, rel));
+    const angle = clamped * MAX_BOUNCE;
+    ballVX = Math.cos(angle) * ballSpeed * dirX;
+    ballVY = Math.sin(angle) * ballSpeed;
+  }
+
+  // ---- Render ----
+  function render() {
+    // Background
+    ctx.fillStyle = '#0a0a18';
+    ctx.fillRect(0, 0, W, H);
+
+    // Subtle grid
+    ctx.strokeStyle = 'rgba(80, 80, 130, 0.05)';
+    ctx.lineWidth = 1;
+    for (let x = 40; x < W; x += 40) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
+    for (let y = 40; y < H; y += 40) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+
+    // Center dashed line
+    ctx.strokeStyle = '#2a2a4a';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([10, 14]);
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Center circle
+    ctx.strokeStyle = 'rgba(60, 60, 100, 0.35)';
+    ctx.beginPath(); ctx.arc(W / 2, H / 2, 70, 0, Math.PI * 2); ctx.stroke();
+
+    // Scores
+    ctx.font = 'bold 64px "Courier New", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+
+    ctx.fillStyle = myScore >= WIN_SCORE ? '#00ffaa' : 'rgba(0, 255, 170, 0.35)';
+    ctx.shadowColor = '#00ffaa';
+    ctx.shadowBlur = myScore >= WIN_SCORE ? 20 : 0;
+    ctx.fillText(String(myScore), W / 2 - 100, 30);
+    ctx.shadowBlur = 0;
+
+    ctx.fillStyle = peerScore >= WIN_SCORE ? '#ff66cc' : 'rgba(255, 102, 204, 0.35)';
+    ctx.shadowColor = '#ff66cc';
+    ctx.shadowBlur = peerScore >= WIN_SCORE ? 20 : 0;
+    ctx.fillText(String(peerScore), W / 2 + 100, 30);
+    ctx.shadowBlur = 0;
+
+    // Paddles
+    drawPaddle(30, myPaddleY, '#00ffaa');
+    drawPaddle(W - 30 - PADDLE_W, peerPaddleY, '#ff66cc');
+
+    // Ball (hidden during waiting state)
+    if (gameState !== 'waiting') {
+      drawBall();
+    }
+  }
+
+  function drawPaddle(x, y, color) {
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 20;
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, PADDLE_W, PADDLE_H);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.fillRect(x + 3, y + 3, 2, PADDLE_H - 6);
+  }
+
+  function drawBall() {
+    ctx.shadowColor = '#ffffff';
+    ctx.shadowBlur = 25;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(ballX, ballY, BALL_SIZE, BALL_SIZE);
+    ctx.shadowBlur = 0;
+  }
+
+  // ---- Overlay / HUD ----
+  function showOverlay(title, sub, isLose) {
+    overlayTitle.textContent = title;
+    overlaySub.textContent = sub || '';
+    overlaySub.classList.toggle('blink', !!(sub && sub.indexOf('Press R') !== -1));
+    overlay.classList.toggle('lose', !!isLose);
+    overlay.classList.add('show');
+  }
+  function hideOverlay() {
+    overlay.classList.remove('show');
+  }
+
+  function updateHUD() {
+    if (!roster) return;
+    const myId = (window.VG_RT && VG_RT.me) || null;
+    const me = roster.find(m => m.id === myId);
+    const peer = roster.find(m => m.id !== myId);
+    if (me) {
+      const ms = me.ping_ms;
+      myPingEl.textContent = (ms != null && ms >= 0) ? (ms + ' ms') : '— ms';
+    }
+    if (peer) {
+      peerNameEl.textContent = peer.nick || 'Player 2';
+      const ms = peer.ping_ms;
+      peerPingEl.textContent = (ms != null && ms >= 0) ? (ms + ' ms') : '— ms';
+    } else {
+      peerNameEl.textContent = '—';
+      peerPingEl.textContent = '— ms';
+    }
+  }
+
+  // ---- Controls ----
+  window.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    keys[k] = true;
+    if (['arrowup', 'arrowdown', ' ', 'w', 's', 'r'].indexOf(k) !== -1) e.preventDefault();
+    if (k === 'r' && gameState === 'over') {
+      resetAll();
+      if (roster.length >= 2) {
+        gameState = 'playing';
+        serveBall(1);
+        hideOverlay();
+      } else {
+        showOverlay('WAITING', 'Waiting for player 2…', false);
+      }
+    }
+  });
+  window.addEventListener('keyup', e => {
+    keys[e.key.toLowerCase()] = false;
+  });
+
+  // ---- Realtime ----
+  if (window.VG_RT) {
+    VG_RT.on('msg', ({d}) => {
+      if (typeof d.y === 'number') {
+        peerPaddleY = Math.max(0, Math.min(H - PADDLE_H, d.y));
+      }
+      if (d.ball && typeof d.ball.x === 'number' && typeof d.ball.vx === 'number') {
+        // Only snap if received ball is plausibly in play (avoid overriding
+        // a freshly-served ball with a still-in-flight off-screen ball)
+        if (d.ball.x > -50 && d.ball.x < W + 50) {
+          ballX = d.ball.x;
+          ballY = d.ball.y;
+          ballVX = d.ball.vx;
+          ballVY = d.ball.vy;
+          ballSpeed = Math.hypot(ballVX, ballVY) || INITIAL_BALL_SPEED;
+        }
+      }
+    });
+    VG_RT.on('roster', members => {
+      roster = members || [];
+      updateHUD();
+      const enough = roster.length >= 2;
+      if (enough && gameState === 'waiting') {
+        resetAll();
+        gameState = 'playing';
+        serveBall(1);
+        hideOverlay();
+      } else if (!enough && gameState === 'playing') {
+        gameState = 'waiting';
+        ballVX = 0; ballVY = 0;
+        showOverlay('WAITING', 'Waiting for player 2…', false);
+      }
+    });
+  }
+
+  // ---- Init ----
+  resetAll();
+  showOverlay('WAITING', 'Waiting for player 2…', false);
+
+  // ---- Main loop ----
+  function loop(now) {
+    update();
+    render();
+
+    // Network: paddle Y every frame; ball state 10x/sec
+    if (window.VG_RT && VG_RT.send) {
+      VG_RT.send({ y: myPaddleY });
+      if (now - lastBallSend >= BALL_SEND_MS) {
+        VG_RT.send({ ball: { x: ballX, y: ballY, vx: ballVX, vy: ballVY } });
+        lastBallSend = now;
+      }
+    }
+
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
