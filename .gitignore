@@ -6,3 +6,20 @@ logs/
 __pycache__/
 *.pyc
 venv/
+
+# Local tooling / scratch
+.agents/
+.pi/
+loc_by_dir.py
+skills-lock.json
+
+# Locally-generated games not committed to the repo
+games/asteroid-dash-6465a1c1/
+games/asteroid-dash-f0fd9981/
+games/hex-hollow-v6-55842e3b/
+games/neon-breakout-797735bd/
+games/neon-pong-1d434c38/
+games/neon-pong-v2-833ecbd7/
+games/neon-pong-v3-e831e00e/
+games/star-catcher-a248cb5c/
+games/starfielder-1c5b85ae/
