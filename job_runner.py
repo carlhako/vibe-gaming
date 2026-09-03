@@ -65,6 +65,7 @@ def _run_job(conn, job: dict, config: dict, games_dir: Path) -> None:
                 job["prompt"], job["requested_by"], config,
                 db_conn=conn, games_dir=games_dir, job_id=job_id,
                 creator_uid=job.get("creator_uid"), engine=job.get("engine"),
+                max_players=job.get("multiplayer_max_players"),
             )
         elif job["kind"] == "enhance":
             # agent.enhance_game_auto_format is the single dispatch point:

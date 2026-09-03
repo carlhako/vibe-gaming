@@ -150,6 +150,17 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now vibegames
 ```
 
+### Multiplayer realtime hub (optional)
+
+If you want multiplayer games to actually connect players (rather than each
+staying in a solo/"waiting" state), also run `rt_hub.py` as its own service —
+a sample unit is in `deploy/vibegames-rt-hub.service` (copy it to
+`/etc/systemd/system/`, adjust the paths, `daemon-reload`, `enable --now`).
+It's a standalone asyncio process with no DB access; a crash here never
+affects `/play/` or generation. Your reverse proxy must send `/rt/` to it
+(loopback `:8620` by default) — see README.md's "Multiplayer games" section
+for the Caddy rule. Rollback: stop the unit and remove the `/rt/` proxy line.
+
 ## 8. Open the port
 
 ```bash

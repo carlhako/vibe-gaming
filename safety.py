@@ -21,6 +21,13 @@ game_csp() lives here rather than in app.py so the served CSP and the
 generation-time allowlist below are built from the same data and cannot drift.
 smoke_test.py applies the same policy to its own origin, which is what makes a
 CSP violation a generation-time failure instead of a production one.
+
+game_csp()'s `connect-src` names the serving origin for `https:` and `wss:`
+and no other host: a multiplayer game's only network peer is the first-party
+realtime hub reached at this origin's `/rt/` path (see rt_hub.py and
+openspec/changes/add-multiplayer-games/). Arbitrary `fetch`/WebSocket egress
+stays blocked by the browser, and the smoke test still fails any attempt whose
+game reaches a third-party host.
 """
 
 import re
@@ -84,6 +91,15 @@ def _attr(tag: str, name: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _ws_origin(origin: str) -> str:
+    """The ws:// or wss:// form of an http(s) origin, scheme swapped in place."""
+    if origin.startswith("https://"):
+        return "wss://" + origin[len("https://"):]
+    if origin.startswith("http://"):
+        return "ws://" + origin[len("http://"):]
+    return origin
+
+
 def game_csp(origin: str) -> str:
     """Content-Security-Policy for served game HTML — /play/<slug> in
     production, the smoke test's throwaway origin during verification.
@@ -94,8 +110,19 @@ def game_csp(origin: str) -> str:
     'self' cannot be relied on to match; a host-source with a path prefix is
     plain URL matching and always works. The prefix also keeps the allowance
     narrow: the vendored three.js tree, nothing else on this host.
+
+    `connect-src` names the serving origin explicitly for both `https:` and
+    `wss:` (the exact same opaque-origin reasoning as `script-src` above — a
+    sandboxed game's `'self'` matches nothing), and nothing else: a multiplayer
+    game reaches the realtime hub at this origin's `/rt/` path and has no other
+    legitimate network destination. `smoke_test.py` applies the identical
+    policy to its own origin, which is what turns "this game talks to a
+    third-party host" into a generation-time failure instead of a production
+    one.
     """
-    vendor_src = origin.rstrip("/") + "/vendor/three/"
+    root = origin.rstrip("/")
+    vendor_src = root + "/vendor/three/ " + root + "/vendor/rt/"
+    connect_src = root + " " + _ws_origin(root)
     return (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
@@ -103,7 +130,7 @@ def game_csp(origin: str) -> str:
         "style-src 'self' 'unsafe-inline' " + _CDN_ORIGINS + "; "
         "font-src 'self' " + _CDN_ORIGINS + "; "
         "img-src 'self' data: blob:; "
-        "connect-src 'self'; "
+        "connect-src " + connect_src + "; "
         "form-action 'none'; "
         "frame-ancestors 'self'; "
         "base-uri 'none';"
@@ -121,6 +148,11 @@ def _scan_local_refs(html: str, engine: str | None, version: str) -> list[str]:
     """
     allowed_prefix = engines.vendor_url_prefix(version) if engine else None
     violations = []
+    # The realtime client is a real first-party served path (app.py's
+    # /vendor/rt/ route), injected into multiplayer games by multiplayer.py the
+    # same way the three.js import map is injected. Always allowed as a local
+    # ref, like the three vendor prefix.
+    RT_PREFIX = "/vendor/rt/"
 
     refs = [("script", _attr(tag, "src")) for tag in _SCRIPT_TAG_RE.findall(html)]
     for tag in _LINK_TAG_RE.findall(html):
@@ -134,6 +166,8 @@ def _scan_local_refs(html: str, engine: str | None, version: str) -> list[str]:
         if not ref or ref.startswith("#") or ref.startswith(_REMOTE_PREFIXES):
             continue  # remote refs are the CDN allowlist's job, below
         if allowed_prefix and ref.startswith(allowed_prefix):
+            continue
+        if ref.startswith(RT_PREFIX):
             continue
         violations.append(
             f"local {kind} reference '{ref}' — nothing but index.html is served "

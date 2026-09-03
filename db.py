@@ -299,6 +299,7 @@ _ADDED_COLUMNS = {
         ("git_push_status", "TEXT"), ("git_push_error", "TEXT"),
         ("awaiting_approval_at", "TEXT"), ("extra_steps_granted", "INTEGER"),
         ("engine", "TEXT"),
+        ("multiplayer_max_players", "INTEGER"),
     ],
     "generation_attempts": [
         ("duration_seconds", "REAL"), ("raw_response", "TEXT"),
@@ -798,25 +799,27 @@ def get_web_games(sort="alpha", conn=None):
 
 def create_generation_request(job_id, kind, prompt, requested_by, source_game_id=None,
                                new_title=None, creator_uid=None, ip_address=None,
-                               engine=None, conn=None):
+                               engine=None, multiplayer_max_players=None, conn=None):
     """Insert a new queued job. kind is 'create', 'enhance', or 'explode'
     (the admin-triggered single-file -> multi-file conversion).
 
-    `engine` is only meaningful for kind='create' — every other kind inherits
-    the source game's engine from its meta.json, since the engine is a property
-    of the lineage rather than of a request."""
+    `engine` and `multiplayer_max_players` are only meaningful for
+    kind='create' — every other kind inherits both from the source game's
+    meta.json, since they are properties of the lineage rather than of a
+    request."""
     c = _c(conn)
     now = _now()
     c.execute(
         """
         INSERT INTO generation_requests
             (job_id, kind, prompt, new_title, source_game_id, result_game_id,
-             requested_by, creator_uid, ip_address, engine, status, attempts,
+             requested_by, creator_uid, ip_address, engine,
+             multiplayer_max_players, status, attempts,
              created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 'queued', 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)
         """,
         (job_id, kind, prompt, new_title, source_game_id, requested_by, creator_uid,
-         ip_address, engine, now, now),
+         ip_address, engine, multiplayer_max_players, now, now),
     )
     c.commit()
 

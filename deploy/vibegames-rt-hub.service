@@ -1,0 +1,42 @@
+# Sample systemd unit for the multiplayer realtime hub (rt_hub.py).
+#
+# Install:
+#   sudo cp deploy/vibegames-rt-hub.service /etc/systemd/system/
+#   sudo (edit User / WorkingDirectory / paths to match your checkout)
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now vibegames-rt-hub
+#
+# The hub is a standalone process, independent of the Flask app and the job
+# runner: a crash here cannot take down /play/ or generation. Restart=on-failure
+# brings it back on a crash. Rollback is "stop this unit + drop the /rt/ proxy
+# rule" — multiplayer games then degrade to their solo/waiting state and
+# nothing else is affected.
+#
+# Verify restart-on-failure after install:
+#   systemctl is-active vibegames-rt-hub          # -> active
+#   sudo kill -9 "$(systemctl show -p MainPID --value vibegames-rt-hub)"
+#   sleep 2 && systemctl is-active vibegames-rt-hub   # -> active again
+
+[Unit]
+Description=Vibegames multiplayer realtime hub
+After=network.target
+
+[Service]
+Type=simple
+User=<your-user>
+WorkingDirectory=/home/<your-user>/vibegames
+Environment=PATH=/home/<your-user>/vibegames/venv/bin
+ExecStart=/home/<your-user>/vibegames/venv/bin/python3 rt_hub.py --config config.yaml
+Restart=on-failure
+RestartSec=2
+
+# The hub holds only in-memory room state, opens no database connection, and
+# writes nothing to disk, so it can run fully locked-down.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/<your-user>/vibegames
+
+[Install]
+WantedBy=multi-user.target

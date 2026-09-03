@@ -71,6 +71,24 @@
               code — pick 3D when the idea is genuinely spatial.
             </p>
           </fieldset>
+          <fieldset class="engine-choice" {{ 'disabled' if not ai_enabled else '' }}>
+            <legend>Multiplayer</legend>
+            <label>
+              <input type="checkbox" name="multiplayer" value="1"
+                     {{ 'checked' if request.form.get('multiplayer') == '1' else '' }}>
+              <span><strong>Shared room</strong> — players in the same game see each other in real time</span>
+            </label>
+            <label>
+              Max players
+              <input type="number" name="max_players" min="2" max="8" step="1"
+                     value="{{ request.form.get('max_players', '2') }}">
+            </label>
+            <p class="form-note engine-note">
+              A realtime client is injected for you — the game must still play
+              (or show &ldquo;waiting for players&rdquo;) when you're alone.
+              Peer messages are untrusted. Kept small: rooms are 2&ndash;8.
+            </p>
+          </fieldset>
           <button type="submit" {{ 'disabled' if not ai_enabled else '' }}>Generate game</button>
         </form>
       </div>

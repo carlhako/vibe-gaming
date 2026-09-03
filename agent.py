@@ -2616,7 +2616,9 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
                      extra_verify: Callable | None = None,
                      snapshot_paths: frozenset | None = None,
                      engine: str | None = None,
-                     engine_version: str | None = None) -> dict:
+                     engine_version: str | None = None,
+                     multiplayer_block: dict | None = None,
+                     multiplayer_game_id: str | None = None) -> dict:
     """Drive the read_map/list_files/read_file/search/write_file/finish loop
     against game_dir until finish() passes build->scan->smoke, the
     verification-retry budget is exhausted, or the step budget runs out.
@@ -2805,7 +2807,8 @@ def _run_react_loop(*, game_dir: Path, system_prompt: str, user_prompt: str,
         attempt below; `forced` only changes the wording."""
         nonlocal verification_attempts
         passed, detail, built_html = builder.build_and_verify(
-            game_dir, engine=engine, engine_version=engine_version)
+            game_dir, engine=engine, engine_version=engine_version,
+            multiplayer_block=multiplayer_block, game_id=multiplayer_game_id)
         if passed and extra_verify is not None:
             extra_detail = extra_verify(game_dir, built_html)
             if extra_detail:
@@ -3428,6 +3431,8 @@ def enhance_multifile_game(source_game_id: str, description: str, requested_by: 
         cfg=cfg, job_id=job_id, db_conn=db_conn, emit=emit,
         snapshot_paths=snapshot.paths if snapshot.text is not None else None,
         engine=engine, engine_version=engine_version,
+        multiplayer_block=builder.read_multiplayer(source_dir),
+        multiplayer_game_id=dest_game_id,
     )
     duration = time.monotonic() - t0
 
@@ -3463,6 +3468,11 @@ def enhance_multifile_game(source_game_id: str, description: str, requested_by: 
     if engine:
         meta["engine"] = engine
         meta["engine_version"] = engine_version
+    # Multiplayer opt-in is a lineage property, carried the same way as engine
+    # (see multiplayer.py / builder.read_multiplayer).
+    mp_block = builder.read_multiplayer(source_dir)
+    if mp_block:
+        meta["multiplayer"] = mp_block
     (dest_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     result = {
@@ -3593,6 +3603,8 @@ def explode_game(source_game_id: str, requested_by: str, config: dict, db_conn=N
         cfg=explode_cfg, job_id=job_id, db_conn=db_conn, emit=emit,
         extra_verify=_explode_declaration_check(source_html),
         engine=engine, engine_version=engine_version,
+        multiplayer_block=builder.read_multiplayer(source_dir),
+        multiplayer_game_id=dest_game_id,
     )
     duration = time.monotonic() - t0
 
@@ -3628,6 +3640,11 @@ def explode_game(source_game_id: str, requested_by: str, config: dict, db_conn=N
     if engine:
         meta["engine"] = engine
         meta["engine_version"] = engine_version
+    # Multiplayer opt-in is a lineage property, carried the same way as engine
+    # (see multiplayer.py / builder.read_multiplayer).
+    mp_block = builder.read_multiplayer(source_dir)
+    if mp_block:
+        meta["multiplayer"] = mp_block
     (dest_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     result = {

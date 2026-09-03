@@ -377,11 +377,60 @@ code asks.
 - 3D games become multi-file through the **existing** dual-format policy at the
   **existing** `ge.LARGE_SOURCE_BYTES` threshold. Nothing about 3D changes when.
 
+## Multiplayer games
+
+Opt-in real-time rooms. A game is multiplayer iff its `meta.json` has a
+`"multiplayer": {"max_players": N}` block (N >= 2), set from the new-game
+form's Multiplayer control and **inherited unchanged by every fork/enhance**,
+exactly like `engine` (`builder.read_multiplayer`, `multiplayer.read_max_players`).
+
+- **The hub is a separate process.** `rt_hub.py` is a standalone asyncio
+  WebSocket server — its own systemd unit (`deploy/vibegames-rt-hub.service`),
+  its own crash domain — reverse-proxied at `/rt/`. It is a game-agnostic dumb
+  relay: room membership (one room per `game_id`, server-derived key, created
+  lazily, destroyed empty), per-game capacity read server-side from
+  `meta.json` (a tampered client cannot exceed it, close 4001; a non-multiplayer
+  `game_id` is refused, close 4002; a malformed one, close 4003), a presence
+  roster `[{id, nick, ping_ms}]`, and a **server-measured** ping. It never
+  inspects/transforms/persists game payloads, opens **no DB connection**, and
+  writes nothing to disk or logs. Its per-connection limits (frame size, msg
+  rate, conns per IP, strict JSON parse with no raw-error reflection) are
+  framed as keeping the process up, not anti-abuse. Config: `rt_hub:` in
+  `config.yaml.example`.
+- **`VG_RT` is platform-injected like the import map.** `vendor/rt/rt.js` is
+  served from `/vendor/rt/` (`Access-Control-Allow-Origin: *`, immutable
+  cache) and `multiplayer.normalize()` strips any model-emitted copy of the
+  client tag and inserts the canonical `<script src="/vendor/rt/rt.js"
+  data-game-id="...">` before `</head>` — idempotent per game, run in the
+  pipeline right before `safety.scan()` so the scan sees final bytes. The game
+  calls `VG_RT.send()` / `VG_RT.on('roster'|'peers'|'msg'|'welcome', …)` /
+  `VG_RT.me`; the model never writes WebSocket code. The client-side payload
+  cap in `rt.js` (`MAX_FRAME_BYTES = 16384`) must stay in sync with the hub's
+  `max_frame_bytes` default.
+- **The platform allowances name only the serving origin.**
+  `safety.game_csp()`'s `connect-src` is the serving origin for `https:` +
+  `wss:` and nothing else (an opaque-origin sandbox can't rely on `'self'` —
+  same reasoning as the `script-src` vendor prefix); `script-src` gains the
+  `/vendor/rt/` prefix; `safety.scan()` always allows a local `/vendor/rt/`
+  ref. `smoke_test.py` exempts a `ws://`/`wss://` URL to its **own** origin
+  and answers it with a minimal stub (handshake + `welcome` + empty `roster` +
+  close) so a multiplayer game reaches its solo/waiting state without failing
+  generation — a WS to any other host still fails the attempt. The generation
+  prompt gains a Multiplayer contract (solo/waiting render required, peer
+  messages are untrusted → no `eval`, `textContent` over `innerHTML`, use
+  `VG_RT` not a raw socket) only when the opt-in is set.
+- **Out of scope:** no WebRTC/P2P, no persistent player identity or
+  parent→iframe token handshake (sockets are anonymous, nicknames are
+  client-declared and display-only), no matchmaking or named rooms, no
+  server-side simulation/anti-cheat, no path for converting an existing
+  single-player game into a multiplayer one.
+
 ## Running locally
 
 `README.md` has the quickstart (including `ADMIN_TOKEN`, the `job_runner`
 config block, and the one-time `playwright install chromium` the smoke test
-needs).
+needs). Its "Multiplayer games" section covers running `rt_hub.py` alongside
+`app.py` and the `/rt/` reverse-proxy rule.
 
 `games/` is scanned on every request (mtime-cache-invalidated), so any game
 directory dropped in with a valid `index.html` (+ optional `meta.json`)

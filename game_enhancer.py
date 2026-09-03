@@ -221,8 +221,12 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
         title_override = f"{base_title} (v{n})"
 
     # The engine belongs to the lineage: a fork of a 3D game is a 3D game, and
-    # there is no way to opt in or out of one on an enhance.
+    # there is no way to opt in or out of one on an enhance. The multiplayer
+    # opt-in is carried the same way — read from the source game's meta.json,
+    # never from the model, and re-written into the fork's meta.json by
+    # run_generation_attempts.
     engine, engine_version = builder.read_engine(games_dir / source_row["slug"])
+    mp_block = builder.read_multiplayer(games_dir / source_row["slug"])
     system_prompt = _build_system_prompt(source_row["title"], existing_game_html, engine)
     emit = gg._make_emitter(job_id, db_conn)
 
@@ -234,6 +238,7 @@ def enhance_game(source_game_id: str, description: str, requested_by: str, confi
         title_override=title_override,
         version_override=(source_row["version"] or 1) + 1,
         engine=engine, engine_version=engine_version,
+        max_players=(mp_block or {}).get("max_players"),
         emit=emit,
     )
     duration = time.monotonic() - t0

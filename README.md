@@ -32,6 +32,43 @@ First start creates `vibegames.db` and registers the two bundled games
 That's it — `python3 app.py` starts both the Flask app and the background
 job-runner worker thread(s) that actually talk to DeepSeek.
 
+### Multiplayer games (optional)
+
+Games generated with the new-game form's **Multiplayer** option connect to a
+standalone real-time relay, `rt_hub.py` — a separate asyncio process, exactly
+like the job runner is separate. Nothing about single-player games changes if
+you don't run it; multiplayer games just stay in their solo/"waiting for
+players" state.
+
+```bash
+source venv/bin/activate
+python3 rt_hub.py            # reads config.yaml's rt_hub: block; binds 127.0.0.1:8620
+```
+
+Run it alongside `python3 app.py`. The browser reaches it at the **same
+origin** as the game, under the `/rt/` path, so your reverse proxy must route
+`/rt/` to the hub and everything else to Flask. With Caddy:
+
+```
+games.example.com {
+    @rt path /rt/*
+    reverse_proxy @rt 127.0.0.1:8620
+    reverse_proxy 127.0.0.1:8600
+}
+```
+
+The hub binds loopback, so only the proxy can reach it. For pure local dev
+with no proxy, either put a one-line Caddy/nginx proxy in front, or add
+`data-hub="ws://localhost:8620"` to the injected `<script src="/vendor/rt/rt.js">`
+tag in a game's `index.html` — `vendor/rt/rt.js` honors that attribute as an
+explicit hub origin.
+
+In production, run the hub under its own supervisor with restart-on-failure —
+a sample systemd unit is in `deploy/vibegames-rt-hub.service`. **Rollback:**
+stop the hub and remove the `/rt/` proxy rule; multiplayer games degrade to
+their solo state and nothing else is affected (the CSP/smoke/form changes are
+backward-compatible and can stay).
+
 Setting up on a brand-new VM (system packages, Playwright's OS
 dependencies, systemd, firewall)? See **[VM-SETUP.md](VM-SETUP.md)** for
 the full step-by-step, including what to do if you're copying over an
@@ -46,6 +83,10 @@ existing `games/` directory or an older `vibegames.db`.
   `max_attempts` for the generate/enhance retry loops.
 - `job_runner:` — `workers` (poll-loop threads per process) and
   `poll_interval_seconds`.
+- `rt_hub:` — the multiplayer relay's bind host/port, per-connection
+  limits (`max_frame_bytes`, `max_msg_per_sec`, `max_conns_per_ip`),
+  ping cadence (`ping_interval_s` / `dead_after_s`), and idle-room TTL.
+  A missing block falls back to the same defaults.
 
 `.env` (copied from `.env.example`):
 

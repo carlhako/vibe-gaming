@@ -50,6 +50,11 @@ _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
 # It takes the serving origin because a 3D game's vendored three.js allowance
 # is an explicit origin + path prefix rather than 'self' — see that function.
 _GAME_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+# Upper bound on the new-game form's max-players field. The relay fans every
+# message to every other member, so a room's cost is O(n^2) in players; this
+# keeps a casual arcade game's room small. Not a security limit — the hub
+# reads the real cap from meta.json regardless.
+_MULTIPLAYER_MAX_PLAYERS_CAP = 8
 _BASE_DIR = Path(__file__).parent
 _VG_UID_COOKIE = "vg_uid"
 _VG_UID_MAX_AGE = 31536000  # 1 year
@@ -755,6 +760,20 @@ def create_app(games_dir=None) -> Flask:
         response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return response
 
+    @app.get("/vendor/rt/<path:filename>")
+    def vendor_rt(filename):
+        """The platform-injected realtime client (VG_RT) for multiplayer games.
+
+        Same contract as /vendor/three/ above: a sandboxed game sends
+        `Origin: null`, so the file has to answer `Access-Control-Allow-Origin:
+        *`, and it's immutable bytes so it caches for a year. send_from_directory
+        rejects any path that escapes the directory with a 404.
+        """
+        response = send_from_directory(engines.VENDOR_ROOT / "rt", filename)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
     @app.get("/games/<game_id>/download")
     def download_game(game_id):
         if not _GAME_ID_RE.match(game_id):
@@ -835,6 +854,16 @@ def create_app(games_dir=None) -> Flask:
         # plain 2D game rather than an error or an engine we can't serve.
         engine = (request.form.get("engine") or "").strip()
         engine = engine if engine in engines.VALID_ENGINES else None
+        # Multiplayer opt-in: a checkbox plus a player count. Clamped to a sane
+        # range server-side; an unchecked box (or a junk count) means a plain
+        # single-player game, exactly as before this existed.
+        multiplayer_max_players = None
+        if request.form.get("multiplayer") == "1":
+            try:
+                n = int(request.form.get("max_players") or "")
+            except ValueError:
+                n = 0
+            multiplayer_max_players = max(2, min(n, _MULTIPLAYER_MAX_PLAYERS_CAP))
         if not prompt:
             return render_template(
                 "new_game.html", error="Please describe the game you want.", ai_enabled=True,
@@ -863,7 +892,8 @@ def create_app(games_dir=None) -> Flask:
         db.create_generation_request(
             job_id=job_id, kind="create", prompt=prompt, requested_by=requested_by,
             creator_uid=vg_uid, ip_address=request.remote_addr or "unknown",
-            engine=engine, conn=get_db(),
+            engine=engine, multiplayer_max_players=multiplayer_max_players,
+            conn=get_db(),
         )
 
         resp = redirect(url_for("job_status_page", job_id=job_id))

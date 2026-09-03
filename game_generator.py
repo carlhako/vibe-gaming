@@ -55,6 +55,7 @@ import ai_client as ai
 import content_moderation
 import db
 import engines
+import multiplayer
 import safety
 import smoke_test
 
@@ -322,15 +323,46 @@ def build_play_url(slug: str, config: dict) -> str:
 # Prompt builders
 # ---------------------------------------------------------------------------
 
-def _build_system_prompt(engine: str | None = None) -> str:
+MULTIPLAYER_CONTRACT = (
+    "## Multiplayer\n"
+    "This is a shared-room multiplayer game. A realtime client is injected "
+    "into your page automatically as `window.VG_RT` — do NOT write any "
+    "WebSocket code or a `<script src=\".../rt.js\">` tag yourself; it is "
+    "added for you.\n\n"
+    "Use only this API:\n"
+    "  - `VG_RT.send(value)` — broadcast a JSON-serializable value to the "
+    "other players in the room.\n"
+    "  - `VG_RT.on('msg', ({from, d}) => { ... })` — receive a peer's value "
+    "`d` (with the sender's member id `from`).\n"
+    "  - `VG_RT.on('roster', members => { ... })` and "
+    "`VG_RT.on('peers', peers => { ... })` — presence: an array of "
+    "`{id, nick, ping_ms}`.\n"
+    "  - `VG_RT.me` — this client's own member id; `VG_RT.setNick(name)` — "
+    "set the display name.\n\n"
+    "Hard requirements:\n"
+    "  - The game MUST render a playable or explicit \"waiting for players\" "
+    "state when it is the only member of the room. Never hang or error "
+    "waiting for a peer.\n"
+    "  - Peer messages are UNTRUSTED DATA. Never pass a received value to "
+    "`eval` or the `Function` constructor, and never build HTML from it — "
+    "use `textContent`, not `innerHTML`, when showing anything a peer sent "
+    "(including nicknames).\n"
+    "  - Do not hard-code any server URL; `VG_RT` derives it.\n\n"
+)
+
+
+def _build_system_prompt(engine: str | None = None,
+                         max_players: int | None = None) -> str:
     allowed_hosts = ", ".join(sorted(safety.ALLOWED_CDN_HOSTS))
     three_section = (
         engines.three_contract() if engine == engines.ENGINE_THREE else ""
     )
+    multiplayer_section = MULTIPLAYER_CONTRACT if max_players else ""
     return (
         "You are generating a new browser game for an arcade site that "
         "hosts single-file HTML5/JavaScript games.\n\n"
         + three_section
+        + multiplayer_section
         + "## Contract\n"
         "Reply with exactly ONE self-contained index.html file — all HTML, "
         "CSS, and JavaScript inline in that one file. Canvas or plain DOM, "
@@ -415,6 +447,7 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
                              version_override: int = 1,
                              engine: str | None = None,
                              engine_version: str = engines.DEFAULT_THREE_VERSION,
+                             max_players: int | None = None,
                              emit: Callable | None = None) -> dict:
     """Drive the submit -> safety-scan -> mint id/slug -> write ->
     smoke-test loop shared by a brand-new game and an enhancement fork,
@@ -434,6 +467,13 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
     `version_override` is written into meta.json's "version" field —
     callers forking from an existing game pass source_version + 1 so the
     field tracks lineage depth; a brand-new original leaves it at 1.
+
+    `max_players` (>= 2) marks the game multiplayer: a
+    `"multiplayer": {"max_players": N}` block is written into meta.json and
+    `multiplayer.normalize()` injects the VG_RT client tag before scanning.
+    None (the default) leaves the game single-player with no client injected.
+    Like `engine`, it belongs to the lineage — enhance passes the source
+    game's value straight through.
 
     Does not touch the web_games table — callers register the result
     themselves once they've computed their own bookkeeping (duration,
@@ -597,25 +637,32 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
         try:
             parsed = parse_submission(submission.arguments)
 
-            # Normalize BEFORE scanning, so the scan sees exactly the bytes
-            # that get written: for a 3D game this replaces whatever import map
-            # the model wrote (or didn't) with the canonical one, which is then
-            # what safety.scan enforces.
-            try:
-                game_html = engines.normalize(parsed["game_html"], engine, engine_version)
-            except engines.EngineError as exc:
-                raise GameGenerationError(f"engine setup failed: {exc}") from None
-
-            violations = safety.scan(game_html, engine, engine_version)
-            if violations:
-                raise GameGenerationError("safety violation: " + "; ".join(violations))
-
             final_title = title_override if title_override else parsed["title"]
             candidate_game_id = db.mint_game_id()
             candidate_slug = db.make_slug(final_title, candidate_game_id)
             collision = check_slug_collision(candidate_slug, games_dir)
             if collision:
                 raise GameGenerationError(f"slug collision: {collision}")
+
+            # Normalize BEFORE scanning, so the scan sees exactly the bytes
+            # that get written: for a 3D game this replaces whatever import map
+            # the model wrote (or didn't) with the canonical one; for a
+            # multiplayer game it strips any hand-written copy of the VG_RT
+            # client tag and injects the canonical one (carrying this game's
+            # own game_id). safety.scan then enforces whatever survives.
+            try:
+                game_html = engines.normalize(parsed["game_html"], engine, engine_version)
+            except engines.EngineError as exc:
+                raise GameGenerationError(f"engine setup failed: {exc}") from None
+            try:
+                game_html = multiplayer.normalize(
+                    game_html, max_players is not None, candidate_game_id)
+            except multiplayer.MultiplayerError as exc:
+                raise GameGenerationError(f"multiplayer setup failed: {exc}") from None
+
+            violations = safety.scan(game_html, engine, engine_version)
+            if violations:
+                raise GameGenerationError("safety violation: " + "; ".join(violations))
 
             meta = {
                 "game_id": candidate_game_id,
@@ -631,6 +678,8 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
             if engine:
                 meta["engine"] = engine
                 meta["engine_version"] = engine_version
+            if max_players is not None:
+                meta["multiplayer"] = {"max_players": max_players}
             game_dir = write_game_files(candidate_slug, game_html, meta, games_dir)
 
             passed, detail = smoke_test.run_smoke_test(
@@ -691,18 +740,25 @@ def run_generation_attempts(*, description: str, requested_by: str, system_promp
 
 def generate_game(description: str, requested_by: str, config: dict, db_conn=None,
                    games_dir: Path | None = None, job_id: str | None = None,
-                   creator_uid: str | None = None, engine: str | None = None) -> dict:
+                   creator_uid: str | None = None, engine: str | None = None,
+                   max_players: int | None = None) -> dict:
     """Drive the full generate -> validate -> smoke-test retry loop and
     return a result dict (result["message"] is ready to display; DB
     registration is already performed once, on success, before returning).
 
     `engine` ("three" or None) selects the prompt variant and the runtime the
     game is built against; it is recorded in meta.json and inherited by every
-    fork, since the engine belongs to the lineage rather than to a request."""
+    fork, since the engine belongs to the lineage rather than to a request.
+
+    `max_players` (>= 2, or None) is the multiplayer opt-in from the new-game
+    form: it adds the prompt contract for a shared-room game, writes the
+    `multiplayer` block into meta.json, and injects the VG_RT client — and is
+    likewise inherited by every fork."""
     games_dir = Path(games_dir) if games_dir is not None else GAMES_DIR
     cfg = config.get("newaiwebgame", {})
     engine = engine if engine in engines.VALID_ENGINES else None
-    system_prompt = _build_system_prompt(engine)
+    max_players = max_players if isinstance(max_players, int) and max_players >= 2 else None
+    system_prompt = _build_system_prompt(engine, max_players=max_players)
     emit = _make_emitter(job_id, db_conn)
 
     t0 = time.monotonic()
@@ -710,7 +766,7 @@ def generate_game(description: str, requested_by: str, config: dict, db_conn=Non
         description=description, requested_by=requested_by, system_prompt=system_prompt,
         initial_user_prompt=_build_user_prompt(description),
         cfg=cfg, games_dir=games_dir, job_id=job_id, db_conn=db_conn,
-        engine=engine, emit=emit,
+        engine=engine, max_players=max_players, emit=emit,
     )
     duration = time.monotonic() - t0
 

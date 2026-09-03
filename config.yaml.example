@@ -211,6 +211,27 @@ job_runner:
   workers: 1                 # poll-loop threads per process (dev) / per gunicorn worker (prod)
   poll_interval_seconds: 1   # how often an idle worker checks for a newly queued job
 
+# The standalone real-time relay for multiplayer games (rt_hub.py). It runs
+# as its own asyncio process, exactly like job_runner is its own polling
+# process, reverse-proxied at /rt/ (see README.md). It is a game-agnostic
+# dumb relay: it owns room membership, per-game capacity (read from each
+# game's meta.json "multiplayer" block), a presence roster, and a
+# server-measured ping. It never inspects game payloads, opens no DB
+# connection, and persists nothing. All limits below are framed as keeping
+# the process up under untrusted input, not as anti-abuse. Missing this
+# block falls back to these same defaults (rt_hub.load_config()).
+rt_hub:
+  host: "127.0.0.1"          # bind loopback in production — only the reverse proxy reaches it
+  port: 8620
+  games_dir: "games"         # same tree app.py serves; read-only, for meta.json capacity lookups
+  max_frame_bytes: 16384     # a single WS frame larger than this is dropped without a full parse
+  max_msg_per_sec: 40        # per-connection message rate; a client over it is disconnected
+  max_conns_per_ip: 16       # concurrent connections from one client IP
+  ping_interval_s: 5         # how often the hub sends each member a ping frame to measure RTT
+  dead_after_s: 15           # a member that stops echoing pings past this is dropped
+  idle_room_ttl_s: 60        # an empty room is discarded immediately; this GCs a room whose
+                             # last member vanished without a clean close
+
 # Auto-commit + push every successfully generated/enhanced game directory
 # to the GitHub remote this checkout already has configured (origin), with
 # the generation/enhancement prompt as the commit message. Requires

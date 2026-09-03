@@ -197,5 +197,23 @@ def test_game_csp_scopes_the_vendor_allowance_to_a_path_prefix():
 
 def test_game_csp_still_blocks_runtime_egress():
     csp = safety.game_csp("https://arcade.example")
-    assert "connect-src 'self'" in csp
     assert "form-action 'none'" in csp
+
+
+def test_game_csp_connect_src_names_serving_origin_for_ws_and_https():
+    csp = safety.game_csp("https://arcade.example")
+    directive = next(d.strip() for d in csp.split(";") if d.strip().startswith("connect-src"))
+    assert directive == "connect-src https://arcade.example wss://arcade.example"
+    # No third-party host, and no bare 'self' (an opaque origin can't match it).
+    assert "'self'" not in directive
+    assert "evil" not in directive
+
+
+def test_game_csp_connect_src_smoke_origin_uses_ws_scheme():
+    csp = safety.game_csp("http://127.0.0.1:5555")
+    assert "connect-src http://127.0.0.1:5555 ws://127.0.0.1:5555;" in csp
+
+
+def test_game_csp_allows_vendor_rt_prefix_for_the_client():
+    csp = safety.game_csp("https://arcade.example")
+    assert "https://arcade.example/vendor/rt/" in csp

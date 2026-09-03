@@ -33,7 +33,10 @@ module level so importing game_web.smoke_test never requires a Chromium
 install to succeed — only actually calling run_smoke_test() does.
 """
 
+import base64
 import contextlib
+import hashlib
+import json
 import mimetypes
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -43,6 +46,28 @@ from urllib.parse import urlparse
 import safety
 
 _VENDOR_ROOT = Path(__file__).resolve().parent / "vendor"
+
+# RFC 6455 handshake GUID.
+_WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+def _ws_text_frame(payload: str) -> bytes:
+    """A single unmasked server->client text frame (FIN set)."""
+    data = payload.encode("utf-8")
+    header = bytearray([0x81])
+    n = len(data)
+    if n < 126:
+        header.append(n)
+    elif n < 65536:
+        header.append(126)
+        header += n.to_bytes(2, "big")
+    else:
+        header.append(127)
+        header += n.to_bytes(8, "big")
+    return bytes(header) + data
+
+
+_WS_CLOSE_FRAME = bytes([0x88, 0x00])
 
 # Settle window after the synthetic interaction below. A 3D game has to fetch
 # ~750KB of three.js and compile shaders on a software GPU before it draws
@@ -58,11 +83,17 @@ def _blocked_host(url: str, local_origin: str | None = None) -> str | None:
 
     `local_origin` is the smoke server's own origin, which is exempt — but by
     exact origin, not by host, so a game reaching for some *other* service on
-    127.0.0.1 is still reported.
+    127.0.0.1 is still reported. The exemption also covers the `ws://` form of
+    that origin: a multiplayer game opens a WebSocket to the serving origin's
+    `/rt/` path (production CSP allows exactly that), and the smoke server
+    answers it with a minimal stub — but a `ws://`/`wss://` URL to any *other*
+    host still fails the attempt.
     """
     if url.startswith(("file://", "data:", "blob:")):
         return None
     if local_origin and url.startswith(local_origin):
+        return None
+    if local_origin and url.startswith(safety._ws_origin(local_origin)):
         return None
     host = urlparse(url).hostname
     if host and host.lower() not in safety.ALLOWED_CDN_HOSTS:
@@ -71,9 +102,11 @@ def _blocked_host(url: str, local_origin: str | None = None) -> str | None:
 
 
 class _SmokeHandler(BaseHTTPRequestHandler):
-    """Serves exactly two things: the game at /, and the vendored engine tree
-    under /vendor/. Everything else 404s, which mirrors production — only
-    index.html is ever served out of a game directory."""
+    """Serves the game at /, the vendored engine tree under /vendor/, and a
+    minimal WebSocket stub for a multiplayer game's `/rt/<game_id>` connection
+    (handshake + `welcome` + empty `roster` + close). Everything else 404s,
+    which mirrors production — only index.html is ever served out of a game
+    directory."""
 
     protocol_version = "HTTP/1.1"
 
@@ -85,6 +118,10 @@ class _SmokeHandler(BaseHTTPRequestHandler):
 
     def _serve(self, with_body: bool):
         path = urlparse(self.path).path
+        if (self.headers.get("Upgrade", "").lower() == "websocket"
+                and path.startswith("/rt/")):
+            self._serve_ws_stub()
+            return
         if path in ("/", "/index.html"):
             self._send_file(self.server.game_path, "text/html; charset=utf-8",
                             with_body, extra={"Content-Security-Policy": self.server.csp})
@@ -108,6 +145,36 @@ class _SmokeHandler(BaseHTTPRequestHandler):
                             extra={"Access-Control-Allow-Origin": "*"})
             return
         self.send_error(404)
+
+    def _serve_ws_stub(self):
+        """Minimal realtime-hub stand-in: complete the WebSocket handshake,
+        send `welcome` + an empty `roster`, then close. Enough for a
+        multiplayer game to reach its solo/waiting state without the smoke run
+        failing merely for opening the socket — anything more (ping, msg relay)
+        is out of scope for a single-client smoke test.
+        """
+        key = self.headers.get("Sec-WebSocket-Key")
+        if not key:
+            self.send_error(400)
+            return
+        accept = base64.b64encode(
+            hashlib.sha1((key + _WS_GUID).encode("ascii")).digest()
+        ).decode("ascii")
+        self.send_response(101)
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", accept)
+        self.end_headers()
+        try:
+            self.wfile.write(_ws_text_frame(
+                json.dumps({"t": "welcome", "id": "smoke", "max": 2})))
+            self.wfile.write(_ws_text_frame(
+                json.dumps({"t": "roster", "members": [
+                    {"id": "smoke", "nick": "", "ping_ms": None}]})))
+            self.wfile.write(_WS_CLOSE_FRAME)
+            self.wfile.flush()
+        except OSError:
+            pass
 
     def _send_file(self, path: Path, ctype: str, with_body: bool, extra: dict):
         try:

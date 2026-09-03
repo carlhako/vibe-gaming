@@ -32,7 +32,7 @@ def test_play_route_carries_game_csp(isolated_db, games_dir):
     assert resp.status_code == 200
     csp = resp.headers.get("Content-Security-Policy", "")
     assert "form-action 'none'" in csp
-    assert "connect-src 'self'" in csp
+    assert "connect-src http://localhost ws://localhost;" in csp
     assert "frame-ancestors 'self'" in csp
 
 
@@ -108,3 +108,28 @@ def test_vendor_route_serves_three_with_cors_and_immutable_cache(isolated_db, ga
 def test_vendor_route_rejects_an_unvendored_version(isolated_db, games_dir):
     client = make_client(games_dir)
     assert client.get("/vendor/three/9.9.9/three.module.min.js").status_code == 404
+
+
+def test_csp_allows_the_vendor_rt_prefix_for_the_realtime_client(isolated_db, games_dir):
+    write_game(games_dir, "block-dodge", {"title": "Block Dodge", "game_id": "a" * 32})
+    client = make_client(games_dir)
+    csp = client.get("/play/block-dodge").headers["Content-Security-Policy"]
+    directives = dict(
+        (d.strip().split(" ", 1)[0], d.strip())
+        for d in csp.split(";") if d.strip()
+    )
+    assert "http://localhost/vendor/rt/" in directives["script-src"]
+
+
+def test_vendor_rt_route_serves_with_cors_and_immutable_cache(isolated_db, games_dir):
+    client = make_client(games_dir)
+    resp = client.get("/vendor/rt/rt.js")
+    assert resp.status_code == 200
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"
+    assert "immutable" in resp.headers["Cache-Control"]
+
+
+def test_vendor_rt_route_rejects_path_traversal(isolated_db, games_dir):
+    client = make_client(games_dir)
+    assert client.get("/vendor/rt/../three/0.185.1/SOURCES.txt").status_code == 404
+    assert client.get("/vendor/rt/nope.js").status_code == 404

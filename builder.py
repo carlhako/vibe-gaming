@@ -32,6 +32,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import engines
+import multiplayer as multiplayer_mod
 import safety
 import smoke_test
 
@@ -206,19 +207,51 @@ def read_engine(game_dir) -> tuple[str | None, str]:
     return engines.from_meta(meta)
 
 
+def read_multiplayer(game_dir) -> dict | None:
+    """The meta.json ``multiplayer`` block ({"max_players": int>=2}) for
+    game_dir, or None for a single-player game / unreadable meta.json /
+    invalid (< 2, non-int, missing) max_players. The engine-field analogue of
+    read_engine — fork/enhance carries this through unchanged."""
+    meta_path = Path(game_dir) / "meta.json"
+    if not meta_path.is_file():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    mp = multiplayer_mod.read_max_players(meta)
+    return {"max_players": mp} if mp is not None else None
+
+
+def _meta_game_id(game_dir) -> str | None:
+    meta_path = Path(game_dir) / "meta.json"
+    if not meta_path.is_file():
+        return None
+    try:
+        return json.loads(meta_path.read_text(encoding="utf-8")).get("game_id")
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def write_built_index(game_dir) -> Path:
     """build_game(game_dir/src) and write the result to game_dir/index.html
     (the committed, served artifact). Returns the written path."""
     game_dir = Path(game_dir)
     engine, version = read_engine(game_dir)
     built_html = engines.normalize(build_game(game_dir / "src", engine), engine, version)
+    mp_block = read_multiplayer(game_dir)
+    if mp_block:
+        built_html = multiplayer_mod.normalize(
+            built_html, True, _meta_game_id(game_dir) or "")
     index_path = game_dir / "index.html"
     index_path.write_text(built_html, encoding="utf-8")
     return index_path
 
 
 def build_and_verify(game_dir, smoke_timeout: int = 20, engine: str | None = None,
-                     engine_version: str | None = None) -> tuple[bool, str, str]:
+                     engine_version: str | None = None,
+                     multiplayer_block: dict | None = None,
+                     game_id: str | None = None) -> tuple[bool, str, str]:
     """Shared build -> normalize -> scan -> smoke helper for the generation
     pipeline (Sprint 2 wires this into game_generator/game_enhancer for
     multi-file games). For a single-file game (no src/) the build step is a
@@ -232,6 +265,12 @@ def build_and_verify(game_dir, smoke_timeout: int = 20, engine: str | None = Non
     the whole run — built as classic <script> blocks, failing every attempt on
     syntax errors that point nowhere near the real problem.
 
+    `multiplayer_block`/`game_id` override the same way for the multiplayer
+    opt-in: a fork in progress has no meta.json, so a multi-file multiplayer
+    game would otherwise verify (and commit its built index.html) without the
+    VG_RT client injected. Pass the source game's block and the fork's minted
+    game_id.
+
     Returns (passed, detail, built_html). `detail` explains a build, safety or
     smoke failure; on success it's smoke_test's own success string.
     """
@@ -239,6 +278,8 @@ def build_and_verify(game_dir, smoke_timeout: int = 20, engine: str | None = Non
     meta_engine, meta_version = read_engine(game_dir)
     engine = engine if engine is not None else meta_engine
     version = engine_version or meta_version
+    mp_block = multiplayer_block if multiplayer_block is not None else read_multiplayer(game_dir)
+    mp_game_id = game_id or _meta_game_id(game_dir) or ""
     index_path = game_dir / "index.html"
 
     if is_multi_file(game_dir):
@@ -258,6 +299,12 @@ def build_and_verify(game_dir, smoke_timeout: int = 20, engine: str | None = Non
     try:
         built_html = engines.normalize(built_html, engine, version)
     except engines.EngineError as exc:
+        return False, f"build failed: {exc}", built_html
+
+    try:
+        built_html = multiplayer_mod.normalize(
+            built_html, mp_block is not None, mp_game_id)
+    except multiplayer_mod.MultiplayerError as exc:
         return False, f"build failed: {exc}", built_html
 
     # Only rewrite when the bytes actually change: games/ is scanned with an

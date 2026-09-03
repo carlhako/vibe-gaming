@@ -128,6 +128,52 @@ def test_blocked_host_still_reports_other_local_services():
         "http://127.0.0.1:5432/x", "http://127.0.0.1:8931") == "127.0.0.1"
 
 
+# --- multiplayer: the hub connection is tolerated, other WS egress is not --
+
+def test_blocked_host_exempts_ws_to_the_smoke_origin():
+    assert smoke_test._blocked_host(
+        "ws://127.0.0.1:8931/rt/" + "a" * 32, "http://127.0.0.1:8931") is None
+
+
+def test_blocked_host_reports_ws_to_a_third_party_host():
+    assert smoke_test._blocked_host(
+        "wss://evil.tld/rt/x", "http://127.0.0.1:8931") == "evil.tld"
+
+
+def test_multiplayer_game_smoke_tests_solo_against_the_ws_stub(tmp_path):
+    """A game that opens a socket to /rt/<game_id>, waits for `welcome` +
+    `roster`, and renders a waiting state must pass smoke — the stub answers
+    the handshake and the ws:// URL to the serving origin is exempt."""
+    html = tmp_path / "index.html"
+    html.write_text(
+        '<!doctype html><body><div id="s">connecting</div><script>'
+        'var w = new WebSocket("ws://" + location.host + "/rt/" + "a".repeat(32));'
+        'w.onmessage = function(e){'
+        '  var f = JSON.parse(e.data);'
+        '  if (f.t === "roster") document.getElementById("s").textContent ='
+        '    "waiting for players (" + f.members.length + ")";'
+        '};'
+        'w.onerror = function(){};'
+        '</script></body>',
+        encoding="utf-8",
+    )
+    passed, detail = smoke_test.run_smoke_test(str(html), timeout_seconds=10)
+    assert passed, detail
+
+
+def test_multiplayer_game_reaching_a_third_party_ws_host_still_fails(tmp_path):
+    html = tmp_path / "index.html"
+    html.write_text(
+        '<!doctype html><body><script>'
+        'try { new WebSocket("wss://evil-ws-test.invalid/rt/x"); } catch(e){}'
+        '</script></body>',
+        encoding="utf-8",
+    )
+    passed, detail = smoke_test.run_smoke_test(str(html), timeout_seconds=10)
+    assert passed is False
+    assert "evil-ws-test.invalid" in detail
+
+
 # --- 3D: the whole vendored-engine path, in a real browser ----------------
 
 def test_three_js_game_loads_and_renders(tmp_path):
