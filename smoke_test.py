@@ -67,6 +67,9 @@ def _ws_text_frame(payload: str) -> bytes:
     return bytes(header) + data
 
 
+# An unmasked, empty server->client close frame. The stub no longer sends one
+# (it holds the socket open, mirroring rt_hub.py) — kept for tests that
+# reconstruct the pre-fix "server closes immediately" failure mode.
 _WS_CLOSE_FRAME = bytes([0x88, 0x00])
 
 # Settle window after the synthetic interaction below. A 3D game has to fetch
@@ -104,7 +107,7 @@ def _blocked_host(url: str, local_origin: str | None = None) -> str | None:
 class _SmokeHandler(BaseHTTPRequestHandler):
     """Serves the game at /, the vendored engine tree under /vendor/, and a
     minimal WebSocket stub for a multiplayer game's `/rt/<game_id>` connection
-    (handshake + `welcome` + empty `roster` + close). Everything else 404s,
+    (handshake + `welcome` + empty `roster`, then held open). Everything else 404s,
     which mirrors production — only index.html is ever served out of a game
     directory."""
 
@@ -148,10 +151,19 @@ class _SmokeHandler(BaseHTTPRequestHandler):
 
     def _serve_ws_stub(self):
         """Minimal realtime-hub stand-in: complete the WebSocket handshake,
-        send `welcome` + an empty `roster`, then close. Enough for a
-        multiplayer game to reach its solo/waiting state without the smoke run
-        failing merely for opening the socket — anything more (ping, msg relay)
-        is out of scope for a single-client smoke test.
+        send `welcome` + an empty `roster`, then hold the connection open —
+        without a server-initiated close — until the browser closes the socket
+        or the smoke server is torn down. Enough for a multiplayer game to
+        reach its solo/waiting state without the smoke run failing merely for
+        opening the socket — anything more (ping, msg relay) is out of scope
+        for a single-client smoke test.
+
+        The stub deliberately does NOT send a close frame: an immediate close
+        pushes the injected VG_RT client into its reconnect-with-backoff loop
+        for the whole settle window, and each reopened socket is closed again,
+        multiplying any send-during-closing console errors and making the
+        result non-deterministic. A held-open socket also matches how the real
+        rt_hub.py behaves.
         """
         key = self.headers.get("Sec-WebSocket-Key")
         if not key:
@@ -171,8 +183,16 @@ class _SmokeHandler(BaseHTTPRequestHandler):
             self.wfile.write(_ws_text_frame(
                 json.dumps({"t": "roster", "members": [
                     {"id": "smoke", "nick": "", "ping_ms": None}]})))
-            self.wfile.write(_WS_CLOSE_FRAME)
             self.wfile.flush()
+            # Park the handler thread here, draining and discarding whatever
+            # the client frames back (its `join`, etc.). read() returns b"" at
+            # EOF when the browser closes the socket, and raises OSError if the
+            # server socket is torn down under it — either way the loop ends.
+            # The handler thread is daemonic (`_SmokeServer.daemon_threads`),
+            # so it can never delay `_serve_game()` teardown even if it is
+            # still parked when shutdown() runs.
+            while self.rfile.read(1):
+                pass
         except OSError:
             pass
 

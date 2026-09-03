@@ -108,7 +108,12 @@
       return api;
     },
     send: function (d) {
-      if (!api.connected || !ws) return false;
+      // `api.connected` / `ws` both lag the socket's real state — they only
+      // update from the async `close` event — so a socket already in CLOSING
+      // or CLOSED still passes those checks. `ws.send()` on such a socket does
+      // not throw; Blink logs it at error level, which fails the generation
+      // smoke test. Gate on the live readyState instead.
+      if (!api.connected || !ws || ws.readyState !== WebSocket.OPEN) return false;
       var payload;
       try {
         payload = JSON.stringify({ t: "msg", d: d });
@@ -133,7 +138,9 @@
   }
 
   function sendRaw(obj) {
-    if (!ws) return;
+    // Same reasoning as api.send(): suppress join/pong control frames once the
+    // socket has left OPEN so no write hits a CLOSING/CLOSED socket.
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
     try {
       ws.send(JSON.stringify(obj));
     } catch (e) {
