@@ -140,6 +140,17 @@
   let roster = [];
   let lastBallSend = 0;
 
+  // Which end of the table this client owns. Both clients must agree, or the
+  // ball ends up on the same side of BOTH screens — where neither player's own
+  // paddle is — and nobody can ever return it. Decided by comparing the two
+  // hub-assigned member ids, which every client sees identically.
+  let amLeft = true;
+  let peerId = null;
+  // Only the left player simulates scoring and serving and broadcasts the ball;
+  // the right player follows it. Two independent simulations sharing one set of
+  // coordinates cannot stay agreed.
+  function authoritative() { return amLeft; }
+
   // ---- Deterministic RNG (identical sequence on both clients) ----
   function mulberry32(seed) {
     let s = seed >>> 0;
@@ -177,21 +188,41 @@
   }
 
   // ---- Game logic ----
-  function update() {
-    // Paddle movement (local = left)
+  // `dt` is elapsed time expressed in 60fps frames, so 1.0 is one frame at
+  // 60Hz. Every speed below stays in per-frame units and is scaled by it.
+  // Integrating once per animation frame instead ties the simulation to frame
+  // delivery: a browser throttles rAF in a window that is not focused, and a
+  // game that ignores that runs in slow motion there while the peer's updates
+  // keep arriving at full rate — which reads as a ball that crawls and then
+  // lurches.
+  function update(dt) {
+    // Paddle movement
     let move = 0;
     if (keys['w'] || keys['arrowup']) move -= 1;
     if (keys['s'] || keys['arrowdown']) move += 1;
-    myPaddleY += move * PADDLE_SPEED;
+    myPaddleY += move * PADDLE_SPEED * dt;
     if (myPaddleY < 0) myPaddleY = 0;
     if (myPaddleY > H - PADDLE_H) myPaddleY = H - PADDLE_H;
 
     if (gameState !== 'playing') return;
     if (ballVX === 0 && ballVY === 0) return;
 
+    // Sub-step the ball so a long frame cannot carry it straight through a
+    // paddle without ever testing a position inside it.
+    let remaining = dt;
+    while (remaining > 0.0001) {
+      const step = Math.min(remaining, 1);
+      remaining -= step;
+      if (!stepBall(step)) return;
+    }
+  }
+
+  // One integration step. Returns false if the round ended inside it, so the
+  // caller stops sub-stepping a ball that is no longer in play.
+  function stepBall(dt) {
     // Move ball
-    ballX += ballVX;
-    ballY += ballVY;
+    ballX += ballVX * dt;
+    ballY += ballVY * dt;
 
     // Top/bottom walls
     if (ballY < 0) {
@@ -202,53 +233,66 @@
       ballVY = -Math.abs(ballVY);
     }
 
-    // Left paddle (local)
+    // Paddles by table side. Whichever of the two is mine depends on my role;
+    // the ball's coordinates are shared, so the sides must be too.
+    const leftY = amLeft ? myPaddleY : peerPaddleY;
+    const rightY = amLeft ? peerPaddleY : myPaddleY;
+
     const lpx = 30;
     if (ballVX < 0 &&
         ballX <= lpx + PADDLE_W &&
         ballX + BALL_SIZE >= lpx &&
-        ballY + BALL_SIZE >= myPaddleY &&
-        ballY <= myPaddleY + PADDLE_H) {
+        ballY + BALL_SIZE >= leftY &&
+        ballY <= leftY + PADDLE_H) {
       ballX = lpx + PADDLE_W;
-      reflectFromPaddle(myPaddleY, +1);
+      reflectFromPaddle(leftY, +1);
     }
 
-    // Right paddle (peer — y comes from network)
     const rpx = W - 30 - PADDLE_W;
     if (ballVX > 0 &&
         ballX + BALL_SIZE >= rpx &&
         ballX <= rpx + PADDLE_W &&
-        ballY + BALL_SIZE >= peerPaddleY &&
-        ballY <= peerPaddleY + PADDLE_H) {
+        ballY + BALL_SIZE >= rightY &&
+        ballY <= rightY + PADDLE_H) {
       ballX = rpx - BALL_SIZE;
-      reflectFromPaddle(peerPaddleY, -1);
+      reflectFromPaddle(rightY, -1);
     }
 
-    // Scoring
-    if (ballX + BALL_SIZE < 0) {
-      peerScore++;
-      if (peerScore >= WIN_SCORE) {
-        gameState = 'over';
-        winner = 1;
-        ballX = W / 2 - BALL_SIZE / 2;
-        ballY = H / 2 - BALL_SIZE / 2;
-        ballVX = 0; ballVY = 0;
-        showOverlay('PEER WINS', 'Press R to play again', true);
-      } else {
-        serveBall(-1); // toward left
-      }
-    } else if (ballX > W) {
-      myScore++;
-      if (myScore >= WIN_SCORE) {
-        gameState = 'over';
-        winner = 0;
-        ballX = W / 2 - BALL_SIZE / 2;
-        ballY = H / 2 - BALL_SIZE / 2;
-        ballVX = 0; ballVY = 0;
-        showOverlay('YOU WIN', 'Press R to play again', false);
-      } else {
-        serveBall(+1); // toward right
-      }
+    // Scoring. Only the authority decides a point: the follower would
+    // otherwise count the same point again from its own simulation, and the
+    // two scores would drift apart within a rally.
+    if (!authoritative()) {
+      // Hold the ball at the edge until the next authoritative snapshot
+      // rather than letting it run off and re-serve itself.
+      if (ballX + BALL_SIZE < 0 || ballX > W) { ballVX = 0; ballVY = 0; return false; }
+      return true;
+    }
+
+    if (ballX + BALL_SIZE < 0) {          // past the LEFT paddle
+      awardPoint(false);
+      return false;
+    } else if (ballX > W) {               // past the RIGHT paddle
+      awardPoint(true);
+      return false;
+    }
+    return true;
+  }
+
+  // `leftScored` is in table terms; who that is depends on my role.
+  function awardPoint(leftScored) {
+    const mine = (leftScored === amLeft);
+    if (mine) myScore++; else peerScore++;
+    const winning = mine ? myScore : peerScore;
+    if (winning >= WIN_SCORE) {
+      gameState = 'over';
+      winner = mine ? 0 : 1;
+      ballX = W / 2 - BALL_SIZE / 2;
+      ballY = H / 2 - BALL_SIZE / 2;
+      ballVX = 0; ballVY = 0;
+      showOverlay(mine ? 'YOU WIN' : 'PEER WINS', 'Press R to play again', !mine);
+    } else {
+      // Serve toward the side that was just scored on.
+      serveBall(leftScored ? +1 : -1);
     }
   }
 
@@ -293,26 +337,30 @@
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
 
-    ctx.fillStyle = myScore >= WIN_SCORE ? '#00ffaa' : 'rgba(0, 255, 170, 0.35)';
-    ctx.shadowColor = '#00ffaa';
-    ctx.shadowBlur = myScore >= WIN_SCORE ? 20 : 0;
-    ctx.fillText(String(myScore), W / 2 - 100, 30);
-    ctx.shadowBlur = 0;
-
-    ctx.fillStyle = peerScore >= WIN_SCORE ? '#ff66cc' : 'rgba(255, 102, 204, 0.35)';
-    ctx.shadowColor = '#ff66cc';
-    ctx.shadowBlur = peerScore >= WIN_SCORE ? 20 : 0;
-    ctx.fillText(String(peerScore), W / 2 + 100, 30);
-    ctx.shadowBlur = 0;
+    // Scores and paddles sit on their owner's side of the table, so both
+    // players see the same field and each sees their own paddle where the
+    // ball actually comes to them.
+    drawScore(amLeft ? myScore : peerScore, W / 2 - 100, amLeft);
+    drawScore(amLeft ? peerScore : myScore, W / 2 + 100, !amLeft);
 
     // Paddles
-    drawPaddle(30, myPaddleY, '#00ffaa');
-    drawPaddle(W - 30 - PADDLE_W, peerPaddleY, '#ff66cc');
+    drawPaddle(amLeft ? 30 : W - 30 - PADDLE_W, myPaddleY, '#00ffaa');
+    drawPaddle(amLeft ? W - 30 - PADDLE_W : 30, peerPaddleY, '#ff66cc');
 
     // Ball (hidden during waiting state)
     if (gameState !== 'waiting') {
       drawBall();
     }
+  }
+
+  function drawScore(value, x, isMine) {
+    const color = isMine ? '#00ffaa' : '#ff66cc';
+    const dim = isMine ? 'rgba(0, 255, 170, 0.35)' : 'rgba(255, 102, 204, 0.35)';
+    ctx.fillStyle = value >= WIN_SCORE ? color : dim;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = value >= WIN_SCORE ? 20 : 0;
+    ctx.fillText(String(value), x, 30);
+    ctx.shadowBlur = 0;
   }
 
   function drawPaddle(x, y, color) {
@@ -373,7 +421,7 @@
       resetAll();
       if (roster.length >= 2) {
         gameState = 'playing';
-        serveBall(1);
+        if (authoritative()) serveBall(1);
         hideOverlay();
       } else {
         showOverlay('WAITING', 'Waiting for player 2…', false);
@@ -390,26 +438,43 @@
       if (typeof d.y === 'number') {
         peerPaddleY = Math.max(0, Math.min(H - PADDLE_H, d.y));
       }
-      if (d.ball && typeof d.ball.x === 'number' && typeof d.ball.vx === 'number') {
-        // Only snap if received ball is plausibly in play (avoid overriding
-        // a freshly-served ball with a still-in-flight off-screen ball)
-        if (d.ball.x > -50 && d.ball.x < W + 50) {
-          ballX = d.ball.x;
-          ballY = d.ball.y;
-          ballVX = d.ball.vx;
-          ballVY = d.ball.vy;
-          ballSpeed = Math.hypot(ballVX, ballVY) || INITIAL_BALL_SPEED;
+      // Ignore a ball update if I am the one who owns the ball — otherwise
+      // both clients overwrite each other and the ball belongs to neither.
+      if (!authoritative() && d.ball &&
+          typeof d.ball.x === 'number' && typeof d.ball.vx === 'number') {
+        ballX = d.ball.x;
+        ballY = d.ball.y;
+        ballVX = d.ball.vx;
+        ballVY = d.ball.vy;
+        ballSpeed = Math.hypot(ballVX, ballVY) || INITIAL_BALL_SPEED;
+        if (Array.isArray(d.sc) && d.sc.length === 2) {
+          // Sent as [left, right]; I am the right player here.
+          myScore = d.sc[1];
+          peerScore = d.sc[0];
+        }
+        if (d.over && gameState === 'playing') {
+          gameState = 'over';
+          const iWon = myScore >= WIN_SCORE;
+          winner = iWon ? 0 : 1;
+          showOverlay(iWon ? 'YOU WIN' : 'PEER WINS',
+                      'Press R to play again', !iWon);
         }
       }
     });
     VG_RT.on('roster', members => {
       roster = members || [];
+      // Lowest member id takes the left end. Both clients receive the same
+      // roster, so both reach the same answer without any negotiation.
+      const me = VG_RT.me;
+      const others = roster.map(m => m.id).filter(id => id !== me).sort();
+      peerId = others[0] || null;
+      amLeft = !peerId || (me != null && me < peerId);
       updateHUD();
       const enough = roster.length >= 2;
       if (enough && gameState === 'waiting') {
         resetAll();
         gameState = 'playing';
-        serveBall(1);
+        if (authoritative()) serveBall(1);
         hideOverlay();
       } else if (!enough && gameState === 'playing') {
         gameState = 'waiting';
@@ -424,8 +489,14 @@
   showOverlay('WAITING', 'Waiting for player 2…', false);
 
   // ---- Main loop ----
+  let lastFrame = 0;
   function loop(now) {
-    update();
+    // Clamped: after a long stall (a backgrounded tab, a GC pause) the honest
+    // dt would teleport the ball across the field. Better to lose a little
+    // time than to jump.
+    const dt = lastFrame ? Math.min((now - lastFrame) / (1000 / 60), 5) : 1;
+    lastFrame = now;
+    update(dt);
     render();
 
     // Network: paddle Y every frame; ball state 10x/sec.
@@ -438,8 +509,14 @@
     // working against an older cached rt.js that predates sendState.)
     if (window.VG_RT && VG_RT.send) {
       (VG_RT.sendState || VG_RT.send).call(VG_RT, { y: myPaddleY });
-      if (now - lastBallSend >= BALL_SEND_MS) {
-        VG_RT.send({ ball: { x: ballX, y: ballY, vx: ballVX, vy: ballVY } });
+      if (authoritative() && now - lastBallSend >= BALL_SEND_MS) {
+        // Scores ride along with the ball, as left/right rather than
+        // me/peer, so the follower never has to score for itself.
+        VG_RT.send({
+          ball: { x: ballX, y: ballY, vx: ballVX, vy: ballVY },
+          sc: [myScore, peerScore],
+          over: gameState === 'over'
+        });
         lastBallSend = now;
       }
     }
