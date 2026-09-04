@@ -121,12 +121,33 @@ def test_csp_allows_the_vendor_rt_prefix_for_the_realtime_client(isolated_db, ga
     assert "http://localhost/vendor/rt/" in directives["script-src"]
 
 
-def test_vendor_rt_route_serves_with_cors_and_immutable_cache(isolated_db, games_dir):
+def test_vendor_rt_route_serves_with_cors_and_revalidating_cache(isolated_db, games_dir):
+    """rt.js is served from a fixed, unversioned path, so it must revalidate.
+
+    Its tag is baked into each game's HTML at generation time, so the URL can
+    never carry a version — which makes an immutable cache the same thing as
+    "a fix to the realtime client can never reach an existing player".
+    """
     client = make_client(games_dir)
     resp = client.get("/vendor/rt/rt.js")
     assert resp.status_code == 200
     assert resp.headers["Access-Control-Allow-Origin"] == "*"
-    assert "immutable" in resp.headers["Cache-Control"]
+    cache = resp.headers["Cache-Control"]
+    assert "immutable" not in cache
+    max_age = re.search(r"max-age=(\d+)", cache)
+    assert max_age is not None, cache
+    assert int(max_age.group(1)) <= 300, cache
+
+
+def test_versioned_vendor_assets_keep_immutable_cache(isolated_db, games_dir):
+    """The counterpart: dropping `immutable` is scoped to the unversioned rt
+    path and must not have leaked to the version-bearing three.js tree."""
+    client = make_client(games_dir)
+    version = engines.DEFAULT_THREE_VERSION
+    cache = client.get(
+        f"/vendor/three/{version}/three.module.min.js").headers["Cache-Control"]
+    assert "immutable" in cache
+    assert "max-age=31536000" in cache
 
 
 def test_vendor_rt_route_rejects_path_traversal(isolated_db, games_dir):

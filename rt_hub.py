@@ -31,7 +31,10 @@ served-game sandbox. See openspec/changes/add-multiplayer-games/design.md.
 
 The process-stability limits (max frame size, message rate, connections per
 IP, strict JSON parse with no raw-error reflection) are framed as keeping
-this process up under untrusted frames, not as anti-abuse.
+this process up under untrusted frames, not as anti-abuse. The message-rate
+limit is graduated for that reason: over ``max_msg_per_sec`` the excess relay
+frame is discarded and the socket stays open, and only ``max_msg_burst_per_sec``
+— a rate that could actually threaten this process — closes the connection.
 """
 
 import argparse
@@ -71,7 +74,8 @@ DEFAULTS = {
     "port": 8620,
     "games_dir": "games",
     "max_frame_bytes": 16384,
-    "max_msg_per_sec": 40,
+    "max_msg_per_sec": 60,
+    "max_msg_burst_per_sec": 240,
     "max_conns_per_ip": 16,
     "ping_interval_s": 5,
     "dead_after_s": 15,
@@ -176,7 +180,8 @@ class MetaResolver:
 class Member:
     __slots__ = (
         "id", "ws", "ip", "room", "nick", "ping_ms", "last_seen", "ping_seq",
-        "pending_ping", "_msg_times", "closing",
+        "pending_ping", "_msg_times", "_relay_times", "closing", "discarded",
+        "_last_throttle_log",
     )
 
     def __init__(self, member_id: str, ws, ip: str, now: float):
@@ -189,8 +194,20 @@ class Member:
         self.last_seen = now
         self.ping_seq = 0
         self.pending_ping: dict[int, float] = {}
+        # Two rolling one-second windows. `_msg_times` holds EVERY inbound
+        # frame and is what the hard burst ceiling is measured against.
+        # `_relay_times` holds only the frames actually admitted, and is what
+        # the soft budget is measured against — so a client steadily over
+        # budget keeps getting its budget's worth through, instead of the
+        # window staying saturated and shedding everything.
         self._msg_times: deque[float] = deque()
+        self._relay_times: deque[float] = deque()
         self.closing = False
+        # Throttle bookkeeping: a running count of relay frames shed for being
+        # over the soft budget, and when that was last reported. Never holds
+        # any part of a payload.
+        self.discarded = 0
+        self._last_throttle_log = 0.0
 
 
 class Room:
@@ -332,10 +349,24 @@ class Hub:
         member._msg_times.append(now)
         while member._msg_times and member._msg_times[0] <= now - 1.0:
             member._msg_times.popleft()
-        if len(member._msg_times) > self.cfg["max_msg_per_sec"]:
+        # Graduated, not fatal. A game syncing player state once per animation
+        # frame is the ordinary case, not an attack: over the soft budget the
+        # excess *relay* frame is shed and the socket stays open, and only a
+        # rate that could actually threaten this process — the hard burst
+        # ceiling — still closes it. Every frame type counts toward both
+        # windows; only `msg` frames are ever the ones shed (see below).
+        if len(member._msg_times) > self.cfg["max_msg_burst_per_sec"]:
             member.closing = True
             await member.ws.close(CLOSE_RATE_LIMIT, "rate limit")
             return
+
+        while member._relay_times and member._relay_times[0] <= now - 1.0:
+            member._relay_times.popleft()
+        # Measured against what was *admitted*, not against what arrived: a
+        # client held at 70/sec against a budget of 60 must get 60 through and
+        # shed 10, which is only true if a shed frame does not itself keep the
+        # budget full for the next one.
+        over_budget = len(member._relay_times) >= self.cfg["max_msg_per_sec"]
 
         try:
             frame = json.loads(raw)
@@ -349,11 +380,19 @@ class Hub:
             return
         t = frame.get("t")
         if t == "join":
+            # Control frames are processed whatever the rate — `pong` is what
+            # refreshes liveness, so shedding one would get an over-budget
+            # client dropped by ping_round instead, which is this policy's
+            # whole purpose defeated on a slower period. They do consume the
+            # soft budget, though: exempt from discarding is not exempt from
+            # counting.
+            member._relay_times.append(now)
             nick = frame.get("nick")
             member.nick = nick if isinstance(nick, str) else ""
             member.last_seen = now
             await self._broadcast_roster(room)
         elif t == "pong":
+            member._relay_times.append(now)
             sent = member.pending_ping.pop(frame.get("seq"), None)
             member.last_seen = now
             if sent is not None:
@@ -362,6 +401,13 @@ class Hub:
             if "d" not in frame:
                 return
             member.last_seen = now
+            if over_budget:
+                # Shed the frame, keep the socket. Continuous state is
+                # latest-wins, so a superseded update costs the game nothing
+                # it can observe; a close would cost it the session.
+                self._note_throttled(member, now)
+                return
+            member._relay_times.append(now)
             out = json.dumps(
                 {"t": "msg", "from": member.id, "d": frame["d"]},
                 separators=(",", ":"),
@@ -371,6 +417,26 @@ class Hub:
                     await self._send_text(other, out)
         # Anything else — including a frame trying to change max_players — is
         # ignored outright.
+
+    # Report at most one throttle record per member per this many seconds, far
+    # below one per discarded frame: a member steadily over budget sheds tens
+    # of frames a second and must not turn the hub's own log into the flood.
+    THROTTLE_LOG_INTERVAL_S = 10.0
+
+    def _note_throttled(self, member: Member, now: float) -> None:
+        """Count a shed relay frame and, at a bounded frequency, record that
+        this member is being throttled. Records the game id and a count only —
+        never any part of a payload, preserving "no game data to logs"."""
+        member.discarded += 1
+        if now - member._last_throttle_log < self.THROTTLE_LOG_INTERVAL_S:
+            return
+        member._last_throttle_log = now
+        room = member.room
+        _log.info(
+            "throttle game=%s discarded=%d",
+            room.game_id if room is not None else "?",
+            member.discarded,
+        )
 
     # -- periodic --------------------------------------------------------
 

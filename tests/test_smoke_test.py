@@ -202,3 +202,67 @@ def test_three_js_game_loads_and_renders(tmp_path):
     passed, detail = smoke_test.run_smoke_test(
         str(html), timeout_seconds=20, engine="three")
     assert passed, detail
+
+
+# --------------------------------------------------------------------------
+# fix-multiplayer-rate-limit-disconnects 4.2 — the WS stub's rate judgment.
+# Unit tests over the counting logic alone: no browser, no socket.
+# --------------------------------------------------------------------------
+
+def _times(rate, seconds, start=0.0):
+    """Frame arrival times for `rate` frames/sec sustained for `seconds`."""
+    n = int(rate * seconds)
+    return [start + i / rate for i in range(n)]
+
+
+def test_stub_thresholds_track_the_hub_defaults():
+    """The stub fails a game for the rate the hub would actually close it at."""
+    import rt_hub
+
+    assert smoke_test.HUB_SOFT_BUDGET == rt_hub.DEFAULTS["max_msg_per_sec"]
+    assert smoke_test.HUB_BURST_CEILING == rt_hub.DEFAULTS["max_msg_burst_per_sec"]
+
+
+def test_flooding_rate_fails_and_names_the_rate_and_the_budget():
+    detail = smoke_test._rate_failure(_times(400, 5))
+    assert detail is not None
+    assert "400 messages/sec" in detail
+    assert str(smoke_test.HUB_BURST_CEILING) in detail
+    assert str(smoke_test.HUB_SOFT_BUDGET) in detail
+    # The retry needs to be told what to do instead, not just what was wrong.
+    assert "sendState" in detail
+
+
+def test_rate_between_the_soft_budget_and_the_ceiling_passes():
+    """Above the soft budget is merely lossy; a lossy game is still playable."""
+    for rate in (70, 120, 239):
+        assert smoke_test._rate_failure(_times(rate, 5)) is None, rate
+
+
+def test_in_budget_rate_passes():
+    assert smoke_test._rate_failure(_times(20, 5)) is None
+    assert smoke_test._rate_failure(_times(60, 5)) is None
+
+
+def test_a_game_that_sends_nothing_passes():
+    assert smoke_test._rate_failure([]) is None
+    assert smoke_test._rate_failure([1.0]) is None
+
+
+def test_a_run_too_short_to_be_sustained_passes():
+    # A hard burst inside half a second is not a sustained rate.
+    assert smoke_test._rate_failure(_times(1000, 0.5)) is None
+
+
+def test_a_momentary_burst_inside_a_quiet_run_passes():
+    """The hub sheds a brief burst; only a held rate closes the socket."""
+    times = _times(1000, 0.2) + _times(5, 8, start=5.0)
+    assert smoke_test._rate_failure(times) is None
+
+
+def test_sustained_rate_measures_the_worst_window_not_the_average():
+    # 10 seconds of silence then 4 seconds of flooding: the average is under
+    # the ceiling, the sustained rate is not.
+    times = _times(400, 4, start=10.0)
+    assert smoke_test._sustained_rate(times) > smoke_test.HUB_BURST_CEILING
+    assert smoke_test._rate_failure([0.0] + times) is not None

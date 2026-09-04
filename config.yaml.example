@@ -225,7 +225,14 @@ rt_hub:
   port: 8620
   games_dir: "games"         # same tree app.py serves; read-only, for meta.json capacity lookups
   max_frame_bytes: 16384     # a single WS frame larger than this is dropped without a full parse
-  max_msg_per_sec: 40        # per-connection message rate; a client over it is disconnected
+  # Per-connection message rate, over a rolling one second window, in two
+  # tiers. The soft budget is NOT fatal: a client over it stays connected and
+  # only its excess relay (game payload) frames are discarded — `join`/`pong`
+  # control frames are always processed. 60 leaves a game syncing state once
+  # per animation frame at 60fps inside the budget. Only the hard burst
+  # ceiling — a rate that could actually threaten this process — disconnects.
+  max_msg_per_sec: 60        # soft budget: over this, excess relay frames are dropped
+  max_msg_burst_per_sec: 240 # hard ceiling: over this, the connection is closed
   max_conns_per_ip: 16       # concurrent connections from one client IP
   ping_interval_s: 5         # how often the hub sends each member a ping frame to measure RTT
   dead_after_s: 15           # a member that stops echoing pings past this is dropped

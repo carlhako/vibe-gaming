@@ -39,6 +39,7 @@ import hashlib
 import json
 import mimetypes
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -71,6 +72,101 @@ def _ws_text_frame(payload: str) -> bytes:
 # (it holds the socket open, mirroring rt_hub.py) — kept for tests that
 # reconstruct the pre-fix "server closes immediately" failure mode.
 _WS_CLOSE_FRAME = bytes([0x88, 0x00])
+
+# Mirrors of rt_hub.DEFAULTS' two message-rate tiers. Duplicated rather than
+# imported because importing rt_hub calls logging.basicConfig at module scope,
+# which would reconfigure the root logger of whatever process runs a smoke
+# test. tests/test_smoke_test.py asserts the two stay in step.
+HUB_SOFT_BUDGET = 60
+HUB_BURST_CEILING = 240
+
+# A rate only counts as "sustained" if the game held it for this long. A game
+# is not failed for a momentary burst — the hub would merely shed those frames.
+SUSTAIN_WINDOW_S = 2.0
+
+# The stub never keeps a frame's bytes; this only bounds what it will read
+# before giving up on a frame header it cannot trust.
+_MAX_STUB_FRAME_BYTES = 1 << 20
+
+
+def _ws_read_frame(rfile):
+    """Read one client->server frame header and skip its payload.
+
+    Returns its opcode, or None at EOF / on a frame this stub will not read.
+    The payload is read and discarded, never inspected — the stub counts
+    frames, exactly as the real hub relays them, without looking inside.
+    """
+    header = rfile.read(2)
+    if len(header) < 2:
+        return None
+    opcode = header[0] & 0x0F
+    masked = bool(header[1] & 0x80)
+    length = header[1] & 0x7F
+    if length == 126:
+        ext = rfile.read(2)
+        if len(ext) < 2:
+            return None
+        length = int.from_bytes(ext, "big")
+    elif length == 127:
+        ext = rfile.read(8)
+        if len(ext) < 8:
+            return None
+        length = int.from_bytes(ext, "big")
+    if masked and len(rfile.read(4)) < 4:
+        return None
+    if length > _MAX_STUB_FRAME_BYTES:
+        return None
+    if length and len(rfile.read(length)) < length:
+        return None
+    return opcode
+
+
+def _sustained_rate(times, window_s: float = SUSTAIN_WINDOW_S) -> float | None:
+    """The highest per-second rate held for a full `window_s`, or None when the
+    run is too short for any rate to count as sustained.
+
+    Split out from the stub so the judgment itself is unit-testable without a
+    browser or a socket.
+    """
+    times = sorted(times)
+    if len(times) < 2 or times[-1] - times[0] < window_s:
+        return None
+    best = 0.0
+    j = 0
+    for i, start in enumerate(times):
+        end = start + window_s
+        if end > times[-1]:
+            break
+        if j < i:
+            j = i
+        while j < len(times) and times[j] <= end:
+            j += 1
+        best = max(best, (j - i) / window_s)
+    return best
+
+
+def _rate_failure(times, soft: int = HUB_SOFT_BUDGET,
+                  hard: int = HUB_BURST_CEILING,
+                  window_s: float = SUSTAIN_WINDOW_S) -> str | None:
+    """The failure detail for a game that floods, or None.
+
+    The threshold is the hub's *hard* ceiling, not its soft budget: over the
+    soft budget the hub merely sheds frames and the game stays playable, and
+    failing generation for lossiness would reject playable games. Over the hard
+    ceiling the hub closes the socket, which is a broken game.
+    """
+    rate = _sustained_rate(times, window_s)
+    if rate is None or rate <= hard:
+        return None
+    return (
+        f"multiplayer send rate too high: {rate:.0f} messages/sec sustained over "
+        f"{window_s:g}s, above the relay's hard ceiling of {hard}/sec (it closes "
+        f"the connection above that, and sheds messages above {soft}/sec). Do not "
+        "call VG_RT.send() every animation frame — use VG_RT.sendState(value) for "
+        "continuously changing state, which coalesces to a safe rate, and keep "
+        "VG_RT.send() for occasional discrete events."
+    )
+
 
 # Settle window after the synthetic interaction below. A 3D game has to fetch
 # ~750KB of three.js and compile shaders on a software GPU before it draws
@@ -184,15 +280,23 @@ class _SmokeHandler(BaseHTTPRequestHandler):
                 json.dumps({"t": "roster", "members": [
                     {"id": "smoke", "nick": "", "ping_ms": None}]})))
             self.wfile.flush()
-            # Park the handler thread here, draining and discarding whatever
-            # the client frames back (its `join`, etc.). read() returns b"" at
-            # EOF when the browser closes the socket, and raises OSError if the
+            # Park the handler thread here, reading and discarding whatever
+            # the client frames back (its `join`, etc.) — but timestamping each
+            # data frame, so a game that floods the relay fails during
+            # generation rather than in the arcade. Only the arrival time is
+            # kept; the payload is skipped unread, as the real hub never
+            # inspects one either. _ws_read_frame returns None at EOF when the
+            # browser closes the socket, and read() raises OSError if the
             # server socket is torn down under it — either way the loop ends.
             # The handler thread is daemonic (`_SmokeServer.daemon_threads`),
             # so it can never delay `_serve_game()` teardown even if it is
             # still parked when shutdown() runs.
-            while self.rfile.read(1):
-                pass
+            while True:
+                opcode = _ws_read_frame(self.rfile)
+                if opcode is None or opcode == 0x8:   # EOF or client close
+                    break
+                if opcode in (0x1, 0x2):              # text / binary
+                    self.server.ws_frame_times.append(time.monotonic())
         except OSError:
             pass
 
@@ -223,15 +327,20 @@ class _SmokeServer(ThreadingHTTPServer):
 
 @contextlib.contextmanager
 def _serve_game(html_path: Path):
-    """Serve `html_path` at / on an ephemeral 127.0.0.1 port. Yields the origin."""
+    """Serve `html_path` at / on an ephemeral 127.0.0.1 port.
+
+    Yields `(origin, server)`; `server.ws_frame_times` accumulates the arrival
+    time of every frame the game sent over the WebSocket stub.
+    """
     server = _SmokeServer(("127.0.0.1", 0), _SmokeHandler)
     origin = f"http://127.0.0.1:{server.server_address[1]}"
     server.game_path = html_path
     server.csp = safety.game_csp(origin)
+    server.ws_frame_times = []
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield origin
+        yield origin, server
     finally:
         server.shutdown()
         server.server_close()
@@ -254,7 +363,7 @@ def run_smoke_test(html_path, timeout_seconds: int = 20,
     settle_ms = _SETTLE_MS_3D if engine else _SETTLE_MS
 
     try:
-        with _serve_game(html_path) as origin:
+        with _serve_game(html_path) as (origin, server):
 
             def on_pageerror(exc):
                 errors.append(f"pageerror: {exc}")
@@ -295,6 +404,10 @@ def run_smoke_test(html_path, timeout_seconds: int = 20,
                     page.wait_for_timeout(settle_ms)
                 finally:
                     browser.close()
+            # After the browser is gone, so the frame list is no longer growing.
+            rate_detail = _rate_failure(list(server.ws_frame_times))
+            if rate_detail:
+                errors.append(rate_detail)
     except PlaywrightError as exc:
         return False, f"smoke test failed to load page: {exc}"
     except Exception as exc:

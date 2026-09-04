@@ -8,6 +8,7 @@ threading, and the generation prompt contract.
 
 import copy
 import json
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -133,6 +134,19 @@ def test_prompt_contract_present_only_when_multiplayer_requested():
     assert "## Multiplayer" not in solo
 
 
+def test_prompt_states_the_send_rate_budget():
+    """Without this rule the model has no reason not to call VG_RT.send() once
+    per animation frame — the idiom that produced the disconnect loop."""
+    solo = gg._build_system_prompt(None, max_players=None)
+    multi = gg._build_system_prompt(None, max_players=2)
+    for clause in ("sendState", "message-rate budget", "INCORRECT",
+                   "every animation frame", "sendBudget"):
+        assert clause in multi, clause
+    # Unchanged for a single-player game.
+    for clause in ("sendState", "message-rate budget", "sendBudget"):
+        assert clause not in solo, clause
+
+
 # --------------------------------------------------------------------------
 # 3.3 + 4.4  pipeline: exactly one client tag, block written to meta.json
 # --------------------------------------------------------------------------
@@ -245,3 +259,31 @@ def test_enhance_fork_inherits_multiplayer_block(isolated_db, games_dir, monkeyp
     served = (games_dir / fork_slug / "index.html").read_text(encoding="utf-8")
     assert served.count("/vendor/rt/rt.js") == 1
     assert f'data-game-id="{result["game_id"]}"' in served
+
+
+# --------------------------------------------------------------------------
+# fix-multiplayer-rate-limit-disconnects 2.7 — the injected client's own caps
+# must stay inside what the hub will actually relay. Read out of the rt.js
+# source so this needs no browser; the behavior they produce is covered in
+# tests/test_rt_client.py.
+# --------------------------------------------------------------------------
+
+def _rt_js_const(name):
+    import re
+    src = (Path(__file__).resolve().parent.parent / "vendor" / "rt" / "rt.js").read_text(
+        encoding="utf-8")
+    m = re.search(rf"^\s*var {name} = (\d+);", src, re.MULTILINE)
+    assert m, f"{name} not found in rt.js"
+    return int(m.group(1))
+
+
+def test_client_defaults_do_not_exceed_hub_defaults():
+    import rt_hub
+
+    assert _rt_js_const("MAX_FRAME_BYTES") == rt_hub.DEFAULTS["max_frame_bytes"]
+    # A game using the whole of both client budgets must still sit inside the
+    # hub's soft budget, or every well-behaved game would be shedding frames
+    # at the hub anyway.
+    total = _rt_js_const("STATE_HZ") + _rt_js_const("SEND_BUDGET_PER_SEC")
+    assert total <= rt_hub.DEFAULTS["max_msg_per_sec"], total
+    assert total < rt_hub.DEFAULTS["max_msg_burst_per_sec"]

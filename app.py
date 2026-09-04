@@ -764,14 +764,23 @@ def create_app(games_dir=None) -> Flask:
     def vendor_rt(filename):
         """The platform-injected realtime client (VG_RT) for multiplayer games.
 
-        Same contract as /vendor/three/ above: a sandboxed game sends
+        Same CORS contract as /vendor/three/ above: a sandboxed game sends
         `Origin: null`, so the file has to answer `Access-Control-Allow-Origin:
-        *`, and it's immutable bytes so it caches for a year. send_from_directory
-        rejects any path that escapes the directory with a 404.
+        *`. send_from_directory rejects any path that escapes the directory
+        with a 404.
+
+        The caching policy, however, is deliberately NOT /vendor/three/'s.
+        That route's year-long immutable cache is correct because the version
+        is in its path, so its bytes genuinely never change. This path is
+        fixed and unversioned — the tag is written into each game's HTML at
+        generation time and rewritten only when that game is regenerated — so
+        an immutable cache would make any correction to the client
+        undeliverable to every browser that has already played a multiplayer
+        game. It revalidates instead; the file is a few KB.
         """
         response = send_from_directory(engines.VENDOR_ROOT / "rt", filename)
         response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        response.headers["Cache-Control"] = "public, max-age=60, must-revalidate"
         return response
 
     @app.get("/games/<game_id>/download")

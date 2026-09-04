@@ -118,9 +118,38 @@ def test_config_example_rt_hub_block_parses():
     raw = yaml.safe_load((root / "config.yaml.example").read_text(encoding="utf-8"))
     block = raw["rt_hub"]
     for key in ("host", "port", "max_frame_bytes", "max_msg_per_sec",
-                "max_conns_per_ip", "ping_interval_s", "dead_after_s",
-                "idle_room_ttl_s"):
+                "max_msg_burst_per_sec", "max_conns_per_ip", "ping_interval_s",
+                "dead_after_s", "idle_room_ttl_s"):
         assert key in block, key
+    # Every key the example documents must be a real knob, or the comment is
+    # describing something the hub does not read.
+    for key in block:
+        assert key in rt_hub.DEFAULTS, key
+    assert block["max_msg_burst_per_sec"] > block["max_msg_per_sec"]
+
+
+def test_rate_defaults_leave_60fps_inside_the_soft_budget():
+    """One send per animation frame at 60fps is the ordinary idiom; it must sit
+    inside the soft budget rather than one frame outside it."""
+    assert rt_hub.DEFAULTS["max_msg_per_sec"] >= 60
+    assert (rt_hub.DEFAULTS["max_msg_burst_per_sec"]
+            > rt_hub.DEFAULTS["max_msg_per_sec"])
+
+
+def test_load_config_merges_both_rate_tiers(tmp_path):
+    (tmp_path / "config.yaml").write_text(
+        "rt_hub:\n  max_msg_per_sec: 99\n  max_msg_burst_per_sec: 500\n",
+        encoding="utf-8")
+    cfg = rt_hub.load_config(str(tmp_path / "config.yaml"))
+    assert cfg["max_msg_per_sec"] == 99
+    assert cfg["max_msg_burst_per_sec"] == 500
+
+
+def test_load_config_without_rt_hub_block_uses_new_rate_defaults(tmp_path):
+    (tmp_path / "config.yaml").write_text("game_web:\n  port: 1\n", encoding="utf-8")
+    cfg = rt_hub.load_config(str(tmp_path / "config.yaml"))
+    assert cfg["max_msg_per_sec"] == rt_hub.DEFAULTS["max_msg_per_sec"]
+    assert cfg["max_msg_burst_per_sec"] == rt_hub.DEFAULTS["max_msg_burst_per_sec"]
 
 
 def test_load_config_merges_over_defaults(tmp_path):
@@ -428,14 +457,195 @@ def test_oversized_frame_dropped_and_closed(tmp_path):
 
 
 def test_message_flood_disconnects_only_that_client(tmp_path):
+    """Only the hard burst ceiling is fatal; the soft budget above it is not.
+    Driven past `max_msg_burst_per_sec` rather than the old single fatal cap."""
     make_game(tmp_path, GID, multiplayer={"max_players": 3})
-    hub = make_hub(tmp_path, Clock(), max_msg_per_sec=5)
+    make_game(tmp_path, GID2, multiplayer={"max_players": 2})
+    hub = make_hub(tmp_path, Clock(), max_msg_per_sec=5, max_msg_burst_per_sec=20)
     a = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.1.0.1")))
     b = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.1.0.2")))
-    for _ in range(10):
+    other = run(hub.connect(FakeWS(path=f"/rt/{GID2}", ip="6.1.0.3")))
+    for _ in range(30):
         run(hub.on_message(b, json.dumps({"t": "msg", "d": 1})))
     assert b.ws.close_code == rt_hub.CLOSE_RATE_LIMIT
+    # Same room and a different room are both untouched.
     assert not a.ws.closed
+    assert a.id in hub.rooms[GID].members
+    assert not other.ws.closed
+    assert other.id in hub.rooms[GID2].members
+
+
+def _spam(hub, member, n, *, t="msg"):
+    frame = json.dumps({"t": t, "d": 1} if t == "msg" else {"t": t})
+    for _ in range(n):
+        run(hub.on_message(member, frame))
+
+
+def test_over_soft_budget_stays_connected_across_windows(tmp_path):
+    """A client held between the soft budget and the hard ceiling for several
+    rolling windows is throttled, never closed, and never leaves its room."""
+    make_game(tmp_path, GID, multiplayer={"max_players": 2})
+    clock = Clock()
+    hub = make_hub(tmp_path, clock, max_msg_per_sec=10, max_msg_burst_per_sec=100)
+    a = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.4.0.1")))
+    b = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.4.0.2")))
+    for _window in range(5):
+        # 30/sec: over the soft budget of 10, well under the ceiling of 100.
+        for _ in range(30):
+            _spam(hub, b, 1)
+            clock.advance(1.0 / 30.0)
+        assert not b.ws.closed
+        assert b.id in hub.rooms[GID].members
+        assert b.ws.close_code is None
+    assert b.discarded > 0
+    # And its roster entry is unchanged.
+    roster = a.ws.last("roster")
+    assert {m["id"] for m in roster["members"]} == {a.id, b.id}
+
+
+def test_at_exactly_the_soft_budget_nothing_is_shed(tmp_path):
+    make_game(tmp_path, GID, multiplayer={"max_players": 2})
+    clock = Clock()
+    hub = make_hub(tmp_path, clock, max_msg_per_sec=10, max_msg_burst_per_sec=100)
+    a = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.5.0.1")))
+    b = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.5.0.2")))
+    before = len([f for f in a.ws.frames() if f["t"] == "msg"])
+    for _window in range(4):
+        for _ in range(10):
+            _spam(hub, b, 1)
+            clock.advance(0.1)
+    relayed = len([f for f in a.ws.frames() if f["t"] == "msg"]) - before
+    assert relayed == 40
+    assert b.discarded == 0
+    assert not b.ws.closed
+
+
+def test_throttled_frames_are_not_relayed_but_in_budget_ones_are(tmp_path):
+    """Exact peer receipt counts: the shed frames reach nobody, and the same
+    client's under-budget frames still reach the peer."""
+    make_game(tmp_path, GID, multiplayer={"max_players": 2})
+    clock = Clock()
+    hub = make_hub(tmp_path, clock, max_msg_per_sec=5, max_msg_burst_per_sec=100)
+    a = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.6.0.1")))
+    b = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.6.0.2")))
+
+    def a_msgs():
+        return [f for f in a.ws.frames() if f["t"] == "msg"]
+
+    base = len(a_msgs())
+    _spam(hub, b, 12)                       # 5 relayed, 7 shed
+    assert len(a_msgs()) - base == 5
+    assert b.discarded == 7
+    # A fresh window: the same client is back under budget and relays again.
+    clock.advance(1.1)
+    _spam(hub, b, 3)
+    assert len(a_msgs()) - base == 8
+    assert b.discarded == 7
+    assert not b.ws.closed
+
+
+def test_over_budget_client_still_gets_its_budget_through(tmp_path):
+    """Only the EXCESS is shed, not everything.
+
+    Measured against arrivals rather than admissions, a rolling window stays
+    saturated once the rate passes the budget, so every subsequent frame reads
+    as over-budget and ~nothing is relayed. A client at 70/sec against a
+    60/sec budget must get ~60/sec through and shed ~10/sec.
+    """
+    make_game(tmp_path, GID, multiplayer={"max_players": 2})
+    clock = Clock()
+    hub = make_hub(tmp_path, clock, max_msg_per_sec=60, max_msg_burst_per_sec=240)
+    a = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.11.0.1")))
+    b = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.11.0.2")))
+    base = len([f for f in a.ws.frames() if f["t"] == "msg"])
+
+    for _ in range(700):                      # 10 seconds at 70/sec
+        _spam(hub, b, 1)
+        clock.advance(1.0 / 70.0)
+
+    relayed = len([f for f in a.ws.frames() if f["t"] == "msg"]) - base
+    assert relayed + b.discarded == 700
+    assert 570 <= relayed <= 610, relayed     # ~60/sec got through
+    assert 90 <= b.discarded <= 130, b.discarded
+
+
+def test_control_frames_survive_throttling_and_keep_member_alive(tmp_path):
+    """`pong` is what refreshes liveness. If throttling shed it, an over-budget
+    client would be dropped by the liveness check instead — the same disconnect
+    loop on a slower period."""
+    make_game(tmp_path, GID, multiplayer={"max_players": 2})
+    clock = Clock()
+    hub = make_hub(tmp_path, clock, max_msg_per_sec=5, max_msg_burst_per_sec=1000,
+                   dead_after_s=15)
+    a = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.7.0.1")))
+    b = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.7.0.2")))
+
+    # Four ping rounds 5s apart — 20s in total, well past dead_after_s — with
+    # b over the soft budget in every one of them.
+    for _round in range(4):
+        run(hub.ping_round())
+        seq_a = a.ws.last("ping")["seq"]
+        seq_b = b.ws.last("ping")["seq"]
+        clock.advance(0.02)
+        _spam(hub, b, 20)                    # flood past the soft budget
+        run(hub.on_message(a, json.dumps({"t": "pong", "seq": seq_a})))
+        run(hub.on_message(b, json.dumps({"t": "pong", "seq": seq_b})))
+        assert b.last_seen == clock.t        # the pong was processed, not shed
+        assert b.ping_ms == 20
+        clock.advance(5.0)
+
+    run(hub.ping_round())
+    assert not b.ws.closed
+    assert b.id in hub.rooms[GID].members
+    assert b.discarded > 0
+    assert not a.ws.closed
+
+
+def test_nickname_change_survives_throttling(tmp_path):
+    make_game(tmp_path, GID, multiplayer={"max_players": 2})
+    hub = make_hub(tmp_path, Clock(), max_msg_per_sec=3, max_msg_burst_per_sec=1000)
+    a = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.8.0.1")))
+    b = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.8.0.2")))
+    _spam(hub, b, 10)                        # push well over the soft budget
+    run(hub.on_message(b, json.dumps({"t": "join", "nick": "zed"})))
+    assert b.nick == "zed"
+    entry = [m for m in a.ws.last("roster")["members"] if m["id"] == b.id][0]
+    assert entry["nick"] == "zed"
+    assert not b.ws.closed
+
+
+def test_control_frame_flood_still_trips_the_ceiling(tmp_path):
+    """Control frames are exempt from *discarding*, not from counting."""
+    make_game(tmp_path, GID, multiplayer={"max_players": 2})
+    hub = make_hub(tmp_path, Clock(), max_msg_per_sec=5, max_msg_burst_per_sec=20)
+    run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.9.0.1")))
+    b = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.9.0.2")))
+    for _ in range(30):
+        run(hub.on_message(b, json.dumps({"t": "pong", "seq": 1})))
+    assert b.ws.close_code == rt_hub.CLOSE_RATE_LIMIT
+
+
+def test_throttling_is_logged_boundedly_and_without_payloads(tmp_path, caplog):
+    make_game(tmp_path, GID, multiplayer={"max_players": 2})
+    clock = Clock()
+    hub = make_hub(tmp_path, clock, max_msg_per_sec=5, max_msg_burst_per_sec=10000)
+    run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.10.0.1")))
+    b = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="6.10.0.2")))
+    secret = "PAYLOAD-SECRET-a1b2c3"
+    caplog.set_level("INFO", logger="rt_hub")
+    frame = json.dumps({"t": "msg", "d": {"blob": secret}})
+    # ~30s of sustained over-budget traffic: thousands of shed frames.
+    for _ in range(3000):
+        run(hub.on_message(b, frame))
+        clock.advance(0.01)
+    assert b.discarded > 2000
+    records = [r for r in caplog.records if "throttle" in r.getMessage()]
+    assert 1 <= len(records) <= 6, [r.getMessage() for r in records]
+    for r in records:
+        msg = r.getMessage()
+        assert GID in msg
+        assert secret not in msg
+        assert "blob" not in msg
 
 
 def test_conns_per_ip_capped(tmp_path):
@@ -632,3 +842,50 @@ def test_real_server_accept_and_close_codes(tmp_path):
         await asyncio.sleep(0)
 
     run(scenario())
+
+
+# --------------------------------------------------------------------------
+# fix-multiplayer-rate-limit-disconnects 5.2 — the direct regression test for
+# the reported failure: two real players in one room, both syncing state above
+# the soft budget, both watching the game flip back to "waiting for player 2".
+# --------------------------------------------------------------------------
+
+def test_two_over_budget_members_both_stay_in_the_roster(tmp_path):
+    make_game(tmp_path, GID, multiplayer={"max_players": 2})
+    clock = Clock()
+    hub = make_hub(tmp_path, clock, max_msg_per_sec=60, max_msg_burst_per_sec=240,
+                   dead_after_s=15, ping_interval_s=5)
+    a = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="7.0.0.1")))
+    b = run(hub.connect(FakeWS(path=f"/rt/{GID}", ip="7.0.0.2")))
+
+    frame = json.dumps({"t": "msg", "d": {"y": 0.5}})
+    ping_due = clock.t + 5.0
+    # a's very first roster listed only itself (it joined first); everything
+    # from here on must name both.
+    base = {m.id: len(m.ws.sent) for m in (a, b)}
+    # Ten seconds of both clients sending 70/sec — the measured rate of the
+    # reported game, above the 60/sec soft budget and far below the ceiling.
+    for step in range(700):
+        run(hub.on_message(a, frame))
+        run(hub.on_message(b, frame))
+        clock.advance(1.0 / 70.0)
+        if clock.t >= ping_due:
+            run(hub.ping_round())
+            for m in (a, b):
+                run(hub.on_message(m, json.dumps(
+                    {"t": "pong", "seq": m.ws.last("ping")["seq"]})))
+            ping_due = clock.t + 5.0
+        # Continuously, not just at the end: neither socket is ever closed and
+        # the room never drops below two members.
+        assert not a.ws.closed and not b.ws.closed, step
+        assert set(hub.rooms[GID].members) == {a.id, b.id}, step
+
+    # And every roster either side saw named both of them throughout.
+    for m in (a, b):
+        later = [json.loads(x) for x in m.ws.sent[base[m.id]:]]
+        rosters = [f for f in later if f["t"] == "roster"]
+        assert rosters
+        for r in rosters:
+            assert {e["id"] for e in r["members"]} == {a.id, b.id}
+    # Both were throttled — the shedding really did happen, in place of a close.
+    assert a.discarded > 0 and b.discarded > 0

@@ -112,7 +112,10 @@ def test_generated_multiplayer_game_smoke_tests_solo(isolated_db, games_dir):
 # --------------------------------------------------------------------------
 
 # Real multiplayer game: starts a requestAnimationFrame loop on `welcome` that
-# calls VG_RT.send() every frame for the whole settle window.
+# syncs its position state every frame for the whole settle window. The call
+# site is deliberately per-frame — that is the idiom a game author writes — so
+# what this exercises end to end is VG_RT.sendState's coalescing, which is the
+# only reason a per-frame call site is safe against the relay's rate budget.
 SEND_LOOP_GAME = """<!doctype html><html><head><meta charset="utf-8"><title>MP</title></head>
 <body>
 <h1 id="status">connecting…</h1>
@@ -120,7 +123,7 @@ SEND_LOOP_GAME = """<!doctype html><html><head><meta charset="utf-8"><title>MP</
 (function () {
   var sending = false;
   function tick() {
-    if (window.VG_RT) VG_RT.send({ t: 'pos', x: Math.random(), y: Math.random() });
+    if (window.VG_RT) VG_RT.sendState({ t: 'pos', x: Math.random(), y: Math.random() });
     requestAnimationFrame(tick);
   }
   function wire() {
@@ -165,13 +168,51 @@ RAW_SEND_LOOP_GAME = """<!doctype html><html><head><meta charset="utf-8"><title>
 
 def test_send_loop_multiplayer_game_passes_smoke(tmp_path):
     """With the rt.js readyState guard and the held-open stub, a game that
-    calls VG_RT.send() every animation frame smoke-tests clean."""
+    syncs state on every animation frame smoke-tests clean — and coalesced,
+    so the stub's rate check passes too."""
     gid = "b" * 32
     html = tmp_path / "index.html"
     html.write_text(multiplayer.normalize(SEND_LOOP_GAME, True, gid),
                     encoding="utf-8")
     passed, detail = smoke_test.run_smoke_test(str(html), timeout_seconds=15)
     assert passed, detail
+
+
+# A game that bypasses VG_RT and floods a raw socket at animation-frame rate:
+# what the stub's frame counting exists to catch before the game ships.
+FLOOD_GAME = """<!doctype html><html><head><meta charset="utf-8"><title>MP</title></head>
+<body>
+<h1 id="status">flooding</h1>
+<script>
+(function () {
+  var ws = new WebSocket("ws://" + location.host + "/rt/" + "c".repeat(32));
+  var open = false;
+  ws.onopen = function () { open = true; };
+  ws.onerror = function () {};
+  function tick() {
+    if (open && ws.readyState === WebSocket.OPEN) {
+      // 20 frames per animation frame: ~1200/sec, far past the hard ceiling.
+      for (var i = 0; i < 20; i++) {
+        try { ws.send('{"t":"msg","d":1}'); } catch (e) {}
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+})();
+</script>
+</body></html>"""
+
+
+def test_flooding_multiplayer_game_fails_smoke(tmp_path):
+    """End-to-end proof the stub's counting is wired into the verdict: a game
+    the hub would disconnect fails during generation instead."""
+    html = tmp_path / "index.html"
+    html.write_text(FLOOD_GAME, encoding="utf-8")
+    passed, detail = smoke_test.run_smoke_test(str(html), timeout_seconds=15)
+    assert passed is False, detail
+    assert "send rate too high" in detail
+    assert "sendState" in detail
 
 
 def test_send_loop_fails_pre_fix_when_stub_closes_immediately(tmp_path, monkeypatch):
