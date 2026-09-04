@@ -428,9 +428,16 @@
     update();
     render();
 
-    // Network: paddle Y every frame; ball state 10x/sec
+    // Network: paddle Y every frame; ball state 10x/sec.
+    // The paddle is continuous state — latest-wins — so it goes through
+    // sendState, which coalesces the per-frame calls down to VG_RT.stateHz.
+    // Sending it through send() instead spends the whole discrete budget on
+    // superseded paddle positions and starves the authoritative ball updates
+    // below (measured: 41% of them reached the peer), which is what made the
+    // ball snap backwards every few hundred ms. (`|| VG_RT.send` keeps this
+    // working against an older cached rt.js that predates sendState.)
     if (window.VG_RT && VG_RT.send) {
-      VG_RT.send({ y: myPaddleY });
+      (VG_RT.sendState || VG_RT.send).call(VG_RT, { y: myPaddleY });
       if (now - lastBallSend >= BALL_SEND_MS) {
         VG_RT.send({ ball: { x: ballX, y: ballY, vx: ballVX, vy: ballVY } });
         lastBallSend = now;
