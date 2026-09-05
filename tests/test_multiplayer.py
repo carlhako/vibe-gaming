@@ -147,6 +147,22 @@ def test_prompt_states_the_send_rate_budget():
         assert clause not in solo, clause
 
 
+def test_prompt_states_the_shared_simulation_rules():
+    """Every client runs the same code, so a game that reasons in terms of
+    "me" and "them" gives every player the same seat and no opponent; two
+    clients simulating one ball overwrite each other; and frame-counted
+    movement runs in slow motion in whichever window is not focused. All
+    three shipped in the first generated multiplayer game.
+    """
+    solo = gg._build_system_prompt(None, max_players=None)
+    multi = gg._build_system_prompt(None, max_players=2)
+    for clause in ("EVERY CLIENT RUNS THE SAME CODE", "roster", "SEAT",
+                   "exactly ONE owner", "elapsed time", "not focused"):
+        assert clause in multi, clause
+    for clause in ("EVERY CLIENT RUNS THE SAME CODE", "exactly ONE owner"):
+        assert clause not in solo, clause
+
+
 # --------------------------------------------------------------------------
 # 3.3 + 4.4  pipeline: exactly one client tag, block written to meta.json
 # --------------------------------------------------------------------------
